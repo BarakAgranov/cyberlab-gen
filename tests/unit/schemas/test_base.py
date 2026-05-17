@@ -52,3 +52,21 @@ def test_internal_model_does_not_validate_on_assignment() -> None:
     instance = _Internal(name="ok")
     instance.name = 123  # type: ignore[assignment]
     assert instance.name == 123  # type: ignore[comparison-overlap]
+
+
+def test_artifact_model_yaml_round_trip() -> None:
+    """to_yaml() and from_yaml() must round-trip an artifact losslessly."""
+    original = _Artifact(name="hello", count=3)
+    serialized = original.to_yaml()
+    assert "name: hello" in serialized
+    assert "count: 3" in serialized
+    restored = _Artifact.from_yaml(serialized)
+    assert restored == original
+
+
+def test_artifact_model_from_yaml_rejects_unknown_field() -> None:
+    """from_yaml() must inherit extra='forbid' rejection from validation."""
+    raw_yaml = "name: ok\ncount: 1\nbogus: nope\n"
+    with pytest.raises(ValidationError) as exc:
+        _Artifact.from_yaml(raw_yaml)
+    assert "bogus" in str(exc.value)

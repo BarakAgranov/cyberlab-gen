@@ -9,6 +9,7 @@ Cross-subpackage imports go through this re-export surface; intra-package
 modules import from each sibling module directly.
 """
 
+from cyberlab_gen.schemas.attack_spec import AttackSpec, ExtrasEntry
 from cyberlab_gen.schemas.base import ArtifactModel, InternalModel
 from cyberlab_gen.schemas.enums import (
     CitationKind,
@@ -34,6 +35,7 @@ from cyberlab_gen.schemas.enums import (
     SpecKind,
     StepComposition,
 )
+from cyberlab_gen.schemas.ingestion import IngestionResult
 from cyberlab_gen.schemas.primitives import (
     FacetName,
     HttpUrl,
@@ -44,9 +46,20 @@ from cyberlab_gen.schemas.primitives import (
     SnakeName,
     TradecraftName,
 )
+from cyberlab_gen.schemas.provenance import (
+    CitationBlock,
+    Provenance,
+    ProvenanceBool,
+    ProvenanceFloat,
+    ProvenanceInt,
+    ProvenanceString,
+    ProvenanceStringList,
+)
 
 __all__ = [
     "ArtifactModel",
+    "AttackSpec",
+    "CitationBlock",
     "CitationKind",
     "ConfidenceSource",
     "DefenderTechniqueKind",
@@ -54,10 +67,12 @@ __all__ = [
     "DetectionComponent",
     "DetectionFormat",
     "ExtractionOutcome",
+    "ExtrasEntry",
     "FacetName",
     "HttpUrl",
     "IdentifierKind",
     "IncidentStatus",
+    "IngestionResult",
     "InputSource",
     "InternalModel",
     "KebabId",
@@ -66,7 +81,13 @@ __all__ = [
     "OnDependencyFailure",
     "PrereqKind",
     "PrereqTiming",
+    "Provenance",
+    "ProvenanceBool",
+    "ProvenanceFloat",
+    "ProvenanceInt",
     "ProvenanceSource",
+    "ProvenanceString",
+    "ProvenanceStringList",
     "ProvisioningMechanism",
     "PublisherKind",
     "ReproducibilityLabLevel",

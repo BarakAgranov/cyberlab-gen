@@ -10,7 +10,14 @@ surface as Layer 1 validation errors, not be silently dropped.
 ``InternalModel`` is the base for internal-only structures that don't cross
 the artifact boundary. ``extra="ignore"`` because internal types evolve more
 freely.
+
+``ArtifactModel`` also carries the YAML round-trip surface (``to_yaml`` /
+``from_yaml``) per ``schema-details.md`` §1: every artifact is editable as
+a YAML file, so every artifact must serialize and deserialize losslessly.
 """
+
+from io import StringIO
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict
 
@@ -32,6 +39,36 @@ class ArtifactModel(BaseModel):
         use_enum_values=False,
         populate_by_name=True,
     )
+
+    def to_yaml(self) -> str:
+        """Serialize to YAML via ``ruamel.yaml``.
+
+        Uses ``model_dump(mode="json")`` so enum members serialize to their
+        string values and other Pydantic-managed types (URLs, datetimes)
+        become YAML-friendly scalars. Block-style output (no flow); key
+        order follows the Pydantic field declaration order.
+        """
+        from ruamel.yaml import YAML
+
+        yaml = YAML()
+        yaml.default_flow_style = False
+        stream = StringIO()
+        yaml.dump(self.model_dump(mode="json"), stream)
+        return stream.getvalue()
+
+    @classmethod
+    def from_yaml(cls, raw: str) -> Self:
+        """Parse YAML text into a validated model instance.
+
+        Round-trips with ``to_yaml``: ``cls.from_yaml(instance.to_yaml())``
+        equals ``instance`` when the model is composed only of YAML-safe
+        primitives (which all artifact models are by design).
+        """
+        from ruamel.yaml import YAML
+
+        yaml = YAML()
+        data = yaml.load(raw)
+        return cls.model_validate(data)
 
 
 class InternalModel(BaseModel):
