@@ -11,7 +11,7 @@ This document is loaded into the context of every agent task that writes or modi
 
 ### 1.1 Python version
 
-The project targets **Python 3.13**, locked in `.python-version` and `pyproject.toml`'s `requires-python = ">=3.13,<3.14"`.
+The project targets **Python 3.13**, locked in `.python-version` and `pyproject.toml`'s `requires-python = ">=3.13,<3.15"`.
 
 Reason: 3.13 is the most recent stable Python at project start. The PEP 695 generic syntax, improved error messages, and the stabilized `typing.TypeIs` are conveniences worth having. The narrow upper bound (`<3.14`) means upgrading Python is an explicit decision rather than something a contributor's local environment forces.
 
@@ -58,15 +58,14 @@ The strict mode is load-bearing. The architecture's `Provenance[T]` envelope, di
 
 ### 2.4 Testing: `pytest`
 
-The project uses **`pytest`** with:
+The project uses **`pytest`** as the test framework. Additional plugins are added as the phases that need them ship:
 
-- `pytest-cov` for coverage measurement (reported, not enforced as a floor in v1 — coverage targets get locked in Phase 1 per the implementation plan).
-- `pytest-recording` (VCR) for tests that hit external services. Record real responses once; replay forever. Cassettes are checked in.
-- `pytest-asyncio` for async test functions (some provider calls are async).
+- **Phase 0:** `pytest` only. Smoke tests on package imports.
+- **Phase 1+:** `pytest-cov` for coverage measurement (reported, not enforced as a floor in v1 — coverage targets get locked in Phase 1 per the implementation plan).
+- **Phase 1+:** `pytest-recording` (VCR) for tests that hit external services. Record real responses once; replay forever. Cassettes are checked in.
+- **Phase 1+:** `pytest-asyncio` for async test functions (some provider calls are async).
 
-Test discovery follows pytest's default: `tests/**/test_*.py`, with classes `Test*` and functions `test_*`.
-
-### 2.5 Task runner: `just`
+Test discovery follows pytest's default: `tests/**/test_*.py`, with classes `Test*` and functions `test_*`.### 2.5 Task runner: `just`
 
 A `justfile` at the repo root defines all common workflows. Contributors run `just <task>` rather than memorizing tool flags.
 
@@ -393,7 +392,6 @@ Dependencies are added when the phase that needs them ships, not all at Phase 0.
 - `rich` — terminal output formatting. The CLI's user-facing output uses it.
 - `platformdirs` — `~/.cyberlab-gen` resolution that's correct on macOS and Windows too.
 - `anthropic` — Anthropic provider SDK. The provider abstraction wraps it.
-- `openai` — OpenAI provider SDK. Same.
 
 **Phase 1 (added when the first agent and orchestrator ship):**
 
