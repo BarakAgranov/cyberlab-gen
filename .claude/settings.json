@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "echo '## Git status' && git status --short && echo '' && echo '## Latest execution log entry' && tail -30 dev/phase-0-execution-log.md 2>/dev/null"
+      }]
+    }],
+    "PreToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{
+        "type": "command",
+        "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q 'git commit'; then ruff check --quiet && ruff format --check --quiet || (echo 'Linting failed. Run: ruff check --fix && ruff format' && exit 1); fi"
+      }]
+    }]
+  }
+}
