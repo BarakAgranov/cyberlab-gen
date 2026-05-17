@@ -26,13 +26,12 @@
 **Work:**
 
 1. Create the repo layout from `implementation-plan.md §3.2`. Specifically: the top-level directories `cyberlab_gen/`, `registry/`, `eval/`, `docs/`, `dev/`, `tests/`. Each non-leaf directory gets a `.gitkeep` or an `__init__.py` as appropriate.
-2. Move the architecture documents into `docs/`. These are the source of truth; the rest of the repo refers back to them.
-3. Initialize `pyproject.toml` with `requires-python = ">=3.13"`. Pin the build system (hatchling or similar — pick one and document in `dev/decisions/0002-build-system.md`).
-4. Initialize the Phase 0 dependencies from `coding-conventions.md §10.2`'s "Phase 0 (install at project start)" list. Do not add Phase 1+ dependencies (`pydantic-ai`, `langgraph`, `httpx`) yet.
-5. Configure `ruff` and `pyright` per `coding-conventions.md §2`. Pyright in strict mode.
-6. Set up `just` with at minimum a `verify` recipe that runs `ruff check`, `ruff format --check`, `pyright`, and `pytest`.
-7. Set up CI (GitHub Actions or equivalent) that runs `just verify` on every push.
-8. Make the first `dev/decisions/0001-click-vs-typer.md` entry committing to `typer` (per `coding-conventions.md §11`).
+2. Initialize `pyproject.toml` per `coding-conventions.md §1.1` and `dev/decisions/0003-python-upper-bound.md` (current value: `requires-python = ">=3.13,<3.15"`). Pin the build system (hatchling or similar — pick one and document in `dev/decisions/0002-build-system.md`).
+3. Initialize the Phase 0 dependencies from `coding-conventions.md §10.2`'s "Phase 0 (install at project start)" list. Do not add Phase 1+ dependencies (`pydantic-ai`, `langgraph`, `httpx`) yet.
+4. Configure `ruff` and `pyright` per `coding-conventions.md §2`. Pyright in strict mode.
+5. Set up `just` with at minimum a `verify` recipe that runs `ruff check`, `ruff format --check`, `pyright`, and `pytest`.
+6. Set up CI (GitHub Actions or equivalent) that runs `just verify` on every push.
+7. Make the first `dev/decisions/0001-click-vs-typer.md` entry committing to `typer` (per `coding-conventions.md §11`).
 
 **Exit criteria:**
 
