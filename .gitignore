@@ -14,3 +14,13 @@ build/
 
 # Local state
 .env
+
+# Virtual env (uv default)
+.venv/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Pyright
+.pyright/

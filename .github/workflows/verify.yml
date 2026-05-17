@@ -1,0 +1,26 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Pin Python
+        run: uv python pin ${{ matrix.python-version }}
+      - name: Install just
+        uses: extractions/setup-just@v4
+      - name: Sync dependencies
+        run: just sync
+      - name: Verify
+        run: just verify
