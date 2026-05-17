@@ -1,3 +1,4 @@
+set windows-shell := ["powershell.exe", "-NoProfile", "-Command"]
 # justfile for cyberlab-gen
 
 default:
