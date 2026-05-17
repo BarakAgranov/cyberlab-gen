@@ -1,0 +1,16 @@
+# Claude Code personal overrides
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Local state
+.env
