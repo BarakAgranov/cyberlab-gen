@@ -89,3 +89,67 @@ Surface these to the architect as separate doc edits (not part of Task 0):
    pull the value from conventions rather than restate it.
 
 ---
+
+## Task 1: Pydantic schema base layer
+
+**Date:** 2026-05-17
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~15 minutes execution (plan-mode work preceded; not counted)
+**Commit:** `29f68b5`
+
+### What was built
+
+`cyberlab_gen/schemas/base.py` (the `ArtifactModel` / `InternalModel` pair from
+`schema-details.md §1`), `cyberlab_gen/schemas/primitives.py` (the seven
+constrained-string aliases from §2.1 plus a `pydantic.HttpUrl` re-export), and
+`cyberlab_gen/schemas/enums.py` (every closed `StrEnum` from §2.2, 22 enums
+total, each retaining its `schema.md §X.Y` docstring citation per the schema-
+details convention). `cyberlab_gen/schemas/__init__.py` now re-exports the
+whole surface via an explicit `__all__`. Tests live under
+`tests/unit/schemas/` split per source file: `test_base.py` (5 tests),
+`test_primitives.py` (19 tests covering one-accept-one-reject per primitive),
+`test_enums.py` (23 tests pinning every enum's full value set plus a Severity
+round-trip through `ArtifactModel`). 48 tests pass; ruff, format-check, and
+pyright strict all clean.
+
+### Surprises and friction
+
+- **Pyright's `type` is not iterable.** The first cut of `test_enums.py` had
+  `def _values(enum_cls: type) -> set[str]` which pyright strict rejected
+  (`"type" is not iterable`). Annotating as `type[StrEnum]` fixed it and
+  is the stronger contract anyway.
+- **The brief's enum example list includes `MessageRole`**, which lives in
+  `provider-interface.md §4.1` (Task 5a), not in `schema-details.md §2.2`.
+  Per CLAUDE.md's authority gradient (architecture > brief), `MessageRole`
+  was omitted from `schemas/enums.py`; see the doc-improvement note below.
+- No friction with PEP 695 syntax (none used here — generics land in Task 2's
+  `Provenance[T]`).
+- The architecture's choice of `use_enum_values=False` (`schema-details.md §1`)
+  means `model_dump()` returns enum *members*, not their string values. The
+  Severity round-trip test pins this so a future change to the config would
+  fail loudly.
+
+### Deferred to later phases
+
+- `Provenance[T]`, `CitationBlock`, source-rules validator — Task 2.
+- `to_yaml()` / `from_yaml()` artifact methods — Task 2 (first round-trip
+  consumer is `AttackSpec`).
+- Open-set string types (`ExecutionContext`, `ValueTypeName`, etc.) and their
+  registry validators — Task 4.
+- `MessageRole` enum — Task 5a (`providers/base.py`); see below.
+
+### Doc-improvement notes for the next brief writer
+
+1. **Task 1's `Required reading > Primary` mention of `MessageRole`** in the
+   enum example list is cross-package. `MessageRole` is defined in
+   `provider-interface.md §4.1` and owned by Task 5a (`providers/base.py`).
+   Either replace `MessageRole` with another `schema-details.md §2.2`
+   example (e.g., `CitationKind`) or note explicitly that the example was
+   illustrative across subpackages.
+2. **`schema-details.md §2.1` shows the constrained primitives living in
+   `cyberlab_gen/schemas/common.py`** (line 58 of the doc) while the
+   phase-0 brief specifies `primitives.py`. The brief wins for filename
+   (decision-discretion); worth aligning the doc's filename comment so
+   readers don't infer a second module name.
+
+---
