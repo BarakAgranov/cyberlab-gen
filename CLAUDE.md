@@ -54,6 +54,8 @@ When you need context not already in the conversation:
 
 **Never propose changes that violate `architecture.md §1.5` or `§1.6`.** Bypassing the LLM/framework split, even with good local reasoning, is a contract violation. Same for the no-migration rule (`architecture.md §0.6`) and the cleanup-confidence gate (`architecture.md §0.5` criterion 2).
 
+**Base class discipline.** `schema-details.md` shows many classes as `BaseModel + ConfigDict(extra="forbid")`. The architectural intent is `ArtifactModel`. See `dev/decisions/0004-base-class-discipline.md` for the rule and the three reserved cases for `BaseModel`.
+
 ## Code discipline
 
 The rules below mirror `docs/coding-conventions.md §4` and surrounding sections. If they conflict with the conventions doc, the conventions doc wins — these are visible-here for speed of agent access, not as an independent source of truth.

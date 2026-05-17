@@ -394,15 +394,22 @@ class Provenance[T](BaseModel):
         if self.confidence is None and self.confidence_source is not None:
             raise ValueError("confidence_source must be None when confidence is None")
 
-        # Negative invariants — protect against stale fields after refinement re-runs
-        if self.source is ProvenanceSource.UNKNOWN_FROM_BLOG:
-            if self.citations:
-                raise ValueError("citations must be empty when source is unknown_from_blog")
-            if self.confidence is not None:
-                raise ValueError("confidence must be None when source is unknown_from_blog")
-        # TODO(architecture): clarify whether `external_api` may carry a
-        # confidence (e.g., fuzzy-match score from a CVE lookup). Left
-        # unrestricted pending architectural decision.
+        # Confidence is exclusive to LLM_INFERENCE.
+        # See dev/decisions/0005-external-api-confidence.md.
+        if self.confidence is not None and self.source is not ProvenanceSource.LLM_INFERENCE:
+            raise ValueError(
+                f"confidence is only valid when source is llm_inference (got source={self.source.value})"
+            )
+        if self.confidence_source is not None and self.source is not ProvenanceSource.LLM_INFERENCE:
+            raise ValueError(
+                f"confidence_source is only valid when source is llm_inference (got source={self.source.value})"
+            )
+
+        # Negative invariants — UNKNOWN_FROM_BLOG citations check.
+        # The confidence-must-be-None case is covered by the LLM_INFERENCE-exclusive rule above.
+        if self.source is ProvenanceSource.UNKNOWN_FROM_BLOG and self.citations:
+            raise ValueError("citations must be empty when source is unknown_from_blog")
+
 
         # Discrepancy record invariants
         if self.discrepancy_with_blog:

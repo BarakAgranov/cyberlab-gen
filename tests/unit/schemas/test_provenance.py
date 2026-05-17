@@ -113,13 +113,60 @@ def test_unknown_from_blog_forbids_citations() -> None:
         )
 
 
-def test_unknown_from_blog_forbids_confidence() -> None:
-    with pytest.raises(ValidationError, match="confidence must be None"):
+# --- Provenance: confidence is LLM_INFERENCE-only -------------------------
+
+
+def test_blog_explicit_forbids_confidence() -> None:
+    """Confidence is exclusive to LLM_INFERENCE. Per ADR 0005."""
+    with pytest.raises(
+        ValidationError, match="confidence is only valid when source is llm_inference"
+    ):
         Provenance[str](
             value="x",
+            source=ProvenanceSource.BLOG_EXPLICIT,
+            citations=[_citation()],
+            confidence=0.5,
+            confidence_source=ConfidenceSource.FRAMEWORK_COMPUTED,
+        )
+
+
+def test_external_api_forbids_confidence() -> None:
+    """EXTERNAL_API in v1 is exact-match enrichment only. Per ADR 0005."""
+    with pytest.raises(
+        ValidationError, match="confidence is only valid when source is llm_inference"
+    ):
+        Provenance[str](
+            value="CVE-2024-1234",
+            source=ProvenanceSource.EXTERNAL_API,
+            citations=[_citation(CitationKind.EXTERNAL_API_RESPONSE)],
+            confidence=0.95,
+            confidence_source=ConfidenceSource.FRAMEWORK_COMPUTED,
+        )
+
+
+def test_unknown_from_blog_forbids_confidence() -> None:
+    """UNKNOWN_FROM_BLOG has no value to be confident about. Per ADR 0005."""
+    with pytest.raises(
+        ValidationError, match="confidence is only valid when source is llm_inference"
+    ):
+        Provenance[str](
+            value="",
             source=ProvenanceSource.UNKNOWN_FROM_BLOG,
             reason="blog only describes outcomes",
             confidence=0.5,
+            confidence_source=ConfidenceSource.MODEL_SELF_REPORTED,
+        )
+
+
+def test_user_provided_forbids_confidence() -> None:
+    """USER_PROVIDED carries no probability. Per ADR 0005."""
+    with pytest.raises(
+        ValidationError, match="confidence is only valid when source is llm_inference"
+    ):
+        Provenance[str](
+            value="user-pick",
+            source=ProvenanceSource.USER_PROVIDED,
+            confidence=0.7,
             confidence_source=ConfidenceSource.MODEL_SELF_REPORTED,
         )
 

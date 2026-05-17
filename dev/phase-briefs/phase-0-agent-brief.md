@@ -103,7 +103,7 @@
 
 **Required reading:**
 
-- *Primary:* `schema-details.md` §3 (Provenance and Citation), §5.1 (AttackSpec envelope).
+- *Primary:* `schema-details.md` §3 (Provenance and Citation), §4 (AttackSpec envelope).
 - *Cross-references:* `schema.md §4.8` (AttackSpec semantics, including `extraction_outcome`), `§4.9` (Provenance semantics, including the discrepancy-with-blog record), `§4.16` (proposal lifecycle, relevant for understanding why `extras` is the escape hatch); `implementation-plan.md §3.2` for the `IngestionResult` field set.
 
 **Inputs:** Task 1 complete.
@@ -111,7 +111,7 @@
 **Work:**
 
 1. Create `cyberlab_gen/schemas/provenance.py` with `Provenance[T]` (PEP 695 generic), `CitationBlock`, the model_validator for source rules. Implement exactly the shape in `schema-details.md §3`.
-2. Create `cyberlab_gen/schemas/attack_spec.py` with the `AttackSpec` envelope per `schema-details.md §5.1` (top-level fields: `spec_version`, `spec_kind`, `source`, `extraction_outcome`, `extras` placeholder). Inner content blocks (chain, thesis, real_world_incidents, etc.) are referenced as `Any` or `dict` stubs for Phase 0 — they get fleshed out in Phase 1. Document each stub with a `# TODO(phase-1)` comment naming the schema-details section that will fill it in.
+2. Create `cyberlab_gen/schemas/attack_spec.py` with the `AttackSpec` envelope per `schema-details.md §4` (top-level fields: `spec_version`, `spec_kind`, `source`, `extraction_outcome`, `extras` placeholder). Inner content blocks (chain, thesis, real_world_incidents, etc.) are referenced as `Any` or `dict` stubs for Phase 0 — they get fleshed out in Phase 1. Document each stub with a `# TODO(phase-1)` comment naming the schema-details section that will fill it in.
 3. Create `cyberlab_gen/schemas/ingestion.py` with `IngestionResult` per `implementation-plan.md §3.2` (URL, canonical URL, content hash, fetched_at, fetch_method, word_count, publisher_domain, cached_path).
 4. Update `cyberlab_gen/schemas/__init__.py` to re-export the new types.
 5. Write tests in `tests/unit/schemas/test_provenance.py` and `test_attack_spec.py` covering: Provenance source-rules validator catches all invalid combinations; AttackSpec parses and serializes round-trip; YAML round-trip preserves field order via ruamel.yaml.
@@ -232,7 +232,7 @@
 **Work:**
 
 1. Create the `cyberlab_gen/providers/` subpackage per `provider-interface.md §2` module layout.
-2. Implement `cyberlab_gen/providers/base.py` with the full §4.1 type set: `CitationKind`, `Message` (with the tool-use surface and role-shape validator), `ToolDefinition`, `ToolCall`, `ToolResult`, `TokenUsage`, `ProviderResponse[T_Output]`, `CapabilityHint`, `AgentLabel`, the `Provider` ABC. Use PEP 695 generic syntax.
+2. Implement `cyberlab_gen/providers/base.py` with the full §4.1 type set: `MessageRole`, `Message` (with the tool-use surface and role-shape validator), `ToolDefinition`, `ToolCall`, `ToolResult`, `TokenUsage`, `ProviderResponse[T_Output]`, `CapabilityHint`, `AgentLabel`, the `Provider` ABC. Use PEP 695 generic syntax.
 3. Implement `cyberlab_gen/providers/errors.py` with the error hierarchy from `provider-interface.md §6.1`: `ProviderError` and subtypes (`TransientFailure`, `HardFailure`, `MalformedOutput`, `ToolLoopError`).
 4. Implement `cyberlab_gen/providers/retries.py` with the retry strategy from `provider-interface.md §6`: three attempts on transient, three on malformed output, no auto-fallback across providers.
 5. Implement `cyberlab_gen/providers/mock_provider.py` per `provider-interface.md §7`: `name = "mock"`, `register()` for canned responses, `register_default_usage()`, unmatched calls raise `UnmatchedMockCall`. The mock doesn't yet integrate with the cost ledger — that's added in Task 5b. For now, the mock can return a `TokenUsage` instance without `cost_usd` being meaningful (use a placeholder `Decimal("0")`).
