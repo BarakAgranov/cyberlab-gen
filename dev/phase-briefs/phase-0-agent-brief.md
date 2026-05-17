@@ -72,7 +72,7 @@
 
 1. Create `cyberlab_gen/schemas/base.py` with `ArtifactModel` (`extra="forbid"`) and `InternalModel` (`extra="ignore"`) base classes per `schema-details.md §1`.
 2. Create `cyberlab_gen/schemas/primitives.py` with the type aliases and constrained types from `schema-details.md §2.1`: `SnakeName`, `NonEmptyString`, `HttpUrl`, `FacetName`, `TradecraftName`, etc.
-3. Create `cyberlab_gen/schemas/enums.py` with the enums from `schema-details.md §2.2`: `Severity`, `DetectionComponent`, `ProvenanceSource`, `ConfidenceSource`, `MessageRole`, etc. Use `StrEnum`.
+3. Create `cyberlab_gen/schemas/enums.py` with the enums from `schema-details.md §2.2`: `Severity`, `DetectionComponent`, `ProvenanceSource`, `ConfidenceSource`, `CitationKind`, etc. Use `StrEnum`.
 4. Create `cyberlab_gen/schemas/__init__.py` re-exporting the base classes, primitives, and enums. Cross-subpackage imports go through this `__init__.py`.
 5. Write unit tests in `tests/unit/schemas/test_base.py` covering: `ArtifactModel` rejects unknown fields; `InternalModel` ignores them; each enum's values match what `schema-details.md` declares.
 
@@ -232,7 +232,7 @@
 **Work:**
 
 1. Create the `cyberlab_gen/providers/` subpackage per `provider-interface.md §2` module layout.
-2. Implement `cyberlab_gen/providers/base.py` with the full §4.1 type set: `MessageRole`, `Message` (with the tool-use surface and role-shape validator), `ToolDefinition`, `ToolCall`, `ToolResult`, `TokenUsage`, `ProviderResponse[T_Output]`, `CapabilityHint`, `AgentLabel`, the `Provider` ABC. Use PEP 695 generic syntax.
+2. Implement `cyberlab_gen/providers/base.py` with the full §4.1 type set: `CitationKind`, `Message` (with the tool-use surface and role-shape validator), `ToolDefinition`, `ToolCall`, `ToolResult`, `TokenUsage`, `ProviderResponse[T_Output]`, `CapabilityHint`, `AgentLabel`, the `Provider` ABC. Use PEP 695 generic syntax.
 3. Implement `cyberlab_gen/providers/errors.py` with the error hierarchy from `provider-interface.md §6.1`: `ProviderError` and subtypes (`TransientFailure`, `HardFailure`, `MalformedOutput`, `ToolLoopError`).
 4. Implement `cyberlab_gen/providers/retries.py` with the retry strategy from `provider-interface.md §6`: three attempts on transient, three on malformed output, no auto-fallback across providers.
 5. Implement `cyberlab_gen/providers/mock_provider.py` per `provider-interface.md §7`: `name = "mock"`, `register()` for canned responses, `register_default_usage()`, unmatched calls raise `UnmatchedMockCall`. The mock doesn't yet integrate with the cost ledger — that's added in Task 5b. For now, the mock can return a `TokenUsage` instance without `cost_usd` being meaningful (use a placeholder `Decimal("0")`).

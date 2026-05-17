@@ -44,7 +44,7 @@ class InternalModel(BaseModel):
 
 YAML round-trip: every artifact model has a `to_yaml()` method (calls `ruamel.yaml` with project-standard formatting) and a `from_yaml()` classmethod. Pydantic's JSON Schema export is enabled and produces the artifact's JSON Schema for Layer 1 validation (`validation.md §6.4`).
 
-Generic syntax: PEP 695 throughout. `class Provenance[T](BaseModel): ...`, not `Generic[T]`. This requires Python 3.12+; `pyproject.toml` pins `requires-python = ">=3.13"` (one minor version of headroom; see `implementation-plan.md §3`).
+Generic syntax: PEP 695 throughout. `class Provenance[T](BaseModel): ...`, not `Generic[T]`. This requires Python 3.12+; `pyproject.toml` pins `requires-python = ">=3.13"` (with a narrow upper bound; see ADR 0003).
 
 Enum convention: `StrEnum` for string-valued enums (so they serialize naturally to YAML).
 
@@ -55,7 +55,7 @@ Enum convention: `StrEnum` for string-valued enums (so they serialize naturally 
 ### 2.1 Identifiers and primitives
 
 ```python
-# cyberlab_gen/schemas/common.py
+# cyberlab_gen/schemas/primitives.py
 
 from datetime import datetime, timedelta
 from enum import StrEnum

@@ -13,7 +13,7 @@ This document is loaded into the context of every agent task that writes or modi
 
 The project targets **Python 3.13**, locked in `.python-version` and `pyproject.toml`'s `requires-python = ">=3.13,<3.15"`.
 
-Reason: 3.13 is the most recent stable Python at project start. The PEP 695 generic syntax, improved error messages, and the stabilized `typing.TypeIs` are conveniences worth having. The narrow upper bound (`<3.14`) means upgrading Python is an explicit decision rather than something a contributor's local environment forces.
+Reason: 3.13 is the most recent stable Python at project start. The PEP 695 generic syntax, improved error messages, and the stabilized `typing.TypeIs` are conveniences worth having. The narrow upper bound means upgrading Python is an explicit decision rather than something a contributor's local environment forces.
 
 ### 1.2 No Python 2 anywhere
 
