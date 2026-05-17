@@ -58,14 +58,34 @@ When you need context not already in the conversation:
 
 The rules below mirror `docs/coding-conventions.md §4` and surrounding sections. If they conflict with the conventions doc, the conventions doc wins — these are visible-here for speed of agent access, not as an independent source of truth.
 
-- Python 3.13+; PEP 695 generic syntax (`class Provenance[T](BaseModel)`); `T | None`, not `Optional[T]`.
+**Python 3.13+ syntax. Verify your syntax against 3.13, not against training-data defaults.**
+
+- PEP 695 generic syntax: `class Provenance[T](BaseModel)`. Not `Generic[T]` from typing.
+- `T | None`, not `Optional[T]`. Not `Union[T, None]`.
+- Built-in generics: `list[int]`, `dict[str, int]`, `tuple[int, ...]`. Not `List`, `Dict`, `Tuple` from typing.
+- `StrEnum` from `enum`, not custom string-enum classes.
+
+If you're unsure whether syntax is 3.13-current, check `pyproject.toml`'s `requires-python` and confirm. Older Python idioms still parse, but pyright strict will flag them, and they signal "this agent isn't paying attention to the project's actual Python version."
+
+**Other code rules:**
+
 - Pyright in strict mode. No `Any` without an inline `# noqa: ANN401` and a justification.
 - `extra="forbid"` on every artifact model (Pydantic) — via the `ArtifactModel` base class in `cyberlab_gen/schemas/base.py`. Internal-only types use `InternalModel` with `extra="ignore"`.
 - No free text passes between pipeline stages. Every cross-stage boundary is typed.
 - Logging uses lazy-format (`logger.info("processing %s", x)`), not f-strings.
 
-For any code style question not covered here, read the relevant section of `coding-conventions.md`. Do not invent conventions.
+**Test discipline.**
 
+- Every behavior the brief claims should work gets a test that fails when the behavior breaks.
+- Tests fail meaningfully when the behavior breaks. A test that passes when the code is deleted is worse than no test — write one that demonstrates the behavior.
+- For Pydantic models: round-trip serialization, validator behavior on bad input, field-level constraints. Not just "the model can be instantiated."
+- For loaders: behavior on missing files, malformed files, and the happy path.
+- For the cost ledger (and similar arithmetic): edge cases (zero-cost calls, retries) and rollups, not just sums.
+- Smoke tests that guarantee mechanical consistency across files (`tests/integration/test_registry_load.py`, the pricing-vs-ranking coverage test) are first-class. They catch the failure modes the brief explicitly worries about.
+
+If you find yourself writing code without a clear test for it, stop and ask whether the brief expected a test that you missed.
+
+For any code style question not covered here, read the relevant section of `coding-conventions.md`. Do not invent conventions.
 ## Where to write things
 
 - **Architectural questions or design decisions you make during implementation** → `dev/decisions/NNNN-<slug>.md`. 4-digit zero-padded, sequential, ADR template at `coding-conventions.md §7.3`.
