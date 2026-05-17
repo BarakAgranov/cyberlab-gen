@@ -153,3 +153,111 @@ pyright strict all clean.
    readers don't infer a second module name.
 
 ---
+
+## Task 2: Pydantic schema envelope
+
+**Date:** 2026-05-17
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~25 minutes execution (plan-mode work preceded; not counted)
+**Commit:** `c879c36`
+
+### What was built
+
+`cyberlab_gen/schemas/provenance.py` (`Provenance[T]` PEP 695 generic +
+`CitationBlock` + the eleven-rule `_source_rules` model_validator from
+`schema-details.md §3`, plus the five convenience aliases
+`ProvenanceString`/`ProvenanceStringList`/`ProvenanceFloat`/`ProvenanceInt`/
+`ProvenanceBool`). `cyberlab_gen/schemas/attack_spec.py` (the
+`AttackSpec` envelope, `ExtrasEntry`, and a single package-private
+`_Phase0InnerStub(InternalModel)` placeholder that all nine inner content
+blocks point at — each field carries a `# TODO(phase-1: schema-details.md §4.<sub>)`
+comment naming the section that fills it in; the `_scope_consistency`
+validator enforces the full IN_SCOPE / OUT_OF_SCOPE rule set from §4).
+`cyberlab_gen/schemas/ingestion.py` (`IngestionResult` with eight required
+fields from `implementation-plan.md §3.2`). `ArtifactModel` gained
+`to_yaml()` / `from_yaml(cls)` via `ruamel.yaml` so every Phase-1 artifact
+inherits round-trip for free. `__init__.py` re-exports the new public
+surface (Provenance + aliases, CitationBlock, AttackSpec, ExtrasEntry,
+IngestionResult); `_Phase0InnerStub` stays package-private. 63 new tests
+under `tests/unit/schemas/` (26 provenance, 18 attack_spec including the
+representative YAML round-trip, 19 ingestion, plus two new round-trip
+tests on `_Artifact` in `test_base.py`); 113 tests pass total. Ruff,
+format-check, and pyright strict all clean.
+
+### Surprises and friction
+
+- **`default_factory=list` is doubly awkward** under pyright-strict +
+  ruff's RUF012. Pydantic v2's `default_factory=list` returns
+  `list[Unknown]` to pyright (reportUnknownVariableType in strict
+  mode), and the obvious workaround `= []` triggers RUF012
+  ("mutable default value for class attribute") even though Pydantic
+  copies the default per instance. The clean fix that satisfies both:
+  `Field(default_factory=list[T])` — the parameterized form is a
+  callable that returns `list[T]`, so pyright resolves the element
+  type, and `Field(...)` keeps RUF012 quiet. Worth knowing for every
+  artifact field with a list type in Phase 1.
+- **`_Phase0InnerStub` is module-private**, but tests need to construct
+  it as a placeholder for inner blocks. Pyright strict flags the
+  cross-module import as `reportPrivateUsage`; suppressed with
+  `# pyright: ignore[reportPrivateUsage]` on the test's import line.
+  Phase 1 deletes `_Phase0InnerStub` entirely when each inner block
+  gets its real Pydantic shape, so the suppression is temporary.
+- **`ruamel.yaml`'s dump/load are untyped** (`reportUnknownMemberType`).
+  Pyproject configures this as a warning, not an error, so the gate
+  stays green. If the warning bothers a future reviewer, the fix is a
+  narrow `# pyright: ignore[reportUnknownMemberType]` on the two call
+  sites in `base.py` — but the warning is the most honest signal that
+  the underlying API is loose, so leaving it is defensible.
+- The doc's `_source_rules` validator includes a
+  `# TODO(architecture)` for the EXTERNAL_API + confidence case
+  (`schema-details.md §3`). Per the user's plan-review note, I did
+  **not** add a rule the architecture has explicitly left open;
+  the validator passes EXTERNAL_API with or without confidence.
+
+### Deferred to later phases
+
+- Every inner content block (`SourceBlock`, `ThesisBlock`, `ChainBlock`,
+  `ExternalRefsBlock`, `RealWorldIncidentsBlock`, `DefenderTechniqueBlock`,
+  `DefenseBlock`, `ReproducibilityBlock`, `GapEntry`,
+  `ExtractionMetadataBlock`) — Phase 1 replaces `_Phase0InnerStub`
+  field-by-field; the `# TODO(phase-1)` comments name the
+  `schema-details.md §4.<sub>` section that fills each one in.
+- Registry meta-schemas (Task 3) and the `LabManifest` envelope
+  (Phase 1+) — both inherit `to_yaml`/`from_yaml` from `ArtifactModel`
+  now.
+- The EXTERNAL_API + confidence rule (the doc's own `# TODO(architecture)`).
+- `Self`-return PEP 695 generics interaction with Pydantic's generic
+  caching — Phase 1 may surface edge cases when the inner content
+  blocks each parametrize Provenance with their value type.
+
+### Doc-improvement notes for the next brief writer
+
+1. **The Task 2 brief points at `schema-details.md §5.1`** for the
+   AttackSpec envelope, but the doc itself numbers that section §4.
+   Stale cite. Surface to the architect.
+2. **`schema-details.md §4.1, §4.6, §4.8` declare inner blocks (e.g.,
+   `SourceBlock`, `PublisherBlock`, `GapEntry`,
+   `ExtractionMetadataBlock`, `ExtrasEntry`) as `BaseModel`** while
+   re-specifying `model_config = ConfigDict(extra="forbid")`. The
+   architectural intent (per `coding-conventions.md §11` and CLAUDE.md)
+   is `ArtifactModel`. My implementations correctly inherit
+   `ArtifactModel`. Flag for the architect: the `BaseModel` usages in
+   `schema-details.md` should become `ArtifactModel` so the contract
+   is uniform and the load-bearing config doesn't have to be repeated
+   per class.
+3. **The doc's `_source_rules` example in §3 uses `BaseModel` and
+   redeclares `model_config = ConfigDict(extra="forbid", validate_
+   assignment=True)`** for `Provenance[T]`. As the plan-reviewer
+   noted, this is illustrative of the load-bearing settings, not a
+   deliberate narrower config — Pydantic v2's config *replaces* rather
+   than merges, so redeclaring even one setting drops the inherited
+   `str_strip_whitespace`, `use_enum_values=False`, and
+   `populate_by_name`. My `Provenance[T]` inherits `ArtifactModel`'s
+   config without override. The doc could note this trap explicitly.
+4. **`schema-details.md §3` line 403's `# TODO(architecture)` for
+   EXTERNAL_API + confidence** is itself the right place to capture
+   the deferred decision; flag for the architect to either decide it
+   or move the TODO to a `dev/decisions/` ADR so it doesn't live in
+   the contract doc indefinitely.
+
+---
