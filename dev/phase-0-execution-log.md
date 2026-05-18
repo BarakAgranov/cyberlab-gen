@@ -558,3 +558,72 @@ Six classes appended to `cyberlab_gen/errors.py` (`ProviderError(CyberlabGenErro
 6. **Phase-0 brief line 232** cites `provider-interface.md §6.1` for the error hierarchy; the actual class definitions are at `§6.4`. Next brief: correct the citation.
 
 ---
+
+## Task 5b: Cost ledger, model resolver, pricing & ranking YAMLs
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~25 minutes execution (plan-mode work preceded; not counted)
+**Commit:** `<to be filled after commit>`
+
+### What was built
+
+Two new modules and two bundled YAML registries under `cyberlab_gen/providers/`:
+
+- **`cost_ledger.py`** ships `PricingTable`, `ModelPricing`, `compute_cost`, `load_pricing_table`; `CallOutcome` (StrEnum); `CostLedgerEntry`, `CostReportBlock`; and the `CostLedger` plain class with `record`, `total_usd`, `remaining_under_cap`, `by_agent`, `by_model`, `by_provider`, `to_report_block`, and the cap accessor `remaining_under_cap()` that returns `None | Decimal` (possibly negative) and never raises.
+- **`ranking.py`** ships `RankingEntry`, `ModelRankings`, `is_provider_configured`, `ProviderRegistry` (validates capability coverage at construction; raises `CapabilityUnreachable` naming the offending capability), `load_model_rankings`, and the factory `build_provider_registry` that wires env-var checks into the registry.
+- **`pricing.yaml`** carries Anthropic prices for Opus 4.7 (verbatim from `provider-interface.md §5.2`), Opus 4.6, Sonnet 4.6, Haiku 4.5-20251001. OpenAI section is a comment-only placeholder.
+- **`model_rankings.yaml`** carries the three capability hints with Anthropic-only configured entries. OpenAI entries use the documented `<pinned-in-release>` sentinel.
+
+`mock_provider.py` gained an optional `model: str | None = None` parameter on `register()`. When a real Anthropic model is registered and `usage.cost_usd` is the placeholder `Decimal("0")`, the response is rebuilt with cost computed from the bundled pricing table; the `ProviderResponse.model` field then reports the registered model (still `provider="mock"`). Caller-supplied non-zero costs are preserved untouched. Backwards-compatible with all Task 5a registrations (default keeps `model="mock-canned"` and zero cost).
+
+`providers/__init__.py` re-exports the new public surface (12 new names; full list in the file).
+
+42 new tests (20 cost-ledger unit, 13 ranking unit, 1 pricing-coverage smoke, 3 extended mock-provider integration, plus the manual factory sanity check from the plan). Total suite: 262 tests passing; `just verify` green; pyright strict reports 0 errors and 5 pre-existing ruamel.yaml unknown-member-type warnings (same pattern as `loader.py` / `schemas/base.py`).
+
+### Brief audit findings (acted on per the plan)
+
+1. **F1 — `BudgetExceeded` is NOT defined.** The Task 5b brief asked for a test "`cap_usd` triggers `BudgetExceeded` at the right threshold." `provider-interface.md §5.3` explicitly assigns budget-overrun ownership to the **framework, not the provider**: the provider records usage and reports the total; the framework consults `remaining_under_cap()` and decides whether to interrupt. Creating `BudgetExceeded` in the cost ledger would put the provider in the budget-decision business — directly contradicting §5.3. Resolved with the user during plan review: ship `cap_usd` as constructor data plus the `remaining_under_cap()` accessor (`None` uncapped; `Decimal` possibly negative after overrun); no exception. The corresponding test (`test_cost_ledger_remaining_under_cap_negative_after_overrun`) asserts the negative return and explicitly comments that no exception is raised.
+2. **F2 — Cost-ledger types live in `cost_ledger.py`, not `base.py`.** Brief and doc disagreed (doc §5.1 doc-comment puts them in `base.py`; brief puts them in `cost_ledger.py`). Brief wins; `base.py` is already substantial and the ledger is its own concern. Recorded as doc-improvement note.
+3. **F3 — "Configured provider" defined for Phase 0 in ADR 0011.** `provider-interface.md §3.4` says "at least one entry whose provider is configured" but does not define "configured." Phase-0 rule (per the plan's F3 decision): mock always; anthropic iff `ANTHROPIC_API_KEY` is set and non-empty after strip; openai never; any other name unconfigured. ADR `0011-configured-provider-phase-0.md` records this.
+4. **F4 — Per-attempt entries tested explicitly.** `test_cost_ledger_per_attempt_entries_for_retry_succeed` asserts that a logical call succeeding on retry 2 produces three entries (two `FAILED`, one `SUCCESS`), counts each outcome, and verifies the total sums every attempt. A future "deduplicate to one entry per logical call" refactor will fail this test loudly — which is the point.
+
+### Implementation-discretion choices (no ADR; recorded per ADR 0004 policy)
+
+- **`PricingTable`, `ModelPricing`, `ModelRankings`, `RankingEntry` use `ArtifactModel` with `model_config = ConfigDict(frozen=True)` layered on top.** First draft used `InternalModel`; the user pushed back during plan review: these deserialize from bundled YAML at startup, so `extra="forbid"` is load-bearing — `InternalModel`'s `extra="ignore"` would silently swallow a typo like `inputt: 5.00`. `frozen=True` is added on top because the loaded tables are construct-once read-many. Pydantic v2 config inheritance merges parent + child keys, so `ConfigDict(frozen=True)` keeps the five `ArtifactModel` settings AND adds frozen. Confirmed clean on pyright strict and exercised by `test_pricing_table_rejects_unknown_field`.
+- **YAML-on-disk vs in-memory shape**: `pricing.yaml` is `provider -> model -> rates`; `model_rankings.yaml` is `capability -> [entries]`. Pydantic models cannot validate raw-top-level mappings as fields, so the loaders wrap the parsed YAML into `{"rows": ...}` / `{"by_capability": ...}` before `model_validate`. Typo discipline still bites — the `CapabilityHint` enum catches unknown top-level capability names, and `RankingEntry` / `ModelPricing` catch unknown field names inside.
+- **`is_provider_configured` lives in `ranking.py` alongside `ProviderRegistry`.** Single named function, env-coupling visible at one site. `ProviderRegistry.__init__` takes a pure `frozenset[str]` so unit tests construct registries with arbitrary configured sets without `monkeypatch.setenv`. The factory `build_provider_registry()` is the one place that bridges env to constructor.
+- **Pricing-coverage smoke test skips `<pinned-in-release>`.** OpenAI placeholder entries in `model_rankings.yaml` would otherwise fail the coverage check. The sentinel string is the documented "fill at release time" marker; skipping it is the only sensible coverage rule.
+- **`compute_cost` raises `KeyError` (not a typed `ProviderError` subtype).** Brief said "raises KeyError with clear msg" and the call sites that will eventually feed the ledger (Phase 1) translate or contextualize errors themselves. Adding a typed wrapper here would be premature.
+- **Mock provider's pricing-lookup hardcodes `provider="anthropic"`.** All real models in Phase 0 are Anthropic; adding a `provider_for_pricing` param would be dead surface. The mock's response `provider` field still reports `"mock"` (it IS the mock), only `model` reflects the registered name. Phase 1 can extend if/when a non-Anthropic mock target appears.
+- **`PricingTable.model_validate` accepts numeric YAML values for `Decimal`** (pydantic coerces float→Decimal via `Decimal(str(value))`). Quoting was considered but unnecessary for 4–5 significant-digit prices; arithmetic comparisons in the tests confirmed exact representation works.
+
+### Verify-before-commit checks
+
+- **Pydantic v2 config inheritance merges**, confirmed empirically: subclasses of `ArtifactModel` with `model_config = ConfigDict(frozen=True)` inherit `extra="forbid"` + the four other ArtifactModel settings AND get frozen. `test_pricing_table_rejects_unknown_field` catches the `extra="forbid"` part; subsequent construct-call assignment attempts would also fail (not tested explicitly — frozen-on-load is sufficient for the construct-once-read-many use case).
+- **Manual factory sanity check from the plan**: `build_provider_registry()` without `ANTHROPIC_API_KEY` set raises `CapabilityUnreachable` naming `high_quality_reasoning` first (the first capability in the rankings dict ordering); with the env var set, the registry constructs and resolves `HIGH_QUALITY_REASONING` to `(anthropic, claude-opus-4-7)`. Behavior matches §3.4's fail-fast intent.
+- **Ruff format auto-fixed two cosmetic line-wrap differences** in `cost_ledger.py` and `ranking.py` (long error-message strings and a dict-comprehension). No code-meaning changes; flagged as a reminder to run `just fmt` locally before pyright on first-write modules.
+- **`from collections.abc import Callable` over `typing.Callable`** in `cost_ledger.py` — pyright strict warns on the deprecated `typing` path. Matched the existing codebase pattern.
+
+### Surprises and friction
+
+- **`provider-interface.md §6.4` doc-comment** for the error hierarchy still reads `# cyberlab_gen/providers/errors.py`. Same drift as Task 5a noted; mentioning again because the next sweep over §6 may want to fix both at once. Logged as doc-improvement note.
+- **First-draft `cost_ledger.py` had a stray `_ = Self` artifact** from an early draft that imported `typing.Self` but did not use it. Caught during my own re-read before tests ran. The lesson: when iterating a draft within a single Write call, re-scan for unused imports and dummy sentinels before declaring the file done.
+- **The `__future__` import in cost_ledger.py was removed during cleanup.** PEP 695 generics + Python 3.13 don't need `from __future__ import annotations`; older muscle memory put it in. Removed.
+
+### Deferred to Phase 1+
+
+- **User-overlay loading for `pricing.yaml` and `model_rankings.yaml`.** Brief is silent; architecture (§5.2 / §3.3) documents the behavior (`pricing.yaml` merges with `~/.cyberlab-gen/pricing.yaml`; `model_rankings.yaml` is fully replaced by the user file). Phase 0 ships bundled-only loaders. Loader shape is structured so an overlay layer can drop in later without changing call sites.
+- **Cost-ledger accumulation across calls.** The ledger exists, accumulates entries, and reports totals; the framework code that calls `ledger.record(entry)` after each provider call lands with Phase 1's pipeline runner.
+- **Cache-write 5min vs 1h split.** `TokenUsage.cache_write_tokens` is a single field; `compute_cost` bills it at the 5-minute rate (lower of the two; most common case). Revisit when the Phase-1 Anthropic adapter reveals what cache-write info the SDK reports. Recorded explicitly so a future reader sees the deliberate single-field choice.
+- **Cost-quality eval metric** (resolution → cost-per-resolution rollups). The infrastructure exists (`by_model`, `by_provider`, per-resolution log via `ranking.py` INFO log line); the eval-harness consumer ships in Phase 1+.
+
+### Doc-improvement notes for the next brief writer
+
+1. **`provider-interface.md §5.1`** code-block doc-comment reads `# cyberlab_gen/providers/base.py (continued)` for the cost-ledger types. Implementation puts them in `cost_ledger.py` per the Task 5b brief. Change to `# cyberlab_gen/providers/cost_ledger.py` to match.
+2. **`provider-interface.md §6.4`** doc-comment still reads `# cyberlab_gen/providers/errors.py` (same drift as Task 5a; re-flagging because §6 is likely to be touched soon).
+3. **Phase-0 Task 5b brief asks for a `BudgetExceeded` test** that the architecture forbids the provider from raising. Next brief: drop that test bullet; cite §5.3; reframe the cap test as "the accessor returns negative after overrun and does not raise."
+4. **`provider-interface.md §3.4`** says "at least one entry whose provider is configured" but does not define "configured." ADR 0011 fills the Phase-0 definition; §3.4 could quote the rule (mock-always / anthropic-via-env / openai-never for now) or link to ADR 0011 for incrementally-correct doc.
+5. **`provider-interface.md §3.3`** YAML schema example shows `model_rankings.yaml` as a flat top-level capability mapping. The implementation's Pydantic shape wraps under `by_capability` for `ArtifactModel`-friendly validation; the loader does the wrap before `model_validate`. Worth noting in §3.3 that the on-disk and in-memory shapes diverge by one wrapper level — not a contract violation, but a reader might be surprised.
+
+---

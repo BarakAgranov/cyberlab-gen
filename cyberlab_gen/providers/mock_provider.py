@@ -6,8 +6,20 @@ tests register canned responses and assert on the agent's behavior
 against them. Unmatched calls raise ``UnmatchedMockCall`` so test gaps
 fail loudly rather than hanging or returning empty data.
 
-Phase 0 scope: ``TokenUsage`` is populated with placeholder
-``cost_usd=Decimal("0")``. Task 5b wires real pricing.
+Task 5b wired pricing into the response path: callers may pass a
+``model`` argument to :meth:`MockProvider.register` (defaulting to the
+Phase-0 ``"mock-canned"`` sentinel). When a real Anthropic model
+identifier is supplied and the registered ``usage.cost_usd`` is the
+placeholder ``Decimal("0")``, the response is rebuilt with
+``cost_usd`` computed from the bundled pricing table. Callers that
+pre-set ``cost_usd`` (for example, to test rollups with crafted
+values) keep their value untouched.
+
+The ``provider`` field on the returned response stays ``"mock"`` — the
+mock is still the mock — while the ``model`` field reflects whatever
+the caller registered, so tests that round-trip cost computations see
+a coherent ``(provider="anthropic", model)`` pricing lookup match the
+response's reported model.
 """
 
 from collections.abc import Callable
@@ -29,6 +41,14 @@ from cyberlab_gen.providers.base import (
     ToolDefinition,
     ToolExecutor,
 )
+from cyberlab_gen.providers.cost_ledger import (
+    PricingTable,
+    compute_cost,
+    load_pricing_table,
+)
+
+_PRICING_PROVIDER = "anthropic"
+_DEFAULT_MOCK_MODEL = "mock-canned"
 
 _MESSAGE_EXCERPT_CHARS = 200
 
@@ -51,6 +71,7 @@ class _MockRegistration:
     agent_label: AgentLabel
     response: BaseModel
     usage: TokenUsage | None
+    model: str = _DEFAULT_MOCK_MODEL
     tool_calls: list[ToolCall] = field(default_factory=list[ToolCall])
     message_matcher: Callable[[list[Message]], bool] | None = None
 
@@ -79,6 +100,7 @@ class MockProvider(Provider):
     def __init__(self) -> None:
         self._registrations: list[_MockRegistration] = []
         self._default_usage: TokenUsage | None = None
+        self._pricing_table: PricingTable | None = None
 
     @property
     def name(self) -> str:
@@ -93,12 +115,25 @@ class MockProvider(Provider):
         message_matcher: Callable[[list[Message]], bool] | None = None,
         usage: TokenUsage | None = None,
         tool_calls: list[ToolCall] | None = None,
+        model: str | None = None,
     ) -> None:
         """Register a canned response.
 
         When ``usage`` is ``None``, falls back to whatever was set via
         ``register_default_usage()``; if neither is set, a minimal
         zero-cost ``TokenUsage`` is used at call time.
+
+        ``model`` controls two things about the response:
+
+        - The ``ProviderResponse.model`` field. Defaults to the
+          ``"mock-canned"`` Phase-0 sentinel so existing callers keep
+          their current behavior.
+        - Pricing lookup. When ``model`` is a real Anthropic model
+          identifier present in the bundled pricing table AND the
+          effective ``usage.cost_usd`` is the placeholder ``Decimal("0")``,
+          the response's usage is rebuilt with the cost computed from
+          the table. Callers that pre-set a non-zero ``cost_usd`` keep
+          their value (useful for crafting rollup test fixtures).
         """
         self._registrations.append(
             _MockRegistration(
@@ -106,6 +141,7 @@ class MockProvider(Provider):
                 agent_label=agent_label,
                 response=response,
                 usage=usage,
+                model=model if model is not None else _DEFAULT_MOCK_MODEL,
                 tool_calls=list(tool_calls) if tool_calls else [],
                 message_matcher=message_matcher,
             )
@@ -196,14 +232,44 @@ class MockProvider(Provider):
             )
         output: T_Output = registration.response
         usage = registration.usage or self._default_usage or _default_usage()
+        usage = self._maybe_fill_cost(usage, model=registration.model)
         raw_text = output.model_dump_json()
         final_message = Message(role=MessageRole.ASSISTANT, content=raw_text)
         return ProviderResponse[T_Output](
             output=output,
             raw_text=raw_text,
             usage=usage,
-            model="mock-canned",
+            model=registration.model,
             provider=self.name,
             conversation=[*messages, final_message],
             tool_calls=list(registration.tool_calls),
         )
+
+    def _maybe_fill_cost(self, usage: TokenUsage, *, model: str) -> TokenUsage:
+        """Compute ``cost_usd`` from the pricing table when applicable.
+
+        Returns ``usage`` unchanged when:
+        - The registration's ``model`` is the mock sentinel (no pricing
+          lookup makes sense for ``mock-canned``).
+        - The caller pre-set a non-zero ``cost_usd`` — that is taken as
+          the authoritative figure for the test.
+        - The model is not present in the pricing table.
+        """
+        if model == _DEFAULT_MOCK_MODEL or usage.cost_usd != Decimal("0"):
+            return usage
+        table = self._get_pricing_table()
+        try:
+            cost = compute_cost(
+                table,
+                provider=_PRICING_PROVIDER,
+                model=model,
+                usage=usage,
+            )
+        except KeyError:
+            return usage
+        return usage.model_copy(update={"cost_usd": cost})
+
+    def _get_pricing_table(self) -> PricingTable:
+        if self._pricing_table is None:
+            self._pricing_table = load_pricing_table()
+        return self._pricing_table

@@ -1,0 +1,47 @@
+# Per-million-token prices in USD. Updated per release.
+#
+# Cache pricing follows vendor convention: cache_write is typically more
+# expensive than input; cache_read is typically cheaper than input.
+# Anthropic Opus 4.7 reference (May 2026): cache_read = 10% of input;
+# 5-minute cache_write = 1.25x input; 1-hour cache_write = 2x input.
+#
+# Phase 0 ships bundled-only; user overrides at
+# `~/.cyberlab-gen/pricing.yaml` (merge over collision) land in a later
+# task. The provider-interface.md §5.2 schema is authoritative.
+
+anthropic:
+  claude-opus-4-7:
+    input: 5.00
+    output: 25.00
+    cache_read: 0.50
+    cache_write_5min: 6.25
+    cache_write_1h: 10.00
+  claude-opus-4-6:
+    input: 5.00
+    output: 25.00
+    cache_read: 0.50
+    cache_write_5min: 6.25
+    cache_write_1h: 10.00
+  claude-sonnet-4-6:
+    input: 3.00
+    output: 15.00
+    cache_read: 0.30
+    cache_write_5min: 3.75
+    cache_write_1h: 6.00
+  claude-haiku-4-5-20251001:
+    input: 0.80
+    output: 4.00
+    cache_read: 0.08
+    cache_write_5min: 1.00
+    cache_write_1h: 1.60
+
+# OpenAI prices intentionally left as a commented placeholder.
+# Filled at release time per current vendor pricing, alongside the
+# `<pinned-in-release>` model identifiers in model_rankings.yaml.
+# openai:
+#   <pinned-in-release>:
+#     input: ...
+#     output: ...
+#     cache_read: ...
+#     cache_write_5min: ...
+#     cache_write_1h: ...

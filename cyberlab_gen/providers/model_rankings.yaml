@@ -1,0 +1,26 @@
+# Capability-hint → (provider, model) ranking. Updated per release.
+#
+# Resolution rules (provider-interface.md §3.4):
+# - First reachable entry wins. A provider is "reachable" iff configured
+#   at startup (see ranking.py: is_provider_configured).
+# - No mid-call vendor fallback. If the chosen call fails, that's a
+#   HardFailure — the user fixes config and resumes.
+# - User overrides at `~/.cyberlab-gen/model_rankings.yaml` REPLACE this
+#   file entirely (not a merge); overrides land in a later task.
+#
+# OpenAI entries are placeholders until an OpenAI adapter ships
+# (Phase 1+). `<pinned-in-release>` is the documented sentinel; the
+# pricing-coverage smoke test skips rows matching that exact string.
+
+high_quality_reasoning:
+  - { provider: anthropic, model: claude-opus-4-7 }
+  - { provider: anthropic, model: claude-opus-4-6 }
+  - { provider: openai, model: <pinned-in-release> }
+
+fast_cheap_structured_output:
+  - { provider: anthropic, model: claude-haiku-4-5-20251001 }
+  - { provider: openai, model: <pinned-in-release> }
+
+long_context_extraction:
+  - { provider: anthropic, model: claude-opus-4-7 }
+  - { provider: anthropic, model: claude-sonnet-4-6 }

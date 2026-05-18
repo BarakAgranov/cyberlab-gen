@@ -166,3 +166,104 @@ def test_response_type_mismatch_raises_unmatched() -> None:
                 agent_label=AgentLabel.PLANNER,
             )
         )
+
+
+def test_mock_provider_fills_cost_usd_from_pricing_table() -> None:
+    """When a real model is registered and ``cost_usd`` is the placeholder,
+    the mock fills the cost from the bundled pricing table.
+
+    Task 5b deliverable: the mock provider's ``cost_usd`` is no longer
+    a frozen-zero placeholder when callers attach a real Anthropic model
+    name; the value is computed via ``compute_cost`` against the bundled
+    pricing rows.
+    """
+    from cyberlab_gen.providers import compute_cost, load_pricing_table
+
+    provider = MockProvider()
+    plan = _PlanOutput(summary="phish", steps=["recon"])
+    usage_input = TokenUsage(
+        input_tokens=2_000,
+        output_tokens=1_000,
+        cost_usd=Decimal("0"),
+    )
+    provider.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.PLANNER,
+        response=plan,
+        usage=usage_input,
+        model="claude-opus-4-7",
+    )
+    response = asyncio.run(
+        provider.complete(
+            [_user("plan an attack")],
+            output_schema=_PlanOutput,
+            capability=CapabilityHint.HIGH_QUALITY_REASONING,
+            agent_label=AgentLabel.PLANNER,
+        )
+    )
+    expected_cost = compute_cost(
+        load_pricing_table(),
+        provider="anthropic",
+        model="claude-opus-4-7",
+        usage=usage_input,
+    )
+    assert response.usage.cost_usd == expected_cost
+    assert response.usage.cost_usd > Decimal("0")
+    assert response.model == "claude-opus-4-7"
+    assert response.provider == "mock"  # still the mock; only the model label changes
+
+
+def test_mock_provider_preserves_explicit_cost_usd() -> None:
+    """A caller-supplied non-zero ``cost_usd`` is never overwritten.
+
+    Useful for crafting test fixtures with specific roll-up values
+    independent of the bundled pricing.
+    """
+    provider = MockProvider()
+    plan = _PlanOutput(summary="phish", steps=[])
+    explicit = TokenUsage(
+        input_tokens=10,
+        output_tokens=10,
+        cost_usd=Decimal("99.99"),
+    )
+    provider.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.PLANNER,
+        response=plan,
+        usage=explicit,
+        model="claude-opus-4-7",
+    )
+    response = asyncio.run(
+        provider.complete(
+            [_user("hi")],
+            output_schema=_PlanOutput,
+            capability=CapabilityHint.HIGH_QUALITY_REASONING,
+            agent_label=AgentLabel.PLANNER,
+        )
+    )
+    assert response.usage.cost_usd == Decimal("99.99")
+
+
+def test_mock_provider_default_model_keeps_cost_zero() -> None:
+    """Without an explicit ``model`` argument the response still reports
+    ``model='mock-canned'`` and the placeholder zero cost — back-compat
+    with every Task 5a-era registration that does not opt in to pricing.
+    """
+    provider = MockProvider()
+    plan = _PlanOutput(summary="phish", steps=[])
+    provider.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.PLANNER,
+        response=plan,
+        usage=TokenUsage(input_tokens=100, output_tokens=100, cost_usd=Decimal("0")),
+    )
+    response = asyncio.run(
+        provider.complete(
+            [_user("hi")],
+            output_schema=_PlanOutput,
+            capability=CapabilityHint.HIGH_QUALITY_REASONING,
+            agent_label=AgentLabel.PLANNER,
+        )
+    )
+    assert response.model == "mock-canned"
+    assert response.usage.cost_usd == Decimal("0")

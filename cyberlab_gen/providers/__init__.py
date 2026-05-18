@@ -26,7 +26,25 @@ from cyberlab_gen.providers.base import (
     ToolExecutor,
     ToolResult,
 )
+from cyberlab_gen.providers.cost_ledger import (
+    CallOutcome,
+    CostLedger,
+    CostLedgerEntry,
+    CostReportBlock,
+    ModelPricing,
+    PricingTable,
+    compute_cost,
+    load_pricing_table,
+)
 from cyberlab_gen.providers.mock_provider import MockProvider, UnmatchedMockCall
+from cyberlab_gen.providers.ranking import (
+    ModelRankings,
+    ProviderRegistry,
+    RankingEntry,
+    build_provider_registry,
+    is_provider_configured,
+    load_model_rankings,
+)
 from cyberlab_gen.providers.retries import (
     MALFORMED_OUTPUT_RETRIES,
     TRANSIENT_RETRIES,
@@ -38,12 +56,21 @@ __all__ = [
     "TRANSIENT_RETRIES",
     "AgentLabel",
     "AnthropicProvider",
+    "CallOutcome",
     "CapabilityHint",
+    "CostLedger",
+    "CostLedgerEntry",
+    "CostReportBlock",
     "Message",
     "MessageRole",
     "MockProvider",
+    "ModelPricing",
+    "ModelRankings",
+    "PricingTable",
     "Provider",
+    "ProviderRegistry",
     "ProviderResponse",
+    "RankingEntry",
     "RetryStrategy",
     "TokenUsage",
     "ToolCall",
@@ -51,4 +78,9 @@ __all__ = [
     "ToolExecutor",
     "ToolResult",
     "UnmatchedMockCall",
+    "build_provider_registry",
+    "compute_cost",
+    "is_provider_configured",
+    "load_model_rankings",
+    "load_pricing_table",
 ]
