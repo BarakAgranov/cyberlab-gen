@@ -760,3 +760,170 @@ the contract regardless of which implementation owns it.
    cite the ADR alongside it.
 
 ---
+
+## Task 7: CLI scaffolding
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~25 minutes execution (plan-mode work preceded; not counted)
+**Commit:** `<recorded post-commit>`
+
+### What was built
+
+`cyberlab_gen/cli/main.py` ships the `typer`-based app with the four
+verbs (`generate`, `validate`, `fix`, `telemetry submit`), a global
+callback that handles `--max-llm-cost`/`--state-dir`/`--debug`/`--version`,
+and a `main()` console-script entry point. `generate` declares both
+`--interactive` and `--auto` per `architecture.md §2.1` and raises
+`typer.BadParameter` if both are passed. Each verb prints a
+phase-specific "not yet implemented" message and exits 1; `--version`
+emits `importlib.metadata.version("cyberlab-gen")` (today: `0.0.1`)
+and exits 0. `cyberlab_gen/cli/output.py` owns the user-facing
+`print_info`/`print_error` helpers per `coding-conventions.md §6.3`
+with a `_debug_enabled` toggle the callback flips when `--debug` is
+set. `cyberlab_gen/cli/context.py` is a frozen `CliContext` dataclass
+attached to `typer.Context.obj` by the callback so verbs can read the
+per-invocation `LocalState` and `CostLedger`.
+
+15 new integration tests in `tests/integration/test_cli.py` cover:
+`--version` returns the pyproject value; `--help` lists all four
+verbs; each verb stub exits 1 with the expected phase mention;
+`--max-llm-cost 5.00` plumbs into `CostLedger.cap_usd`; omitting it
+leaves the cap `None`; `--state-dir` overrides `LocalState.root`;
+omitting it falls back to `~/.cyberlab-gen`; `--debug` flips the
+output-module toggle; `--interactive` and `--auto` are mutually
+exclusive; `print_error` includes the traceback only when debug is
+on. Total suite now 289 tests passing; `just verify` green; pyright
+strict reports 0 errors and 14 warnings — the 5 pre-existing
+ruamel.yaml `load`/`dump` warnings (carried over from Task 6) plus 9
+new from Task 7 in `cli/main.py`: 6× `typer.Option` and 3× `typer.Argument`
+calls tripping `reportUnknownMemberType` because pyright cannot select
+a single overload from typer's stubs. These are pyright/typer
+compatibility noise, not new typing debt; the wrapping `Annotated[…]`
+on each parameter pins the user-facing types. The console script was
+registered in
+`pyproject.toml` as `cyberlab-gen = "cyberlab_gen.cli.main:main"` and
+real-machine smoke check confirms `uv run cyberlab-gen --version`
+emits `0.0.1` and the four stub verbs each print and exit 1.
+
+ADR 0013 (`dev/decisions/0013-cli-flag-surface.md`) consolidates six
+flag-surface decisions: declaring both `--interactive`/`--auto`,
+keeping `--max-llm-cost` global per the brief's literal wording,
+implementing `--state-dir` (mentioned in the brief's Inputs paragraph
+but absent from its Work items), using `importlib.metadata.version`
+instead of a hardcoded literal, shipping `--debug` now per
+`coding-conventions.md §6.3`, and pointing the console script at the
+canonical module path `cyberlab_gen.cli.main:main` rather than
+re-exporting `main` from `cli/__init__.py` (the literal re-export
+shadows the `cli.main` submodule with the function of the same name,
+breaking attribute access for the test hook).
+
+### Surprises and friction
+
+The brief's work item 1 says "Create `cyberlab_gen/cli/__init__.py`
+exposing the `main` entry point." A literal re-export
+(`from cyberlab_gen.cli.main import main` inside `__init__.py`) caused
+the `cyberlab_gen.cli.main` attribute on the `cli` package to resolve
+to the function rather than the module after import — pyright then
+flagged every `cli_main.last_invocation_context` access in the
+integration tests with `reportFunctionMemberAccess`. The fix was to
+leave `cli/__init__.py` as a docstring-only stub and point the console
+script at `cyberlab_gen.cli.main:main`. The brief's intent is
+preserved (the entry point is reachable and `cyberlab-gen --version`
+works); the strict-letter reading is not. ADR 0013 records the choice.
+
+The brief's "Phase 5 (full integrated generation)" parenthetical for
+`generate` is wrong per `implementation-plan.md`: `generate` first
+lights up at the end of **Phase 3** (line 477: "`cyberlab-gen generate
+<url>` produces a runnable AWS lab"), with Phase 4 extending to
+multi-cloud + refinement and Phase 5 covering `fix`, `validate`, and
+`telemetry submit`. The stub messages use the corrected per-verb
+phase mapping (Phase 3 for `generate`, Phase 5 for the other three).
+
+`--max-llm-cost` is declared as a `float | None` typer option and
+converted to `Decimal(str(...))` before being passed to `CostLedger`.
+The roundtrip via `str()` avoids float-binary-representation
+artifacts; `Decimal("5.00") == Decimal("5.0")` is `True` so the test
+assertion holds regardless of how typer parses `5.00` from the
+command line.
+
+Pyright in strict mode flagged three Python-idiomatic patterns that
+needed adjustment: (1) `_LAST_CONTEXT` (uppercase) tripped
+`reportConstantRedefinition` — renamed to lowercase
+`last_invocation_context`; (2) `_DEBUG` (uppercase) same — renamed to
+`_debug_enabled`; (3) the `@app.callback`-decorated function appeared
+unused — added `# pyright: ignore[reportUnusedFunction]`. The autouse
+fixture got the same ignore. None of these surfaced in earlier tasks
+because no earlier task had module-level mutable test state.
+
+### Deferred to later phases
+
+- **Per-verb tightening of `--max-llm-cost`.** Currently global per
+  the brief's wording; `validate` and `telemetry submit` accept it and
+  ignore it. Tighten to LLM-spending verbs (`generate`, `fix`) only
+  in Phase 1+ when `fix` actually starts spending and the silent-ignore
+  becomes user-visible.
+
+- **`--debug` run-report capture.** `coding-conventions.md §6.3` says
+  internal traces are written to the run's structured report
+  regardless of the flag. The run-report runner ships with the
+  orchestrator in Phase 1+; Phase 0 has no place to write traces to.
+  The user-facing half (`--debug` toggles whether traces appear in
+  stderr) is implemented now.
+
+- **Remaining `generate` flags.** The brief's `[--max-llm-cost USD]
+  [--auto] ...` placeholder defers everything else (model overrides,
+  cache controls, run-id naming) to Phase 1+ when the pipeline reveals
+  what shape the flags should take.
+
+- **Real verb implementations.** Stubs only in Phase 0. Per
+  `implementation-plan.md`: `generate` → Phase 3; `validate`, `fix`,
+  `telemetry submit` → Phase 5.
+
+- **`CliContext` extension.** Currently holds `state` and
+  `cost_ledger`. Provider registry, run id, and telemetry toggle land
+  here as the orchestrator grows in Phase 1+.
+
+### Doc-improvement notes for the next brief writer
+
+1. **Task 7 brief shows `generate <url> [--max-llm-cost USD] [--auto] ...`**
+   — `--interactive` is missing from the inline flag list even though
+   `architecture.md §2.1` (line 284) specifies it as the default mode.
+   Add it to the inline example.
+
+2. **Task 7 brief's Inputs paragraph names `--state-dir`** but Work
+   items 1–6 don't restate it. Either drop the mention from Inputs or
+   add it as an explicit Work item. (`LocalState(root=...)` from Task 6
+   supports the override out of the box; implementation is a one-line
+   plumbing.)
+
+3. **Task 7 brief says "hardcode `0.0.1`"** for `--version` while
+   `pyproject.toml:3` already holds `0.0.1` statically. Using
+   `importlib.metadata.version("cyberlab-gen")` is the idiomatic
+   alternative that stays in sync with `pyproject.toml` on future
+   bumps. Either soften the "hardcode" instruction or note that
+   `importlib.metadata` is preferred.
+
+4. **`--debug` is required by `coding-conventions.md §6.3`** but
+   absent from the Task 7 brief's flag list. Add it to the global flag
+   surface.
+
+5. **`implementation-plan.md §3.1` (line 131) says `cyberlab-gen
+   --version` returns `0.0.0`**, conflicting with the Phase-0 brief and
+   `pyproject.toml:3`. Update `implementation-plan.md` to match.
+
+6. **Task 7 brief's work-item 2 names "Phase 5 (full integrated
+   generation)" as the landing phase for `generate`.** That is wrong:
+   `implementation-plan.md:477` puts the first runnable `cyberlab-gen
+   generate <url>` at the end of **Phase 3** (AWS only); Phase 4
+   extends to multi-cloud + refinement; Phase 5 covers `fix`,
+   `validate`, and `telemetry submit`. Either spell out the per-verb
+   landing phases or drop the parenthetical entirely.
+
+7. **Task 7 brief's work-item 1 says to "expose `main` from
+   `cli/__init__.py`"**, but the literal re-export pattern shadows the
+   `cli.main` submodule with the `main` function and breaks attribute
+   access. Reword to "register the console script for the `main()`
+   function in `cli/main.py`" or accept the indirection. See ADR 0013.
+
+---
