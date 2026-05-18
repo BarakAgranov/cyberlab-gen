@@ -564,7 +564,7 @@ Six classes appended to `cyberlab_gen/errors.py` (`ProviderError(CyberlabGenErro
 **Date:** 2026-05-18
 **Implementer:** Claude (Opus 4.7, 1M context)
 **Time taken:** ~25 minutes execution (plan-mode work preceded; not counted)
-**Commit:** `<to be filled after commit>`
+**Commit:** `9c1730e`
 
 ### What was built
 
