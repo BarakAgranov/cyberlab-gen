@@ -366,3 +366,74 @@ round-trip writes `schema:` rather than `schema_:`.
    from `BaseModel + ConfigDict(extra="forbid")` to `ArtifactModel`.
 
 ---
+
+## Task 3 follow-up: architect-locked decisions
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Commits:** `a98736e`, `241b42c`, `175ea8f`, `34d9118` (one per decision)
+
+### What was built
+
+The four "Doc-improvement notes" from Task 3's log entry were locked by the
+architect and applied. ADR 0007 was rewritten to supersede its prior deferral
+and `path_template` was relaxed to `str` across schema, doc, and ADR (Decision
+1). Ruff `ANN401` was enabled in `pyproject.toml` and the lone real violation
+was suppressed with an inline justification in `tests/unit/schemas/
+test_ingestion.py` (Decision 2). The Task 3 brief's phantom validator names
+(`_no_enrichment_triggers`, `_no_discrepancy_materiality_rules`) were replaced
+with prose describing the structural enforcement that the implementation
+actually ships (Decision 3). `schema-details.md §6` was swept from `BaseModel
++ ConfigDict(extra="forbid")` to `ArtifactModel` for eighteen classes, and
+the stale `ValueTypeRegistryEntry` / `FacetRegistryEntry` names in
+`registry-details.md §2.1` and §3.1 were corrected to match the canonical
+names in §6 (Decision 4).
+
+### Surprises and friction
+
+- **`ANN401` does not fire on Pydantic field annotations.** The doc-improvement
+  note in Task 3's entry assumed it did; the brief I received also assumed it
+  would, instructing me to add `# noqa: ANN401` markers to `schema_:
+  dict[str, Any]` and `examples: list[Any]`. Ruff reported them as unused
+  (`RUF100`). The rule only checks function-signature `Any` — parameters and
+  return types. The real violation surfaced in `_payload(**overrides: Any)`
+  in `test_ingestion.py`, where the `noqa` was actually needed. The Task 3
+  log's call to either "enable `ANN401` or drop the markers from
+  `CLAUDE.md`" is now half-resolved: enabled in ruff, with a comment in
+  `registries.py` explaining why no marker is needed at the field sites so a
+  future reader doesn't add unnecessary ones.
+
+- **Pre-existing ADR 0007 conflicted with the new locked decision.** Task 3
+  had already filed a deferral ADR under the same number. Per ADR discipline
+  (never silently rewrite history), the new content carries an explicit
+  **Supersedes** section pointing at the prior version. The previous content
+  is preserved in git history.
+
+### Resolution status of Task 3's doc-improvement notes
+
+1. `path_template` schema-vs-seeds conflict — **resolved** (Decision 1, ADR
+   0007 supersede). Task 4 can ship the documented seeds.
+2. Phantom validator names in the brief — **resolved** (Decision 3). Brief
+   now matches `schema-details.md §6.3` and the implementation.
+3. `ValueTypeRegistryEntry` / `FacetRegistryEntry` naming drift — **resolved**
+   (Decision 4). `registry-details.md` now agrees with §6's canonical names.
+4. Subpackage layout (`cyberlab_gen/schemas/registries/<name>.py` vs the
+   single-file `cyberlab_gen/schemas/registries.py` that was implemented) —
+   **left deferred** as the architect chose. Re-evaluate when Phase 1
+   content blocks expand the file enough to make a split useful.
+5. `§6` BaseModel → ArtifactModel sweep — **resolved** (Decision 4).
+
+### Deferred to later phases
+
+Nothing new beyond what Task 3 already deferred to Task 4 (the loader,
+`MergedRegistries`, the bundled seed YAML files).
+
+### Doc-improvement notes for the next brief writer
+
+- The `coding-conventions.md §4.6` `# noqa: ANN401` convention should be
+  re-read with the empirical finding above: the convention applies only to
+  function signatures, not to Pydantic field annotations. A short clarifying
+  sentence in §4.6 would prevent future implementers from adding markers
+  that ruff will reject as unused.
+
+---
