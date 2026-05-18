@@ -1,0 +1,10 @@
+# Bundled `execution_contexts` registry — Phase 0 ships one seed entry per
+# registry to exercise the meta-schema. Source: docs/registry-details.md §6.2.
+entries:
+  - name: attacker_local
+    description: "Code runs on the attacker's local machine."
+    credential_assumption: "Lab's configured cloud credentials via standard tooling conventions."
+    network_assumption: "Outbound to target cloud APIs and lab-provisioned endpoints."
+    notes_for_generator: |
+      Most common. Uses local SDK clients with credentials from environment.
+      No special bootstrap; the lab's `setup.sh` validated credentials at startup.

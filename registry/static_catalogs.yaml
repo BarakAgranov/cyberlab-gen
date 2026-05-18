@@ -1,0 +1,25 @@
+# Bundled `static_catalogs` registry — Phase 0 ships one seed entry per
+# registry to exercise the meta-schema. Source: docs/registry-details.md §5.2.
+entries:
+  - id: aws_iam_catalog
+    name: "AWS IAM Action Catalog"
+    description: "Static JSON of all AWS IAM actions, resource type combinations, and condition keys."
+    base_url: "https://awspolicygen.s3.amazonaws.com/js/policies.js"
+    auth_type: none
+    rate_limit:
+      without_key: "static asset; polling-friendly"
+    endpoints:
+      - id: catalog_download
+        method: GET
+        path_template: ""
+        parameters: {}
+        response_schema_ref: aws_iam_actions_catalog
+        cache_ttl: P30D
+    cache:
+      ttl: P30D
+      scope: global
+    best_effort: false
+    notes_for_generator: |
+      Consulted via lookup_cloud_iam_action(cloud='aws', action='<service>:<Action>')
+      to verify the action exists and the policy is syntactically valid. Generator
+      must not emit IAM actions that fail this lookup; Validator catches them.

@@ -437,3 +437,59 @@ Nothing new beyond what Task 3 already deferred to Task 4 (the loader,
   that ruff will reject as unused.
 
 ---
+
+## Task 4: Registry loaders and merge logic
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+
+### What was built
+
+`cyberlab_gen/errors.py` with the Phase-0 error hierarchy stub: `CyberlabGenError`, `RegistryError`, `RegistryLoadError`. ADR 0009 records the partial structured-context fill (`run_id` declared but always `None` until Phase 1's pipeline runner lands) and the "only stub what's actually raised" scope.
+
+`cyberlab_gen/registries/loader.py` with `load_bundled_file[E]`, `load_overlay_file[E]`, `load_bundled`, `load_overlay`, plus `bundled_registry_dir`, `default_overlay_dir`, `REGISTRY_FILE_NAMES`, and the `LoadedRegistryLayer` dataclass. Bundled files validate against `BundledRegistryFile[E]`; overlay files against `OverlayRegistryFile[E]` — the loader never shares a shape between the two so the Layer-1 structural guarantee (`schema-details.md §6.6` lines 1433-1434) is preserved. ADR 0010 records the bundled-path-resolution choice and the deferred wheel-packaging question.
+
+`cyberlab_gen/registries/merge.py` with the `MergedRegistries` model, `_merge_entries[E]` helper, `merge_layers`, and `load_merged_registries`. `MergedRegistries` inherits from plain `BaseModel` (ADR 0008, ADR 0004 reserved case 3) with `frozen=True, extra="forbid"` and no `arbitrary_types_allowed`. Six accessors per `schema-details.md §6.6`; O(1) lookup via `PrivateAttr` indices built in `_build_indices`.
+
+`cyberlab_gen/registries/__init__.py` rewritten to re-export the public surface (`MergedRegistries`, `RegistryLoadError`, the four load functions, helpers).
+
+Six bundled seed YAMLs at `registry/<name>.yaml`, one entry each, transcribed verbatim from `docs/registry-details.md`: `aws_credentials` (§2.2.1), `target:aws` (§3.2), `nvd` (§4.2), `aws_iam_catalog` (§5.2), `attacker_local` (§6.2), `aws_test_access_key` (§7.5).
+
+Two new integration test files. `tests/integration/test_registry_load.py` (16 tests) covers each registry's smoke load, the complete-layer load, the bundled-rejects-proposals structural guarantee, malformed-YAML / Pydantic-validation / missing-file / empty-file / duplicate-key error paths, and the `RegistryLoadError.path` attribute. `tests/integration/test_registry_merge.py` (12 tests) covers no-overlay baseline, overlay-wins for both `name`-keyed (facets) and `id`-keyed (external_data_sources) registries, overlay-only entries, real-and-orphan proposals, `lab_credential_patterns` filter, frozen immutability, accessor None-return, and merge ordering.
+
+Three new ADRs: 0008 (`MergedRegistries` base class), 0009 (Phase-0 error hierarchy), 0010 (bundled registry path resolution).
+
+### Surprises and friction
+
+- **`PrivateAttr` + `frozen=True` empirical check came out positive.** Per the plan's risk note, ran a 5-line smoke before writing `merge.py`: a frozen `BaseModel` with `PrivateAttr` fields populated inside `@model_validator(mode="after")` works as intended. Public-field reassignment raises `ValidationError`; the private attrs are writable from the validator and queryable after. The plan's fallback (drop `frozen=True`) was therefore unnecessary. Pinned in `test_merged_registries_is_frozen`.
+
+- **Duplicate-key check placed in the loader, not the schema.** The Task-3 file shapes (`BundledRegistryFile[E]`, `OverlayRegistryFile[E]`) don't enforce per-entry-key uniqueness. The Task-4 brief doesn't explicitly require it either, but the "clear error message on a malformed fixture" exit criterion implies it for any sensible read. Added the check inside `load_bundled_file` / `load_overlay_file` (post-Pydantic-validation) to avoid touching Task-3 schema code mid-Task-4. **Under unconstrained scope a `@model_validator(mode="after")` on the file shapes would be cleaner** — uniqueness is a structural property of the file, ValidationError flow is uniform, the loader surface shrinks. **Recorded as Task-5a refactor debt:** when scope opens up, move the check into the schema, drop the loader-level `_check_unique_keys`, and migrate `test_duplicate_entry_keys_rejected` from `tests/integration/test_registry_load.py` to `tests/unit/schemas/test_registries.py`.
+
+- **`OverlayRegistryFile.proposals: dict[SnakeName, ProposalAuditBlock]` cannot key a `FacetName` entry.** Architectural debt blocking the proposal flow. A `FacetEntry` with `name = "target:aws"` (a `FacetName`, containing a colon) cannot have a matching proposals entry because the dict's key type is `SnakeName` (no colon allowed). Phase 0 ships no proposals so the bug is dormant in the seeds. **Phase 1 MUST widen this key type (or restructure to per-entry-type-keyed proposals) before any overlay-proposal accept-flow lands**, otherwise facet proposals will be silently impossible. Verified during merge-test writing: the orphan-proposals test uses `value_types` (`SnakeName`-keyed) to stay clear of the bug.
+
+- **`schema-details.md §6.6` doc comments are slightly out of sync.** Line 1356's `# cyberlab_gen/registries/loader.py` comment locates `MergedRegistries` in `loader.py`; the implementation puts it in `merge.py` (single-direction import: loader → merge). Line 1358's `BaseModel(arbitrary_types_allowed=True)` keeps the now-unnecessary config. Both flagged as doc-improvement notes for incremental cleanup per ADR 0004's policy; not edited here per CLAUDE.md's no-implementation-doc-edits rule.
+
+- **Closed bundled-only catalogs out of scope.** `registry-details.md §7` (and §1's category-2 list) names `detection_components`, `severity_levels`, `detection_formats`, `provisioning_mechanisms`, and `thesis_types` as closed-set bundled-only catalogs. Task 3 did NOT ship Pydantic models for any of them. Task 4 therefore did NOT ship seed YAMLs for them either — the Phase-0 smoke test (`implementation-plan.md §3.4` check 4) explicitly defers them ("and each closed bundled-only catalog once those get Pydantic models"). A Phase-1-prep task should add the models and seeds in lockstep.
+
+### Resolution status of the three decisions flagged in the Task 4 plan
+
+1. **`MergedRegistries` base class & `arbitrary_types_allowed`** — resolved. ADR 0008: `BaseModel` (ADR 0004 case 3), `frozen=True`, `extra="forbid"`, drop `arbitrary_types_allowed`.
+2. **Bundled vs overlay separate validation** — resolved. Loader uses `BundledRegistryFile[E]` for bundled, `OverlayRegistryFile[E]` for overlay; pinned by `test_bundled_file_with_proposals_block_rejected`.
+3. **`RegistryLoadError` location and base class** — resolved. ADR 0009: `cyberlab_gen/errors.py`; `Exception → CyberlabGenError → RegistryError → RegistryLoadError`. Registry-only scope for Phase 0; other stage classes per-task.
+
+### Deferred to later phases
+
+- Pydantic models + seed YAMLs for the five closed bundled-only catalogs (`detection_components`, `severity_levels`, `detection_formats`, `provisioning_mechanisms`, `thesis_types`). Phase-1-prep task.
+- Schema-level duplicate-key enforcement (move `_check_unique_keys` from loader into `BundledRegistryFile` / `OverlayRegistryFile` validators). Task-5a refactor debt or earlier if convenient.
+- `OverlayRegistryFile.proposals` key-type widening (`SnakeName` cannot key facet entries). **Must land before any Phase-1 proposal accept-flow.**
+- Wheel-packaging of `registry/` and `importlib.resources`-based path resolution. ADR 0010 records the deferral; resolve when the distribution story lands.
+- Wiring `LocalState.overlay_dir()` into `load_merged_registries`. Task 6 owns `LocalState`; the loader already accepts the override parameter.
+- `run_id` plumbing through `RegistryLoadError`. Phase-1 pipeline-runner task.
+
+### Doc-improvement notes for the next brief writer
+
+1. `schema-details.md §6.6` line 1358 still shows `MergedRegistries(BaseModel)` with `arbitrary_types_allowed=True`. Per ADR 0008, the implementation drops `arbitrary_types_allowed` and adds `frozen=True` + `extra="forbid"`. Update §6.6 incrementally per ADR 0004's policy.
+2. `schema-details.md §6.6` line 1356's `# cyberlab_gen/registries/loader.py` comment locates `MergedRegistries` in `loader.py`; the implementation puts it in `merge.py` for single-direction import. Update the doc comment to `merge.py` when §6 is next exercised, or drop the comment (the class's location is incidental to the spec).
+3. `cyberlab_gen/schemas/registries.py:333` (`OverlayRegistryFile.proposals: dict[SnakeName, ProposalAuditBlock]`) is incompatible with `FacetName`-keyed entries. The fix likely needs a Phase-1 ADR plus a schema refactor (either widen the key type or introduce a per-entry-type proposals shape). Surfacing this prominently because any proposal-flow work that lands without addressing it will silently break facet proposals.
+
+---

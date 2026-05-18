@@ -1,0 +1,46 @@
+# Bundled `external_data_sources` registry — Phase 0 ships one seed entry
+# per registry to exercise the meta-schema. Source: docs/registry-details.md §4.2.
+entries:
+  - id: nvd
+    name: "National Vulnerability Database"
+    description: "Authoritative CVE metadata cross-cloud (CVSS, affected products, references)."
+    base_url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    auth_type: optional_api_key
+    auth_env_var: NVD_API_KEY
+    rate_limit:
+      without_key: "5 requests per 30 seconds"
+      with_key: "50 requests per 30 seconds"
+    endpoints:
+      - id: lookup_cve
+        method: GET
+        path_template: "?cveId={cve_id}"
+        parameters:
+          cve_id:
+            type: string
+            required: true
+            pattern: "^CVE-[0-9]{4}-[0-9]+$"
+        response_schema_ref: nvd_cve_response_v2
+        cache_ttl: P7D
+    enrichment_triggers:
+      - field: "chain.chain_steps[*].techniques.mitre[*].cve_ids[*]"
+        action: lookup
+        endpoint: lookup_cve
+      - field: "external_references.cve_references[*]"
+        action: lookup
+        endpoint: lookup_cve
+    discrepancy_materiality_rules:
+      - field_path: cvss_score
+        classification: material
+        rule_description: "CVSS contradiction changes severity narrative."
+      - field_path: affected_products
+        classification: material
+        rule_description: "Wrong affected products misleads about lab applicability."
+      - field_path: description
+        classification: non_material
+        rule_description: "Wording differences expected."
+    cache:
+      ttl: P7D
+      scope: per-key
+    best_effort: false
+    notes_for_extractor: |
+      Authoritative for CVE metadata. For Microsoft-issued CVEs, cross-check with MSRC.

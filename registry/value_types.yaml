@@ -1,0 +1,23 @@
+# Bundled `value_types` registry — Phase 0 ships one seed entry per registry
+# to exercise the meta-schema. Source: docs/registry-details.md §2.2.1.
+entries:
+  - name: aws_credentials
+    description: "Long-lived AWS access key plus secret access key (IAM user credentials)."
+    schema:
+      type: object
+      required: [access_key_id, secret_access_key]
+      properties:
+        access_key_id:
+          type: string
+          pattern: "^AKIA[0-9A-Z]{16}$"
+        secret_access_key:
+          type: string
+          minLength: 40
+    sensitive: true
+    examples:
+      - access_key_id: "AKIAIOSFODNN7EXAMPLE"
+        secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    notes_for_generator: |
+      Long-lived; the common form of "leaked AWS key" in supply-chain blogs.
+      Distinct from aws_temporary_credentials (which includes session token).
+    platforms: [aws]

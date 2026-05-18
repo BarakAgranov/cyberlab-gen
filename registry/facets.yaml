@@ -1,0 +1,10 @@
+# Bundled `facets` registry — Phase 0 ships one seed entry per registry
+# to exercise the meta-schema. Source: docs/registry-details.md §3.2.
+entries:
+  - name: target:aws
+    category: target
+    proposed_by: extractor
+    description: "Attack targets AWS (services, IAM, accounts, infrastructure)."
+    applies_at_levels: [lab, phase]
+    implies: []
+    notes_for_extractor: "Use when blog's chain involves AWS services or identity material."
