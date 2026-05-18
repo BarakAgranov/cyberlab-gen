@@ -1161,9 +1161,8 @@ The registries are validated at load time against their meta-schemas. Each regis
 ```python
 # cyberlab_gen/schemas/registries/value_types.py
 
-class ValueTypeEntry(BaseModel):
+class ValueTypeEntry(ArtifactModel):
     """schema.md §4.12."""
-    model_config = ConfigDict(extra="forbid")
 
     name: SnakeName
     description: NonEmptyString
@@ -1178,17 +1177,15 @@ class ValueTypeEntry(BaseModel):
     proposed_in_run: str | None = None  # run-id reference; None for bundled entries
 
 
-class ValueTypesRegistry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ValueTypesRegistry(ArtifactModel):
     entries: list[ValueTypeEntry] = Field(default_factory=list)
 ```
 
 ### 6.2 `facets` meta-schema
 
 ```python
-class FacetEntry(BaseModel):
+class FacetEntry(ArtifactModel):
     """schema.md §4.13."""
-    model_config = ConfigDict(extra="forbid")
 
     name: FacetName
     category: Literal["target", "runtime", "lab_class_signal"]
@@ -1204,8 +1201,7 @@ class FacetEntry(BaseModel):
     notes_for_planner: NonEmptyString | None = None
 
 
-class FacetsRegistry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class FacetsRegistry(ArtifactModel):
     entries: list[FacetEntry] = Field(default_factory=list)
 ```
 
@@ -1214,9 +1210,7 @@ class FacetsRegistry(BaseModel):
 These share an entry shape with one optional-field difference (`enrichment_triggers` and `discrepancy_materiality_rules` only meaningful for `external_data_sources`).
 
 ```python
-class ExternalSourceEndpoint(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ExternalSourceEndpoint(ArtifactModel):
     id: SnakeName
     method: Literal["GET", "POST"]
     path_template: str  # e.g., "/cves/{cve_id}" — may be "" when base_url is the full URL (RSS feeds, static catalogs). ADR 0007.
@@ -1225,9 +1219,7 @@ class ExternalSourceEndpoint(BaseModel):
     cache_ttl: timedelta  # ISO 8601 duration in YAML (e.g., "P7D"); Pydantic parses to timedelta
 
 
-class ExternalSourceParam(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ExternalSourceParam(ArtifactModel):
     type: Literal["string", "integer", "boolean", "list_string"]
     required: bool = True
     description: NonEmptyString | None = None
@@ -1235,35 +1227,31 @@ class ExternalSourceParam(BaseModel):
     enum_values: list[NonEmptyString] | None = None  # optional allowed value list for string params (e.g., OSV ecosystem names)
 
 
-class RateLimit(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class RateLimit(ArtifactModel):
     without_key: NonEmptyString | None = None  # e.g., "5 req/30s"
     with_key: NonEmptyString | None = None
 
 
-class CacheConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class CacheConfig(ArtifactModel):
     ttl: timedelta  # ISO 8601 duration in YAML (e.g., "P7D"); Pydantic parses to timedelta
     scope: Literal["per-key", "global"] = "per-key"
 
 
-class EnrichmentTrigger(BaseModel):
+class EnrichmentTrigger(ArtifactModel):
     """schema.md §4.14. Only on external_data_sources entries."""
-    model_config = ConfigDict(extra="forbid")
     field: NonEmptyString  # JSONPath-like; e.g., "chain.chain_steps[*].cve_ids[*]"
     action: Literal["lookup"]  # v1: only lookup; widens in future
     endpoint: SnakeName  # endpoint id within this source
 
 
-class DiscrepancyMaterialityRule(BaseModel):
+class DiscrepancyMaterialityRule(ArtifactModel):
     """schema.md §4.14. Only on external_data_sources entries."""
-    model_config = ConfigDict(extra="forbid")
     field_path: NonEmptyString  # which field in the AttackSpec this rule applies to
     classification: Literal["material", "non_material"]
     rule_description: NonEmptyString
 
 
-class _ExternalSourceEntryBase(BaseModel):
+class _ExternalSourceEntryBase(ArtifactModel):
     """Internal base for the two external-source entry shapes. schema.md §4.14.
 
     Not used directly — split into ExternalDataSourceEntry and StaticCatalogEntry
@@ -1271,7 +1259,6 @@ class _ExternalSourceEntryBase(BaseModel):
     schema.md §4.14 line 645: enrichment_triggers belongs only to external_data_sources;
     notes_for_extractor vs notes_for_generator are addressed to different agents).
     """
-    model_config = ConfigDict(extra="forbid")
 
     id: SnakeName
     name: NonEmptyString
@@ -1314,13 +1301,11 @@ class StaticCatalogEntry(_ExternalSourceEntryBase):
     notes_for_generator: NonEmptyString | None = None
 
 
-class ExternalDataSourcesRegistry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ExternalDataSourcesRegistry(ArtifactModel):
     entries: list[ExternalDataSourceEntry] = Field(default_factory=list)
 
 
-class StaticCatalogsRegistry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class StaticCatalogsRegistry(ArtifactModel):
     entries: list[StaticCatalogEntry] = Field(default_factory=list)
 ```
 
@@ -1329,9 +1314,8 @@ The typed split is enforced structurally: a YAML entry under `static_catalogs:` 
 ### 6.4 `execution_contexts` meta-schema
 
 ```python
-class ExecutionContextEntry(BaseModel):
+class ExecutionContextEntry(ArtifactModel):
     """schema.md §4.5, agents.md §5.10."""
-    model_config = ConfigDict(extra="forbid")
 
     name: SnakeName
     description: NonEmptyString
@@ -1342,17 +1326,15 @@ class ExecutionContextEntry(BaseModel):
     proposed_by: Literal["planner", "maintainer"] = "maintainer"
 
 
-class ExecutionContextsRegistry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ExecutionContextsRegistry(ArtifactModel):
     entries: list[ExecutionContextEntry] = Field(default_factory=list)
 ```
 
 ### 6.5 `lab_credentials` meta-schema
 
 ```python
-class LabCredentialEntry(BaseModel):
+class LabCredentialEntry(ArtifactModel):
     """schema.md §4.11. Canonical fake-credential patterns. Used by Generator and Validator Layer 5."""
-    model_config = ConfigDict(extra="forbid")
 
     id: SnakeName  # e.g., "aws_canonical_access_key"
     platform: SnakeName  # "aws", "github", etc.
@@ -1362,8 +1344,7 @@ class LabCredentialEntry(BaseModel):
     whitelist_rationale: NonEmptyString  # why Layer 5 may ignore this pattern
 
 
-class LabCredentialsRegistry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class LabCredentialsRegistry(ArtifactModel):
     entries: list[LabCredentialEntry] = Field(default_factory=list)
 ```
 
@@ -1400,7 +1381,7 @@ Per `implementation-plan.md §3.2`: "Overlay wins on name collisions. Validation
 Bundled and overlay registry files both validate against the same per-registry shape (a `{entries: [...]}` mapping). The overlay file additionally carries an audit block keyed by entry name. Per `schema.md §4.16`:
 
 ```python
-class ProposalAuditBlock(BaseModel):
+class ProposalAuditBlock(ArtifactModel):
     """Audit context for a runtime-proposed entry that landed in the overlay.
 
     Captures the proposal envelope (schema.md §4.16) — the metadata the framework
@@ -1408,7 +1389,6 @@ class ProposalAuditBlock(BaseModel):
     overlay file; stripped when the entry is promoted to bundled via maintainer PR
     (the audit context is preserved in git history instead).
     """
-    model_config = ConfigDict(extra="forbid")
 
     proposal_origin: Literal["llm_during_extraction", "llm_during_planning"]
     source_lab: NonEmptyString          # lab id where the proposal originated
@@ -1418,14 +1398,16 @@ class ProposalAuditBlock(BaseModel):
     reasoning: NonEmptyString           # the agent's stated justification
 
 
-class OverlayRegistryFile[E: BaseModel](BaseModel):
+class OverlayRegistryFile[E: BaseModel](ArtifactModel):
     """Shape of an overlay registry YAML file (one per registry).
 
     The generic parameter E is the registry's entry type (ValueTypeEntry,
     FacetEntry, etc.). The bundled file shape is the same minus the proposals
     block — a bundled file is just `{entries: [...]}`.
+
+    The generic bound is `BaseModel` rather than `ArtifactModel` per ADR 0004
+    reserved case 2 (generic-bound dispatch).
     """
-    model_config = ConfigDict(extra="forbid")
 
     entries: list[E] = Field(default_factory=list)
     # Keyed by entry name (or id, whichever the entry type uses).

@@ -32,7 +32,7 @@ For every registry, **every entry's keys conform to the `SnakeName` convention**
 
 ### 2.1 Entry shape
 
-Per `schema.md §4.12`. The Pydantic model is `ValueTypeRegistryEntry` from `schema-details.md`; the YAML shape is:
+Per `schema.md §4.12`. The Pydantic model is `ValueTypeEntry` from `schema-details.md`; the YAML shape is:
 
 ```yaml
 - name: aws_credentials                       # SnakeName, registry key
@@ -940,7 +940,7 @@ The per-run cap on proposal acceptance (`schema.md §4.16`, default 5) keeps ove
 
 ### 3.1 Entry shape
 
-Per `schema.md §4.13`. The Pydantic model is `FacetRegistryEntry` from `schema-details.md`.
+Per `schema.md §4.13`. The Pydantic model is `FacetEntry` from `schema-details.md`.
 
 ```yaml
 - name: target:aws                            # category:value form
