@@ -261,3 +261,108 @@ format-check, and pyright strict all clean.
    the contract doc indefinitely.
 
 ---
+
+## Task 3: Registry meta-schemas
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~30 minutes execution (plan-mode work preceded; not counted)
+**Commit:** `e156e89`
+
+### What was built
+
+`cyberlab_gen/schemas/registries.py` — the full §6 meta-schema surface in
+one file: six entry types (`ValueTypeEntry`, `FacetEntry`,
+`ExternalDataSourceEntry`, `StaticCatalogEntry`, `ExecutionContextEntry`,
+`LabCredentialEntry`); six supporting types (`ExternalSourceParam`,
+`ExternalSourceEndpoint`, `RateLimit`, `CacheConfig`, `EnrichmentTrigger`,
+`DiscrepancyMaterialityRule`); a private `_ExternalSourceEntryBase`
+carrying the shared fields and the `_auth_rules` validator; six per-registry
+container classes (`*Registry`); `ProposalAuditBlock`; and the PEP 695
+generic per-file shapes `OverlayRegistryFile[E: BaseModel]` (with
+`_proposal_keys_match_entries`) and `BundledRegistryFile[E: BaseModel]`.
+Every class inherits `ArtifactModel` per ADR 0004. `__init__.py` re-exports
+all public symbols (the private base stays in-module). 52 new tests in
+`tests/unit/schemas/test_registries.py`; 165 tests pass total. `ArtifactModel.to_yaml()`
+now passes `by_alias=True` so the `schema_: dict[str, Any] = Field(alias="schema")`
+round-trip writes `schema:` rather than `schema_:`.
+
+### Surprises and friction
+
+- **`path_template` conflict between docs.** `schema-details.md §6.3` declares
+  `path_template: NonEmptyString`, but 7 of 13 v1 seed entries in
+  `registry-details.md §4.2` and `§5.2` (RSS feeds + all three static catalogs)
+  use `path_template: ""`. Recorded as `dev/decisions/0007-empty-path-template.md`;
+  implementation matches `schema-details.md §6.3` exactly (NonEmptyString) and
+  the static-catalog test fixture uses a realistic non-empty path with an inline
+  pointer to the ADR. Task 4 will hit this when loading the seeds — surface to
+  the architect first.
+- **`ENTRY_KEY_FIELD: ClassVar[str]` instead of `getattr(entry, 'name', None) or
+  getattr(entry, 'id')`.** Per the user's hint, each entry type declares its
+  registry-key field name as a class-level constant. `OverlayRegistryFile._entry_key`
+  reads it with `getattr(type(entry), "ENTRY_KEY_FIELD")` (with `# noqa: B009`
+  for the polymorphic lookup). Cleaner than the doc's fallback chain — a
+  missing declaration becomes an immediate `AttributeError` instead of silently
+  picking the wrong field.
+- **Ruff `RUF100` on `# noqa: ANN401`.** CLAUDE.md / `coding-conventions.md §4.6`
+  prescribe `# noqa: ANN401` next to every `Any`, but the project's ruff config
+  doesn't enable `ANN401`, so ruff flags the noqa as unused. Dropped the noqa
+  marker on the two `Any` sites in `ValueTypeEntry` (`schema_: dict[str, Any]`,
+  `examples: list[Any]`) and kept the inline justification comment. The
+  convention-vs-config gap is worth a sweep: either enable `ANN401` in ruff
+  (and add the markers everywhere) or drop the markers from CLAUDE.md.
+- **`ArtifactModel.to_yaml()` updated to pass `by_alias=True`.** Pre-existing
+  behavior would have round-tripped `schema_` as the YAML key, not `schema`.
+  Since `populate_by_name=True` already accepts both names on parse and no
+  other artifact uses `Field(alias=...)` today, the change is monotonic — input
+  with `schema:` round-trips to output `schema:`. Worth knowing for future
+  artifact authors who reach for aliases.
+- **`entry.model_fields` is deprecated** in Pydantic 2.13 in favor of
+  `type(entry).model_fields`. Pyright flagged via `reportDeprecated`. Fixed
+  the one site.
+
+### Deferred to later phases
+
+- Loader code (`cyberlab_gen/registries/loader.py`, `merge.py`),
+  `MergedRegistries`, `RegistryLoadError`, the registry-load smoke test, and
+  the bundled seed YAML files — all Task 4.
+- Resolution of the `path_template` doc conflict (ADR 0007) — architect call
+  or Task 4 escalation.
+- Reconciling `coding-conventions.md §4.6`'s `# noqa: ANN401` convention with
+  the ruff config that doesn't enable `ANN401`.
+
+### Doc-improvement notes for the next brief writer
+
+1. **`schema-details.md §6.3` declares `path_template: NonEmptyString` but
+   `registry-details.md §4.2 / §5.2` ships 7 v1 seed entries with
+   `path_template: ""`.** Two coherent resolutions: relax the schema to
+   `str`, or change the seeds to a non-empty placeholder (`"/"` works). See
+   ADR 0007. Task 4 cannot ship the documented seeds with the documented
+   schema.
+2. **The brief's Task 3 Step 4 names `StaticCatalogsRegistry._no_enrichment_triggers`
+   and `_no_discrepancy_materiality_rules` validators** per `schema-details.md
+   §6.3`. The doc does not define those validators — §6.3 enforces the type
+   split structurally via `extra="forbid"` on `StaticCatalogEntry`. The
+   implementation follows the doc (no separate validators); the test suite
+   pins the structural guarantee explicitly (`test_static_catalog_rejects_*`).
+   Worth updating the brief to match.
+3. **Name discrepancy `schema-details.md §6` vs `registry-details.md §2/§3`.**
+   §6.1 names `ValueTypeEntry`; §2.1 says "`ValueTypeRegistryEntry` from
+   `schema-details.md`". Same for §6.2 `FacetEntry` vs §3.1
+   `FacetRegistryEntry`. `registry-details.md` is also internally
+   inconsistent: line 1320 in §3.5 uses `FacetEntry`, agreeing with §6.2.
+   `schema-details.md §6` is the canonical naming; align `registry-details.md`.
+4. **`schema-details.md §6.6` shows `MergedRegistries` at
+   `cyberlab_gen/registries/loader.py` and per-registry shapes at
+   `cyberlab_gen/schemas/registries/<name>.py`** (subpackage). Task 3's brief
+   (Step 1) uses a single `cyberlab_gen/schemas/registries.py` file and that
+   was implemented as written. The doc's subpackage layout might be desirable
+   in Phase 1 when Phase-1 inner content blocks expand each file — could be
+   noted as "subpackage split is a future option" rather than the canonical
+   layout.
+5. **`schema-details.md §6` should also note ADR 0004 explicitly** (per ADR
+   0004's "doc updates incrementally as each section is exercised"). The §6
+   sweep is now exercised; flag for the architect to update the §6 classes
+   from `BaseModel + ConfigDict(extra="forbid")` to `ArtifactModel`.
+
+---
