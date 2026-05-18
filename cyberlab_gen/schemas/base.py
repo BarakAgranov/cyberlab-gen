@@ -43,17 +43,21 @@ class ArtifactModel(BaseModel):
     def to_yaml(self) -> str:
         """Serialize to YAML via ``ruamel.yaml``.
 
-        Uses ``model_dump(mode="json")`` so enum members serialize to their
-        string values and other Pydantic-managed types (URLs, datetimes)
-        become YAML-friendly scalars. Block-style output (no flow); key
-        order follows the Pydantic field declaration order.
+        Uses ``model_dump(mode="json", by_alias=True)`` so enum members
+        serialize to their string values, other Pydantic-managed types
+        (URLs, datetimes) become YAML-friendly scalars, and fields with a
+        ``Field(alias=...)`` declaration round-trip under the alias the
+        user-facing YAML actually uses (e.g., ``schema:`` rather than the
+        Python attribute ``schema_:``). ``populate_by_name=True`` on the
+        config keeps both names accepted on parse. Block-style output (no
+        flow); key order follows the Pydantic field declaration order.
         """
         from ruamel.yaml import YAML
 
         yaml = YAML()
         yaml.default_flow_style = False
         stream = StringIO()
-        yaml.dump(self.model_dump(mode="json"), stream)
+        yaml.dump(self.model_dump(mode="json", by_alias=True), stream)
         return stream.getvalue()
 
     @classmethod
