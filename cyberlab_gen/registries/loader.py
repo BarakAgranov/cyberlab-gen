@@ -101,11 +101,14 @@ def bundled_registry_dir() -> Path:
 def default_overlay_dir() -> Path:
     """Default overlay directory: ``~/.cyberlab-gen/registry-overlay/``.
 
-    Task 6's ``LocalState`` will own this resolver once it lands; callers
-    can override via the ``overlay_dir`` parameter on ``load_overlay`` /
-    ``load_merged_registries`` until then.
+    Thin alias delegating to :class:`~cyberlab_gen.state.LocalState`,
+    which owns the canonical path resolver as of Phase 0 Task 6. Kept
+    as a function for call-site stability — ``load_overlay`` and
+    ``load_merged_registries`` use it as a default-argument fallback.
     """
-    return Path.home() / ".cyberlab-gen" / "registry-overlay"
+    from cyberlab_gen.state import LocalState
+
+    return LocalState().registry_overlay_dir
 
 
 def _read_yaml(path: Path) -> object:

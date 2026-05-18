@@ -1,7 +1,16 @@
-"""State subpackage — local on-disk state under `~/.cyberlab-gen/`.
+"""State subpackage — local on-disk state under ``~/.cyberlab-gen/``.
 
-Manages `config.yaml`, the blog cache, per-run working dirs, telemetry reports,
-and the registry overlay directory. Uses `platformdirs` so paths work on
-macOS, Linux, and Windows. Architectural source: `docs/architecture.md §2.2`
-and `docs/pipeline.md §3.6`.
+Manages ``config.yaml``, the blog ingestion cache, pipeline-resume
+checkpoints, per-run working directories, telemetry reports, and the
+registry-overlay directory. Path resolution is hardcoded to
+``Path.home() / ".cyberlab-gen"`` on every platform, matching
+``docs/architecture.md §2.3`` literally; ADR 0012 records why
+``platformdirs`` was not used despite the brief's instruction.
+
+Cross-subpackage imports go through this re-export surface; intra-subpackage
+modules import from each sibling directly.
 """
+
+from cyberlab_gen.state.local_state import LocalState, UserConfig
+
+__all__ = ["LocalState", "UserConfig"]

@@ -627,3 +627,136 @@ Two new modules and two bundled YAML registries under `cyberlab_gen/providers/`:
 5. **`provider-interface.md §3.3`** YAML schema example shows `model_rankings.yaml` as a flat top-level capability mapping. The implementation's Pydantic shape wraps under `by_capability` for `ArtifactModel`-friendly validation; the loader does the wrap before `model_validate`. Worth noting in §3.3 that the on-disk and in-memory shapes diverge by one wrapper level — not a contract violation, but a reader might be surprised.
 
 ---
+
+## Task 6: Local state management
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~15 minutes execution (plan-mode work preceded; not counted)
+**Commit:** <fill in after commit>
+
+### What was built
+
+`cyberlab_gen/state/local_state.py` ships the `LocalState` frozen dataclass and
+the `UserConfig` empty `ArtifactModel`. `LocalState` exposes six path
+properties (`config_path`, `cache_dir`, `checkpoints_dir`, `runs_dir`,
+`reports_dir`, `registry_overlay_dir`) and six idempotent
+`ensure_<dir>()` methods, plus `load_config()` (returns a default
+`UserConfig` when the file is missing) and `save_config()` (writes via
+`ArtifactModel.to_yaml()`, ensures the root dir first). The class is a
+frozen dataclass with a `default_factory` of `Path.home() /
+".cyberlab-gen"`; tests inject `root=tmp_path` for filesystem isolation.
+
+`registries/loader.py:default_overlay_dir()` was refactored to delegate
+to `LocalState().registry_overlay_dir`, eliminating the duplicated
+literal-path string while preserving the function signature (callers
+in `load_overlay` / `load_merged_registries` are unchanged).
+
+`cyberlab_gen/state/__init__.py` was promoted from a docstring-only
+stub to a re-export of `LocalState` and `UserConfig` per the project's
+cross-subpackage import convention.
+
+12 new integration tests in `tests/integration/test_local_state.py`
+cover: default `root` resolution, `root` injection, all six path
+properties, no-I/O side effect of property access, all six `ensure_*`
+methods create their target, `ensure_*` idempotency, `load_config`
+missing-file default, empty-YAML round-trip, unknown-field rejection
+via `extra='forbid'`, `save_config` round-trip, `save_config` root
+creation, and the `default_overlay_dir()` delegation contract. Total
+suite: 274 tests passing; `just verify` green; pyright strict reports
+0 errors and 5 pre-existing ruamel.yaml unknown-member-type warnings
+(same pattern as before, unchanged by Task 6).
+
+Real-machine smoke check (brief exit criterion): `LocalState()` on the
+implementer's Windows machine resolves to
+`C:\Users\agran\.cyberlab-gen\` with the six expected child paths. The
+optional `ensure_*` real-machine run was skipped to avoid creating
+state-directory noise on the developer's machine — the test suite
+already exercises every `ensure_*` against `tmp_path` and the path
+computation has no platform-specific branches that could differ
+between `tmp_path` and `~`.
+
+### Surprises and friction
+
+The brief instructs "use `platformdirs`," but `architecture.md §2.3`
+specifies `~/.cyberlab-gen/` literally on every platform, and existing
+code (`registries/loader.py:default_overlay_dir()`) hardcodes
+`Path.home() / ".cyberlab-gen"`. Per CLAUDE.md's authority gradient
+(architecture > brief), `LocalState` hardcodes the literal path. ADR
+0012 records the deviation and recommends the next brief revision drop
+the `platformdirs` instruction. `platformdirs>=4` remains a declared
+dependency in `pyproject.toml` (line 14) but is unused by Phase-0
+code.
+
+The brief gives discretion on the `config.yaml` shape ("empty user
+config, just the file existing"). Implemented as `class
+UserConfig(ArtifactModel): pass` — zero fields, `extra='forbid'`
+inherited. Reasoning: YAGNI per CLAUDE.md ("don't design for
+hypothetical future requirements"). Phase 1+ adds fields one-at-a-time
+per `pipeline.md §3.6` as the pipeline begins reading them. A user
+hand-editing `config.yaml` in Phase 0 with stray keys gets a clean
+Layer-1 validation error — the right posture for an empty Phase-0
+surface.
+
+The delegation test (`test_default_overlay_dir_delegates_to_localstate`)
+passed before Task 6.4's refactor too — because both
+`default_overlay_dir()` and `LocalState().registry_overlay_dir`
+independently computed the same path. The refactor still consolidates
+the source of truth in `LocalState`, so the next code change to the
+overlay-path semantics only needs to touch one place. The test pins
+the contract regardless of which implementation owns it.
+
+### Deferred to later phases
+
+- **Per-run subdirectory helpers** (`path_for_run(run_id)`,
+  `path_for_checkpoint(run_id)`, `path_for_blob_cache(content_hash)`).
+  Phase 0 keeps the surface minimal: Phase 1+ pipeline code computes
+  per-run paths as `(local_state.runs_dir / run_id).mkdir(parents=True,
+  exist_ok=True)` directly. Adding helpers prematurely would lock in
+  an API shape before knowing what callers want.
+
+- **`UserConfig` fields.** Phase 1+ declares providers, cost-cap, and
+  telemetry sections per `pipeline.md §3.6` as the pipeline begins
+  consuming them. The empty Phase-0 shape is forward-compatible:
+  adding fields with default values does not break existing empty
+  `config.yaml` files.
+
+- **`default_overlay_dir()` removal.** Kept as a thin alias to preserve
+  the two existing call sites in `load_overlay` /
+  `load_merged_registries`. A Phase-1+ housekeeping sweep can inline
+  `LocalState().registry_overlay_dir` at the call sites and remove the
+  function entirely.
+
+- **Wrapping config-load errors.** `load_config()` lets `pydantic.ValidationError`
+  and `ruamel.yaml.YAMLError` propagate. Phase 1+ may wrap them in a
+  named `LocalStateError` (in `cyberlab_gen/errors.py` per ADR 0009)
+  when the CLI surfaces config-load failures to users.
+
+### Doc-improvement notes for the next brief writer
+
+1. **Task 6 brief cites `architecture.md §2.2` for local-state layout;
+   §2.2 is "Properties of the system" and only references the user
+   overlay path.** The full layout diagram (`config.yaml | cache/ |
+   checkpoints/ | runs/ | reports/`) is in §2.3. Update the cross-ref.
+
+2. **Task 6 brief omits `checkpoints/` from the canonical path list.**
+   `architecture.md §2.3` line 349 includes `checkpoints/`;
+   `pipeline.md §3.7` line 581 uses `~/.cyberlab-gen/checkpoints/<run-id>/`
+   concretely for pipeline-resume snapshots. `LocalState` ships
+   `checkpoints_dir` + `ensure_checkpoints_dir()` as if the brief
+   listed it; the next brief revision should add it explicitly.
+
+3. **Task 6 brief cites `pipeline.md §3.6` for "telemetry directory
+   layout."** §3.6 covers submission semantics; directory references
+   in §3.6 are scattered (reports at line 492, config.yaml table at
+   line 500, telemetry.enabled at line 527) but no consolidated
+   "directory layout" subsection exists. Either point the brief at the
+   `architecture.md §2.3` diagram (which is the actual directory
+   layout) or restructure `pipeline.md §3.6` to consolidate the
+   path-and-config references.
+
+4. **Brief instruction "Use `platformdirs`" conflicts with `architecture.md §2.3`'s
+   literal `~/.cyberlab-gen/`.** See ADR 0012. Drop the instruction or
+   cite the ADR alongside it.
+
+---
