@@ -192,7 +192,8 @@ class ValueTypeEntry(ArtifactModel):
     description: NonEmptyString
     # JSON Schema is intentionally open-shape (the value-type catalog covers
     # every shape the system might ever encounter); narrower typing would
-    # exclude valid registrations.
+    # exclude valid registrations. ANN401 does not fire on Pydantic field
+    # annotations (only on function-signature ``Any``), so no noqa needed here.
     schema_: dict[str, Any] = Field(alias="schema")
     sensitive: bool
     # Example values mirror the value's runtime shape, which is open-set by

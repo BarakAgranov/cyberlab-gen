@@ -34,7 +34,7 @@ line-length = 100
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "TCH", "PTH", "LOG", "T20"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "TCH", "PTH", "LOG", "T20", "ANN401"]
 ignore = ["E501"]
 
 [tool.ruff.format]

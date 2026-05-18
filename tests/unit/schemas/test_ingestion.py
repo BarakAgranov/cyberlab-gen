@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from cyberlab_gen.schemas import IngestionResult
 
 
-def _payload(**overrides: Any) -> dict[str, Any]:
+def _payload(**overrides: Any) -> dict[str, Any]:  # noqa: ANN401 — heterogeneous Pydantic payload overrides
     # Test-only helper: kwargs are forwarded into a Pydantic payload dict
     # whose values are intentionally heterogeneous (str, int, datetime), so
     # `Any` is the right type for the overrides bag.
