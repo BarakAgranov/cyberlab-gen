@@ -499,7 +499,7 @@ Three new ADRs: 0008 (`MergedRegistries` base class), 0009 (Phase-0 error hierar
 **Date:** 2026-05-18
 **Implementer:** Claude (Opus 4.7, 1M context)
 **Time taken:** ~20 minutes execution (plan-mode work preceded; not counted)
-**Commit:** `4b966cd`
+**Commit:** `88d752e`
 
 ### What was built
 
