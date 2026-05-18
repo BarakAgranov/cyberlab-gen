@@ -65,7 +65,7 @@ class ExternalSourceEndpoint(ArtifactModel):
 
     id: SnakeName
     method: Literal["GET", "POST"]
-    path_template: NonEmptyString
+    path_template: str
     parameters: dict[str, ExternalSourceParam] = Field(
         default_factory=dict[str, ExternalSourceParam]
     )

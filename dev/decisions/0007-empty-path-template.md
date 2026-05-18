@@ -1,55 +1,37 @@
-# 0007 — `ExternalSourceEndpoint.path_template` conflict between schema-details and registry-details
+# 0007 — `path_template` is `str`, not `NonEmptyString`
 
 **Date:** 2026-05-18
-**Phase:** Phase 0 (Task 3)
+**Phase:** Phase 0 (post-Task 3)
 **Architecture refs:** `docs/schema-details.md §6.3`, `docs/registry-details.md §4.2`, `docs/registry-details.md §5.2`
 
 ## Decision
 
-Keep `ExternalSourceEndpoint.path_template: NonEmptyString` for Task 3, matching `schema-details.md §6.3` exactly. Surface the discrepancy to the architect; do not silently relax the constraint.
-
-The seven v1 seed entries in `registry-details.md` that use `path_template: ""` (RSS-feed sources in §4.2 and all three catalogs in §5.2) cannot be loaded by Task 4 as-is. Resolution of that conflict is deferred to whichever lands first: an architect-driven doc edit, or Task 4 hitting the failure mode.
+`ExternalSourceEndpoint.path_template` is typed as `str`, not `NonEmptyString`. Empty strings are valid for endpoints where the full URL is encoded in `base_url` and no path suffix is needed.
 
 ## Context
 
-`schema-details.md §6.3` shows:
+`schema-details.md §6.3` originally typed `path_template: NonEmptyString`, intending to catch typos where someone forgot to fill in the template. But `registry-details.md` ships seed entries where `path_template: ""` is the correct, intentional value:
 
-```python
-class ExternalSourceEndpoint(BaseModel):
-    ...
-    path_template: NonEmptyString  # e.g., "/cves/{cve_id}"
-```
+- RSS feeds: AWS Security Bulletins, Azure Security Advisories, GCP Security Bulletins. The base_url is the full feed URL.
+- Static catalogs: AWS IAM, Azure RBAC, GCP IAM. The base_url is the full asset URL.
 
-`NonEmptyString = Annotated[str, StringConstraints(min_length=1)]` (Task 1).
+7 of 13 v1 seed entries use `path_template: ""`. The schema and the seeds contradict each other.
 
-`registry-details.md §5.2` shows three of the three `static_catalogs` v1 seeds with `path_template: ""`:
-
-```yaml
-- id: aws_iam_catalog
-  ...
-  endpoints:
-    - id: catalog_download
-      method: GET
-      path_template: ""
-```
-
-`registry-details.md §4.2` shows the four RSS-feed `external_data_sources` v1 seeds with the same pattern (`aws_security_bulletins`, `azure_security_advisories`, `gcp_security_bulletins`, `cisa_kev`). That's 7 of 13 v1 seed entries with empty `path_template`.
-
-The discrepancy is a docs-vs-docs conflict, not a brief-vs-doc one. Per CLAUDE.md's authority gradient, both are `docs/*.md` — equal weight. The conflict has to be resolved upstream of implementation; Task 3 cannot silently pick either reading.
-
-The semantic intent of each seed appears to be "use the `base_url` verbatim, no path suffix." Two readings are coherent: either the schema relaxes to `path_template: str` (allowing `""`), or the seeds change to `path_template: "/"` (root path, satisfies NonEmptyString) or some other non-empty sentinel.
+Discovered during Task 3 plan execution. The test for `nvd` (which uses a real non-empty `path_template`) passes; loading the real seeds in Task 4 would fail Layer 1 validation if the constraint stays.
 
 ## Alternatives considered
 
-- **Relax `path_template` to `str` in Task 3.** Rejected: silently makes a schema-level decision that overrides `schema-details.md §6.3`. Violates CLAUDE.md's "never resolve architectural ambiguities silently."
-- **Skip the static-catalog construction test.** Rejected: removes coverage the brief explicitly calls for ("every Pydantic model parses an empty entries:list").
-- **Keep `NonEmptyString`, use non-empty path_template in test fixtures, ADR the discrepancy** (chosen). Task 3 implementation strictly matches `schema-details.md §6.3`. The static-catalog test fixture uses a realistic non-empty path (e.g., `/policies.js` extracted from the base URL), with an inline comment naming this ADR. The architect can either edit `schema-details.md §6.3` to relax to `str`, or edit `registry-details.md §4.2/§5.2` to use non-empty paths, before Task 4 runs.
+- **Keep `NonEmptyString`, change the seeds to `"/"` or other non-empty placeholder.** Rejected: less honest — the placeholder carries a value that doesn't match reality. Provides false signal to readers of the registry.
+- **Use `Literal[""] | NonEmptyString`.** Rejected: complexity for small win. The discriminator's job (catch typos) is better handled by Layer 3 runtime validation (the framework fetches the URL and fails if it's malformed).
+- **Relax to `str`** (chosen). Honest to the registry's actual content. Typo-catching responsibility moves to Layer 3.
 
 ## Consequences
 
-- `cyberlab_gen/schemas/registries.py` ships with `path_template: NonEmptyString` per `schema-details.md §6.3`.
-- The Task 3 test fixture `_static_catalog()` uses a non-empty `path_template` so the test reflects what the schema actually accepts; an inline comment names this ADR.
-- Task 4's seed-loading work will hit this discrepancy if the docs aren't resolved first. Task 4's brief points at `registry-details.md` for "the simplest entries" — those entries don't currently load. The Task 4 agent should either:
-  - find the architect's doc edit has landed, and proceed; or
-  - record the second-hit and stop, since Task 4 is the layer where the conflict bites.
-- The execution log entry for Task 3 surfaces this prominently.
+- `cyberlab_gen/schemas/registries.py`: `path_template: str` instead of `NonEmptyString`.
+- `docs/schema-details.md §6.3`: same change in the doc's class definition.
+- Task 4's registry loader can ship the documented seeds without rewriting them.
+- Tests do not need updating; the existing `nvd` happy path uses non-empty templates and the static-catalog happy path can be updated to use empty `path_template` (matching real seeds).
+
+## Supersedes
+
+This ADR supersedes the prior 0007 (dated 2026-05-18, Phase 0 Task 3), which had deferred the decision and kept `NonEmptyString`. The deferral pointed at the architect to choose between relaxing the schema or rewriting the seeds; the architect chose relaxation, recorded here.

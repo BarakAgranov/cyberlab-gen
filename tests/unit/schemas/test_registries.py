@@ -97,11 +97,9 @@ def _external_data_source(source_id: str = "nvd") -> ExternalDataSourceEntry:
 def _static_catalog(catalog_id: str = "aws_iam_catalog") -> StaticCatalogEntry:
     """A valid `aws_iam_catalog`-shaped entry (the §5.2 canonical example).
 
-    NOTE: the doc's §5.2 seed uses ``path_template: ""``, but
-    ``schema-details.md §6.3`` declares ``path_template: NonEmptyString``.
-    See ``dev/decisions/0007-empty-path-template.md`` for the discrepancy;
-    this fixture uses a non-empty placeholder to exercise the schema as
-    actually defined.
+    ``path_template`` is non-empty here to exercise the canonical AWS asset
+    suffix; per ADR 0007 the field accepts empty strings too (RSS feeds and
+    several static catalogs encode the full URL in ``base_url``).
     """
     return StaticCatalogEntry(
         id=catalog_id,

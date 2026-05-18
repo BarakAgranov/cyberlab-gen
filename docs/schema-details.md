@@ -1219,7 +1219,7 @@ class ExternalSourceEndpoint(BaseModel):
 
     id: SnakeName
     method: Literal["GET", "POST"]
-    path_template: NonEmptyString  # e.g., "/cves/{cve_id}"
+    path_template: str  # e.g., "/cves/{cve_id}" — may be "" when base_url is the full URL (RSS feeds, static catalogs). ADR 0007.
     parameters: dict[str, ExternalSourceParam] = Field(default_factory=dict)
     response_schema_ref: SnakeName | None = None  # named reference resolved by the adapter in cyberlab_gen/external_data_sources/
     cache_ttl: timedelta  # ISO 8601 duration in YAML (e.g., "P7D"); Pydantic parses to timedelta
