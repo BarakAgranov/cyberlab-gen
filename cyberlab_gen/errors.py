@@ -2,10 +2,11 @@
 
 Architectural source: ``coding-conventions.md`` §6.1. Root is
 ``CyberlabGenError``; subdivisions follow the architecture's stage
-boundaries. Phase 0 only populates the registry branch; other stage
-classes (``IngestionError``, ``ExtractionError``, ``PlanningError``,
-``GenerationError``, ``ValidationLayerError``, ``ProviderError``) land
-in the tasks that first raise them.
+boundaries. Stage subclasses land in the tasks that first raise them
+(per ADR 0009). Phase 0 populates the registry branch (Task 4) and the
+provider branch (Task 5a); the remaining stage classes
+(``IngestionError``, ``ExtractionError``, ``PlanningError``,
+``GenerationError``, ``ValidationLayerError``) land in Phase 1+.
 
 Every error carries the structured context §6.1 requires (``stage``,
 ``run_id``, ``cause``). Phase 0 has no pipeline runner yet so ``run_id``
@@ -14,6 +15,12 @@ task wires it through.
 
 Use ``raise X from Y`` per §6.1 so ``__cause__`` chains preserve the
 original error for the structured run report.
+
+Provider errors live here, not under ``cyberlab_gen/providers/errors.py``,
+per ADR 0009's single-hierarchy rule. ``provider-interface.md`` §2 and
+§6.4 still show ``cyberlab_gen/providers/errors.py``; that is a known
+doc-improvement note (recorded in the Phase 0 execution log) and the
+authoritative location is here.
 """
 
 from pathlib import Path
@@ -78,3 +85,83 @@ class RegistryLoadError(RegistryError):
     ) -> None:
         super().__init__(message, run_id=run_id, cause=cause)
         self.path = path
+
+
+class ProviderError(CyberlabGenError):
+    """Provider-stage errors (LLM call surface).
+
+    Pins ``stage='provider'`` so the run report can group provider
+    failures without each call site re-supplying it. The five subtypes
+    below partition the failure modes ``provider-interface.md`` §6
+    enumerates:
+
+    - ``TransientFailure`` — retries exhausted on a transient condition
+      (timeout, 5xx, 429). §6.1.
+    - ``MalformedOutput`` — model produced text that did not parse against
+      the declared ``output_schema`` after the retry budget. §6.2.
+    - ``HardFailure`` — non-retryable (quota, auth, no provider). §6.3.
+    - ``CapabilityUnreachable`` — the requested capability hint has no
+      reachable model in the configured ranking. Raised by the resolver
+      (Task 5b); the class lands here in 5a alongside the others. §6.4.
+    - ``ToolLoopError`` — tool-use loop exceeded ``max_iterations`` without
+      producing a final structured output. §6.4.
+
+    Note: the brief audit found ``CapabilityUnreachable`` omitted from the
+    Task 5a brief's enumeration; the canonical six-class set in §6.4 is
+    what ships.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, stage="provider", run_id=run_id, cause=cause)
+
+
+class TransientFailure(ProviderError):  # noqa: N818 -- name locked by provider-interface.md §6.4
+    """Retries exhausted on a transient condition (timeouts, 5xx, 429).
+
+    ``provider-interface.md`` §6.1: the provider attempts up to 3 calls
+    with exponential backoff and ±30% jitter. If all attempts fail with
+    transient errors, this is raised and the framework checkpoints per
+    ``pipeline.md`` §3.7.
+    """
+
+
+class MalformedOutput(ProviderError):  # noqa: N818 -- name locked by provider-interface.md §6.4
+    """Provider returned text that did not parse against the declared schema.
+
+    ``provider-interface.md`` §6.2: 3 attempts including a system-side
+    note carrying the previous parse error. Final failure raises this.
+    Counted distinctly from agent-quality refinement retries.
+    """
+
+
+class HardFailure(ProviderError):  # noqa: N818 -- name locked by provider-interface.md §6.4
+    """Non-retryable provider error (quota, auth, no provider configured).
+
+    ``provider-interface.md`` §6.3: no retry; the framework surfaces a
+    clear actionable error to the user.
+    """
+
+
+class CapabilityUnreachable(ProviderError):  # noqa: N818 -- name locked by provider-interface.md §6.4
+    """The requested capability hint has no reachable model in the ranking.
+
+    ``provider-interface.md`` §3.4 + §6.4: capability resolution time
+    only — once a (provider, model) is chosen, mid-call vendor fallback
+    is forbidden. The Task-5b ``ProviderRegistry`` raises this when no
+    entry whose provider is configured exists for the hint.
+    """
+
+
+class ToolLoopError(ProviderError):
+    """Tool-use loop exceeded ``max_iterations`` without final structured output.
+
+    ``provider-interface.md`` §6.4 + §4.1: when the model produces a tool
+    call on the final iteration of ``complete_with_tools``, the provider
+    raises this. Treated as agent failure per ``pipeline.md`` §3.7.
+    """

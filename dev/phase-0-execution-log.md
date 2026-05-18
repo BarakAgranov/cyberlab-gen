@@ -493,3 +493,68 @@ Three new ADRs: 0008 (`MergedRegistries` base class), 0009 (Phase-0 error hierar
 3. `cyberlab_gen/schemas/registries.py:333` (`OverlayRegistryFile.proposals: dict[SnakeName, ProposalAuditBlock]`) is incompatible with `FacetName`-keyed entries. The fix likely needs a Phase-1 ADR plus a schema refactor (either widen the key type or introduce a per-entry-type proposals shape). Surfacing this prominently because any proposal-flow work that lands without addressing it will silently break facet proposals.
 
 ---
+
+## Task 5a: Provider call surface
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~20 minutes execution (plan-mode work preceded; not counted)
+**Commit:** `4b966cd`
+
+### What was built
+
+Six classes appended to `cyberlab_gen/errors.py` (`ProviderError(CyberlabGenError)` pinning `stage="provider"`, plus `TransientFailure`, `MalformedOutput`, `HardFailure`, `CapabilityUnreachable`, `ToolLoopError`). `cyberlab_gen/providers/base.py` ships the full `provider-interface.md` §4.1 type set: `MessageRole`, `CapabilityHint`, `AgentLabel` (ten values), `ToolDefinition`, `ToolCall`, `ToolResult`, `Message` with `_role_shape` `@model_validator(mode="after")`, `TokenUsage`, `ProviderResponse[T_Output: BaseModel]` (PEP 695 generic), `ToolExecutor(Protocol)`, and the `Provider` ABC with `complete` / `complete_with_tools` / `name` as abstract methods. `retries.py` ships strategy params only (no loop driver yet). `mock_provider.py` ships `MockProvider` with `register()` / `register_default_usage()` plus `UnmatchedMockCall(CyberlabGenError)` co-located. `anthropic_provider.py` ships the Phase-1 scaffold (SDK import probed via `_ANTHROPIC_SDK = anthropic`; both call methods raise `NotImplementedError("Phase 1")`). 32 new tests (9 message-validator, 14 errors including parametrized rows, 6 mock provider, 3 anthropic scaffold). Total suite: 225 tests passing. Pyright strict clean for all new files; `just verify` green.
+
+### Brief audit findings (cross-referenced against `provider-interface.md`)
+
+1. **`CapabilityUnreachable` was missing from the brief's error list** (lines 232-233 enumerate only `TransientFailure`, `MalformedOutput`, `HardFailure`, `ToolLoopError`). `provider-interface.md §6.4` defines six classes; the canonical set ships. `CapabilityUnreachable` is dormant in Phase 0 (no resolver yet) but lands now alongside the others so Task 5b can raise it without touching `errors.py`.
+2. **Brief cites `provider-interface.md §6.1` for the error class list**; the actual class definitions are at `§6.4` (lines 552-574). `§6.1` is the transient-failures intro. Brief-improvement note for the next phase brief writer.
+3. **PEP 695 generic syntax deviation from `provider-interface.md §4.1`**: the doc shows `class ProviderResponse(BaseModel, Generic[T_Output]):` (pre-PEP-695); implementation uses `class ProviderResponse[T_Output: BaseModel](BaseModel):` per `coding-conventions.md §4.3`. Same ADR-0004 doc-vs-implementation pattern. Doc-improvement note.
+4. **`name = "mock"` is shorthand**; the ABC at `§4.1` declares it `@property @abstractmethod`, so the implementation reads `@property def name(self) -> str: return "mock"`. No code impact, only brief clarity.
+
+### Architectural-conflict resolution
+
+`provider-interface.md §2` module-layout and `§6.4` code-block doc-comment both place `ProviderError` in `cyberlab_gen/providers/errors.py`. ADR 0009 and `coding-conventions.md §6.1` mandate a single top-level hierarchy at `cyberlab_gen/errors.py`. **Resolved during plan review with the user: errors live in `cyberlab_gen/errors.py`.** ADR 0009's rejected-alternative bullet now stands as confirmed precedent — no new ADR. `provider-interface.md §2` (drop `errors.py` from the providers/ tree) and `§6.4` (change the doc-comment to `# cyberlab_gen/errors.py`) recorded as doc-improvement notes below.
+
+### Implementation-discretion choices (no ADR; recorded per ADR 0004 policy)
+
+- **Pydantic types use `BaseModel + ConfigDict(extra="forbid", frozen=True)` not `ArtifactModel`.** Provider responses are in-memory typed wrappers, not YAML-serialized artifacts — ADR 0004 case 3, matching ADR 0008's `MergedRegistries` precedent. `frozen=True` reflects construct-once usage: the provider assembles `ProviderResponse` at the end of the call and never mutates it. `Message`-frozen-ness is pinned by `test_message_is_frozen`.
+- **`ProviderResponse` drops `arbitrary_types_allowed=True`** that `provider-interface.md §4.1` shows. Pydantic v2 does not need it for `BaseModel`-bound generics — same ADR-0008 reasoning. The PEP-695-+Pydantic-v2 smoke check (see below) confirmed instantiation and pyright accept the parameterization without it.
+- **`UnmatchedMockCall(CyberlabGenError)` not `(ProviderError)`.** Subclasses `CyberlabGenError` directly so production code catching `ProviderError` does not silently swallow test-infrastructure signals. Pinned by `test_unmatched_mock_call_is_cyberlabgenerror_but_not_provider_error`.
+- **`# noqa: N818` on `TransientFailure`, `MalformedOutput`, `HardFailure`, `CapabilityUnreachable`, `UnmatchedMockCall`.** Class names lack the `Error` suffix ruff's `N818` expects, but the names are locked by `provider-interface.md §6.4` / `§7.1`. Per-line `noqa` with a citing comment beats a file-wide ignore.
+- **Mock-vs-tool-loop semantics**: `MockProvider.complete_with_tools` reuses the same registration-lookup as `complete()` — `tools` and `tool_executor` arguments are accepted for ABC conformance but not consulted. Phase-0 tests do not exercise the tool path; Phase-1 agent tests will.
+
+### Verify-before-commit checks
+
+- **PEP 695 + Pydantic v2 `BaseModel`-bound generic check came out positive.** Per the plan's risk note, a throwaway probe before committing the design: `ProviderResponse[_Probe](output=_Probe(...), raw_text=..., usage=..., model=..., provider=...)` instantiates cleanly; `reveal_type(resp.output)` under pyright strict reports `_Probe` (the bound is applied). Pydantic 2.13.3, pyright 1.1.408, Python 3.13.12. The plan's fallback (drop to `Generic[T_Output]` for this one class) was therefore unnecessary. Positive signal recorded for future generic-shape work in this codebase.
+- **`Field(default_factory=list)` requires explicit parameterization for pyright strict.** Pyright strict flagged `list[Unknown]` on the unparameterized factory. Existing schemas use the parameterized form (`Field(default_factory=list[ToolCall])`); aligned to the same pattern. Worth knowing for Phase 1: never write the bare `default_factory=list` in this codebase.
+- **`pytest-asyncio` is still deferred** per the Task 0 log. The integration tests use `asyncio.run(...)` directly in the test body rather than `@pytest.mark.asyncio`. Compact and dependency-free; Phase 1's first agent-test work may want to revisit (a generator-style fixture or harness would clean up call-site noise once dozens of agent tests need it).
+
+### Surprises and friction
+
+- **`anthropic` SDK module import vs pyright `reportUnusedImport`.** The brief requires `anthropic_provider.py` to prove the SDK resolves at module load. `# noqa: F401` quiets ruff but pyright reports `reportUnusedImport` separately under strict. Bound the import to a module-level sentinel (`_ANTHROPIC_SDK = anthropic`) — clearer than a pyright-specific ignore and self-documenting. Will be deleted when Phase 1 actually uses the SDK.
+- **N818 on doc-locked error class names** required per-class `noqa` comments. Worth a brief mention in the next phase brief: where the architecture doc locks a class name that violates a ruff naming rule, the per-line `noqa` with a citing comment is the codified pattern.
+
+### Deferred to Task 5b
+
+- Cost computation in `TokenUsage.cost_usd` (placeholder `Decimal("0")` ships now). `pricing.yaml` and per-model pricing lookup land in 5b.
+- `model_rankings.yaml` + `ProviderRegistry` capability-to-model resolver. `CapabilityUnreachable` is defined now; the resolver that raises it lands in 5b.
+- `ranking.py` module overall (not stubbed in 5a; the §2 module-layout still expects it).
+
+### Deferred to Phase 1
+
+- **Async retry-loop driver in `retries.py`.** Phase 0 ships strategy params only (`TRANSIENT_RETRIES`, `MALFORMED_OUTPUT_RETRIES`, `RetryStrategy`). The actual `async def with_retries(...)` loop lands with the Anthropic adapter body. Recorded explicitly so a future reader does not look for executable retry logic in this module.
+- Cost-ledger accumulation across calls (`pipeline.md §3.5`, `architecture.md §8.4`).
+- `OpenAIProvider` (Phase 1+ when an adapter is actually written; not stubbed for the same reason `pytest-asyncio` is deferred — avoid scaffolding that won't be exercised).
+- Real Anthropic adapter body (Phase 1's first task). The Phase-0 scaffold's `_ANTHROPIC_SDK = anthropic` line and the `pyright: ignore` workaround it replaces both disappear when the body is written.
+
+### Doc-improvement notes for the next brief writer
+
+1. **`provider-interface.md §2`** lists `errors.py` inside `cyberlab_gen/providers/`. Per the user's plan-review decision, provider errors live at `cyberlab_gen/errors.py`. Remove `errors.py` from the providers/ tree in §2 (and update the leading paragraph's claim about the providers package's surface).
+2. **`provider-interface.md §6.4`** code-block doc-comment reads `# cyberlab_gen/providers/errors.py`. Change to `# cyberlab_gen/errors.py` to match the implementation.
+3. **`provider-interface.md §4.1`** declares `class ProviderResponse(BaseModel, Generic[T_Output]):` (pre-PEP-695). Implementation uses `class ProviderResponse[T_Output: BaseModel](BaseModel):` per `coding-conventions.md §4.3`. Update §4.1 to PEP 695 incrementally.
+4. **`provider-interface.md §4.1`** declares `ProviderResponse` with `model_config = ConfigDict(arbitrary_types_allowed=True)`. Implementation drops this flag per ADR-0008 precedent and adds `frozen=True`. Update §4.1 incrementally.
+5. **Phase-0 brief lines 232-233** omit `CapabilityUnreachable` from the error class enumeration. Next brief: include all six classes from §6.4 (`ProviderError` + 5 subtypes).
+6. **Phase-0 brief line 232** cites `provider-interface.md §6.1` for the error hierarchy; the actual class definitions are at `§6.4`. Next brief: correct the citation.
+
+---
