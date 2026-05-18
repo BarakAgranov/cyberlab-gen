@@ -633,7 +633,7 @@ Two new modules and two bundled YAML registries under `cyberlab_gen/providers/`:
 **Date:** 2026-05-18
 **Implementer:** Claude (Opus 4.7, 1M context)
 **Time taken:** ~15 minutes execution (plan-mode work preceded; not counted)
-**Commit:** <fill in after commit>
+**Commit:** `d36554e`
 
 ### What was built
 
