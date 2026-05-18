@@ -766,7 +766,7 @@ the contract regardless of which implementation owns it.
 **Date:** 2026-05-18
 **Implementer:** Claude (Opus 4.7, 1M context)
 **Time taken:** ~25 minutes execution (plan-mode work preceded; not counted)
-**Commit:** `<recorded post-commit>`
+**Commit:** `6918569`
 
 ### What was built
 
