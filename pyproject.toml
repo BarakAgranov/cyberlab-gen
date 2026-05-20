@@ -2,7 +2,7 @@
 name = "cyberlab-gen"
 version = "0.0.1"
 description = "Generate runnable, validated cyber labs from security writeups."
-# `readme = "README.md"` re-added in Task 9 when README.md lands.
+readme = "README.md"
 requires-python = ">=3.13,<3.15"
 license = { text = "MIT" }
 authors = [{ name = "Barak Agranov" }]

@@ -1027,3 +1027,70 @@ prohibition on docs edits from implementation tasks).
    chasing an ADR.
 
 ---
+
+## Task 9: README and CONTRIBUTING
+
+**Date:** 2026-05-20
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~10 minutes execution (plan-mode brief audit preceded; not counted)
+**Commit:** `<pending-post-commit-backfill>`
+
+### What was built
+
+Three deliverables: `README.md` (half-page; one-paragraph project description
+paraphrased from `architecture.md §0.1` line 25, Phase 0 skeleton status as
+load-bearing, what-is-here / what-is-not-built bullets, pointers to
+`docs/architecture.md` and `docs/index.md`); `CONTRIBUTING.md` (human-only
+shell — points contributors at `docs/index.md` as the routing table,
+`docs/coding-conventions.md` for code rules, `justfile` for the verify gate,
+`dev/decisions/` for ADRs, and the current phase brief + execution log); and
+one edit to `pyproject.toml` re-adding the `readme = "README.md"` line that
+Task 0 had to remove because hatchling refused to build without the file
+present (Task 0 log line 60–61 records this as Task 9's responsibility).
+
+`just verify` green: ruff check, ruff format --check, pyright strict, pytest.
+
+### Surprises and friction
+
+- **Brief cites `architecture.md §0` as "the one-paragraph summary."** §0
+  ("Foundations") has no single summary — it splits into §0.1 through §0.7.
+  The canonical paragraph is at `§0.1` line 25 (`cyberlab-gen is a
+  command-line tool that takes a published security writeup…`). The README
+  paraphrases that paragraph rather than the broader §0 framing. Surfaced as
+  a doc-improvement note below.
+- **No existing README or CONTRIBUTING stubs.** Git log shows zero history
+  for either file — this was "create from scratch," not "edit existing
+  skeleton." Verified before drafting.
+- **CONTRIBUTING scope decision.** Initial draft outline included an "If you
+  are an agent" section pointing to `CLAUDE.md`. Removed at user direction:
+  `CLAUDE.md` stays in the repo for agents to discover on their own;
+  CONTRIBUTING addresses human contributors only.
+
+### Deferred to later phases
+
+- **Installation and usage instructions.** Phase 0 has no working CLI;
+  nothing to document. Add to README when the four CLI verbs do something
+  end-to-end.
+- **`LICENSE` top-level file.** `pyproject.toml` declares MIT but no
+  top-level `LICENSE` file exists yet. Worth a separate task before any
+  public release.
+- **README badges and CI status link.** Optional polish for v0.1+ once the
+  project is public-facing.
+
+### Doc-improvement notes for the next brief writer
+
+1. **Task 9 brief: `architecture.md §0` → `§0.1` line 25.** Phase-0 brief
+   line 452 reads "Primary: `architecture.md §0` (the one-paragraph summary
+   of what cyberlab-gen is)." §0 has no one-paragraph summary — only
+   subsections §0.1–§0.7. The canonical paragraph is at `§0.1` line 25.
+   Update the brief to cite `§0.1` precisely.
+
+2. **`implementation-plan.md §3.6` line 226 off-by-one.** The Phase 0
+   acceptance check reads "All five registry files load (even if mostly
+   empty) and validate against their Pydantic meta-schemas." Task 4 shipped
+   **six** YAMLs in `registry/`: `value_types`, `facets`,
+   `external_data_sources`, `static_catalogs`, `execution_contexts`,
+   `lab_credentials`. The acceptance check should read "All six." Not
+   blocking any individual task; backlog for the next docs-edit pass.
+
+---
