@@ -933,7 +933,7 @@ because no earlier task had module-level mutable test state.
 **Date:** 2026-05-18
 **Implementer:** Claude (Opus 4.7, 1M context)
 **Time taken:** ~25 minutes (plan-mode brief audit + scaffolding)
-**Commit:** `<recorded by post-task hash-recording commit>`
+**Commit:** `96912ba`
 
 ### What was built
 
