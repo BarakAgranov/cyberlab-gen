@@ -1033,7 +1033,7 @@ prohibition on docs edits from implementation tasks).
 **Date:** 2026-05-20
 **Implementer:** Claude (Opus 4.7, 1M context)
 **Time taken:** ~10 minutes execution (plan-mode brief audit preceded; not counted)
-**Commit:** `<pending-post-commit-backfill>`
+**Commit:** `aeb55ca`
 
 ### What was built
 
