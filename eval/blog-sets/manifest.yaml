@@ -1,0 +1,42 @@
+# Curated blog set manifest. Phase 0 scaffolding: three placeholder entries
+# whose `url` / `title` / `walk:` paths are TBD until a human collaborator
+# picks the blogs and writes the walks under dev/curated-blog-walks/.
+# Schema invented (eval.md §7.3 names the file but specifies no shape) —
+# see dev/decisions/0014-blog-set-manifest-schema.md.
+
+spec_version: 1
+spec_kind: BlogSetManifest
+
+# Rotation generation. Bumped each release when blogs move between curated and
+# held_out. Phase 0 starts at generation 0 (pre-release).
+rotation_generation: 0
+
+curated:
+  - id: aws-ttp-placeholder
+    shape: aws_ttp                       # implementation-plan.md §3.2 line 180
+    url: TBD                             # filled when blog picked
+    title: TBD
+    publisher: TBD
+    accessed_date: TBD                   # ISO 8601 date (YYYY-MM-DD)
+    walk: dev/curated-blog-walks/aws-ttp-placeholder.md
+    coverage_tags: []                    # eval.md §7.3 coverage dimensions; filled when walked
+
+  - id: supply-chain-placeholder
+    shape: supply_chain                  # implementation-plan.md §3.2 line 181
+    url: TBD
+    title: TBD
+    publisher: TBD
+    accessed_date: TBD
+    walk: dev/curated-blog-walks/supply-chain-placeholder.md
+    coverage_tags: []
+
+  - id: incident-analysis-placeholder
+    shape: incident_analysis             # implementation-plan.md §3.2 line 182
+    url: TBD
+    title: TBD
+    publisher: TBD
+    accessed_date: TBD
+    walk: dev/curated-blog-walks/incident-analysis-placeholder.md
+    coverage_tags: []
+
+held_out: []                             # empty in Phase 0; populated v0.2+ per eval.md §7.3

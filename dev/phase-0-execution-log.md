@@ -927,3 +927,103 @@ because no earlier task had module-level mutable test state.
    function in `cli/main.py`" or accept the indirection. See ADR 0013.
 
 ---
+
+## Task 8: Curated blog walks (scaffolding only)
+
+**Date:** 2026-05-18
+**Implementer:** Claude (Opus 4.7, 1M context)
+**Time taken:** ~25 minutes (plan-mode brief audit + scaffolding)
+**Commit:** `<recorded by post-task hash-recording commit>`
+
+### What was built
+
+Three artifacts: the manifest skeleton at `eval/blog-sets/manifest.yaml`
+with `spec_version`/`spec_kind`/`rotation_generation` envelope plus
+three placeholder `curated:` entries (one per required shape:
+`aws_ttp`, `supply_chain`, `incident_analysis`) and an empty
+`held_out:` list; the walk template at
+`dev/curated-blog-walks/template.md` with 15 sections mirroring
+the AttackSpec envelope (`schema.md §4.8`) plus value-types (§4.12)
+and facets (§4.13); ADR 0014 recording the invented manifest schema
+(eval.md §7.3 references the file but specifies no shape). The
+obsolete `.gitkeep` in `eval/blog-sets/` was removed now that the
+directory has a real file.
+
+No code, no tests. `just verify` is unaffected. Manifest parses
+cleanly with `ruamel.yaml`.
+
+### Surprises and friction
+
+The Task 8 brief's required-reading section has stale doc citations
+that an agent reading the brief literally would chase fruitlessly.
+Three findings, all surfaced before scaffolding:
+
+- **Brief cites `eval.md §2` and `§3`** (blog curation criteria; manifest
+  shape). The actual file is a single top-level `## 7. Eval Harness`
+  with subsections `§7.1`–`§7.14`. The intended section is `§7.3`
+  ("The blog set composition"), which covers curated/held-out split,
+  coverage requirements, and rotation policy. Sections `§2` and `§3`
+  do not exist at any heading level.
+- **Brief cites `schema.md §4.4`–`§4.8`** as relevant for the walk
+  template. §4.4–§4.7 describe the *LabManifest* (what the Planner
+  generates) — the wrong artifact for a blog walk. A walk is the
+  manual analog of what the *Extractor* produces. The correct
+  citation is `§4.8` (AttackSpec envelope) + `§4.12` (value_types
+  registry) + `§4.13` (facets registry). The walk template here uses
+  the corrected set.
+- **The manifest YAML shape is undocumented.** `eval.md §7.3` line 59
+  names `manifest.yaml` but specifies no schema. Per CLAUDE.md's "never
+  resolve architectural ambiguities silently" rule, the shape was
+  invented and recorded in ADR 0014 with forward-compat reasoning
+  (curated/held_out split present from day 1 per §7.3's rotation
+  policy; envelope mirroring `schema.md §4.4`/§4.8 convention;
+  `coverage_tags` open list for §7.3's per-release coverage matrix).
+
+The brief itself remains correct in intent: scaffold + handoff. The
+findings are about citations, not scope. Surfaced to the user as
+doc-improvement notes (see below); `docs/` not edited (per CLAUDE.md
+prohibition on docs edits from implementation tasks).
+
+### Deferred to later phases
+
+- **Picking the three blogs.** Per the brief, the human collaborator
+  picks the blogs; the agent scaffolds. The placeholder entries in
+  `eval/blog-sets/manifest.yaml` carry `url: TBD`, `title: TBD`, etc.
+- **Writing the three real walks.** The walk files at the manifest's
+  `walk:` paths don't exist yet; the human writes them after picking
+  blogs by copying `template.md` and filling each section.
+- **`BlogSetManifest` Pydantic loader and validator.** Phase 4 (eval
+  harness consumes the manifest). Phase 0 ships the YAML file only;
+  no schema yaml, no model.
+- **Coverage-matrix tooling.** Phase 4 (`eval.md §7.3` line 57's
+  per-release coverage matrix is harness output). The manifest's
+  `coverage_tags:` field is the input shape.
+- **Held-out set population.** v0.2+ per `eval.md §7.3`'s rotation
+  policy. Phase 0 ships `held_out: []`.
+- **Walk-path resolution test.** A unit test that checks every
+  manifest entry's `walk:` path resolves to an existing file. Belongs
+  in Phase 1+ when the loader exists. Phase 0 placeholders
+  intentionally point to non-existent files.
+
+### Doc-improvement notes for the next brief writer
+
+1. **Task 8 brief required-reading section: `eval.md §2`/`§3` →
+   `§7.3`.** Lines 414–415 cite section numbers that do not exist.
+   The intended sections are within `§7.3` (which covers all of:
+   blog set composition, coverage requirements, rotation policy,
+   and the bare reference to `manifest.yaml`).
+
+2. **Task 8 brief required-reading section: `schema.md §4.4–§4.8` is
+   too wide.** §4.4–§4.7 are LabManifest, downstream of the walk.
+   The correct citation is `§4.8` (AttackSpec envelope) + `§4.12`
+   (value_types) + `§4.13` (facets). A walk represents what the
+   Extractor produces, not what the Planner generates.
+
+3. **Manifest YAML schema should land in `eval.md`.** Currently the
+   schema lives only in ADR 0014 because `eval.md §7.3` line 59
+   merely names the file without specifying its shape. Consider
+   promoting the schema into `eval.md §7.3` (or a new `§7.3.1`) so
+   the next reader of `eval.md` finds the shape there rather than
+   chasing an ADR.
+
+---
