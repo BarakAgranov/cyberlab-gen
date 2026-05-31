@@ -576,6 +576,54 @@ def test_overlay_id_keyed_proposal_matches_entry() -> None:
     assert "aws_test_access_key" in overlay.proposals
 
 
+def test_overlay_facet_keyed_proposal_matches_entry() -> None:
+    """A facet proposal keyed by its ``category:value`` name is representable.
+
+    Regression for ADR 0015: ``proposals`` was typed ``dict[SnakeName, ...]``,
+    so a ``FacetName`` key (containing a colon) failed the pattern at parse
+    time -- making facet proposals silently impossible. The key type is now
+    ``RegistryKey`` (``SnakeName | FacetName``). This test fails on the old
+    shape and passes on the fixed one.
+    """
+    overlay = OverlayRegistryFile[FacetEntry](
+        entries=[_facet("target:azure")],
+        proposals={"target:azure": _proposal_audit()},  # type: ignore[dict-item]
+    )
+    assert "target:azure" in overlay.proposals
+
+
+def test_overlay_facet_orphan_proposal_key_fails() -> None:
+    """The no-orphan-key guarantee still holds for facet-shaped keys.
+
+    Widening the key type to ``RegistryKey`` must not loosen the rule that
+    every proposal key corresponds to an entry. A facet key with no matching
+    entry is still rejected.
+    """
+    with pytest.raises(ValidationError) as exc:
+        OverlayRegistryFile[FacetEntry](
+            entries=[_facet("target:aws")],
+            proposals={"target:gcp": _proposal_audit()},  # type: ignore[dict-item]
+        )
+    assert "target:gcp" in str(exc.value)
+    assert "no corresponding entry" in str(exc.value)
+
+
+def test_overlay_facet_proposal_rejects_non_facet_non_snake_key() -> None:
+    """A key matching neither ``SnakeName`` nor ``FacetName`` is still rejected.
+
+    Confirms the union did not degrade to "any string": a key with a colon but
+    an invalid category prefix is not a ``FacetName`` and not a ``SnakeName``,
+    so it fails the key-type pattern before the orphan check even runs.
+    """
+    with pytest.raises(ValidationError):
+        OverlayRegistryFile[FacetEntry].model_validate(
+            {
+                "entries": [],
+                "proposals": {"bogus:value": _proposal_audit().model_dump(mode="json")},
+            }
+        )
+
+
 def test_overlay_orphan_proposal_key_fails() -> None:
     with pytest.raises(ValidationError) as exc:
         OverlayRegistryFile[ValueTypeEntry](
@@ -675,7 +723,7 @@ def test_entry_key_field_class_var_is_declared(entry_cls: type[Any], expected_ke
     depends on; a missing declaration would break overlay proposal-key
     matching for that registry.
     """
-    # getattr is the right tool here — the parametrize iterates entry classes
+    # getattr is the right tool here -- the parametrize iterates entry classes
     # of different concrete types, so direct attribute access would force a
     # cast per row.
     assert getattr(entry_cls, "ENTRY_KEY_FIELD") == expected_key  # noqa: B009

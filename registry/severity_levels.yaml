@@ -1,0 +1,12 @@
+# Closed bundled-only catalog. Source: docs/registry-details.md §7.2.
+# Closed enum per schema.md §4.7. `ordinal` drives Layer 3 severity-floor rules.
+# Membership owned by the Severity StrEnum (cyberlab_gen/schemas/enums.py).
+entries:
+  - name: Critical
+    ordinal: 4
+  - name: High
+    ordinal: 3
+  - name: Medium
+    ordinal: 2
+  - name: Low
+    ordinal: 1

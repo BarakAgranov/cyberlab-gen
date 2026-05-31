@@ -1,0 +1,24 @@
+# Open-set-in-spirit bundled catalog (no runtime proposal flow; grows by
+# maintainer PR). Source: docs/registry-details.md §7.6. No closed enum —
+# keyed on SnakeName. The v1 seed is the curated walk's enumeration.
+entries:
+  - name: ttp_chain
+    description: "TTP (Tactic-Technique-Procedure) chain blog - focus on procedures, not specific CVEs."
+  - name: vulnerability_chain
+    description: "A chain of vulnerabilities composed to escalate access."
+  - name: misconfiguration
+    description: "Attack against misconfiguration (rather than CVE-style flaws)."
+  - name: cloud_provider_flaw
+    description: "A flaw in the cloud provider's own systems."
+  - name: supply_chain_compromise
+    description: "Compromise via supply chain (package, CI, build dep, dependency confusion)."
+  - name: incident_analysis
+    description: "Post-incident analysis with affected parties named."
+  - name: cross_tenant_compromise
+    description: "Attacker crosses tenant or account boundaries."
+  - name: privilege_escalation
+    description: "Within-tier escalation as the primary thesis."
+  - name: persistence_pattern
+    description: "The blog's focus is a persistence technique or family."
+  - name: detection_methodology
+    description: "The blog is primarily about how to *detect* a class of attacks."

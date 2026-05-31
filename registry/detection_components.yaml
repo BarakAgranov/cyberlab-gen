@@ -1,0 +1,34 @@
+# Closed bundled-only catalog. Source: docs/registry-details.md §7.1.
+# Closed enum per schema.md §4.7; new entries by maintainer PR only.
+# Membership owned by the DetectionComponent StrEnum (cyberlab_gen/schemas/enums.py).
+entries:
+  - name: CSPM
+    display_name: "Cloud Security Posture Management"
+    description: "Misconfiguration and posture detection across cloud accounts."
+  - name: CWP
+    display_name: "Cloud Workload Protection"
+    description: "Workload-level detection (host, container, serverless)."
+  - name: CDR
+    display_name: "Cloud Detection and Response"
+    description: "Behavioral and runtime detection of cloud-native attacks."
+  - name: CIEM
+    display_name: "Cloud Infrastructure Entitlement Management"
+    description: "Identity, entitlement, and access-path detection."
+  - name: DSPM
+    display_name: "Data Security Posture Management"
+    description: "Data-classification-aware posture and access monitoring."
+  - name: ASPM
+    display_name: "Application Security Posture Management"
+    description: "Application-layer posture (code, dependencies, deployments)."
+  - name: ITDR
+    display_name: "Identity Threat Detection and Response"
+    description: "Identity-focused detection (token misuse, impersonation chains)."
+  - name: KSPM
+    display_name: "Kubernetes Security Posture Management"
+    description: "Kubernetes-specific misconfiguration and runtime posture."
+  - name: API_Security
+    display_name: "API Security"
+    description: "API-layer detection of abuse, abuse-of-functionality, and authn/authz drift."
+  - name: Supply_Chain_Security
+    display_name: "Supply Chain Security"
+    description: "Detection across the build and dependency chain."

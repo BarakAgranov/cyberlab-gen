@@ -1,0 +1,32 @@
+# Closed bundled-only catalog. Source: docs/registry-details.md §7.4.
+# Closed enum per schema.md §4.5; adding new ones is non-trivial (v1.5+).
+# Membership owned by the ProvisioningMechanism StrEnum (cyberlab_gen/schemas/enums.py).
+entries:
+  - name: terraform
+    display_name: "Terraform"
+    description: "HashiCorp Terraform. Preferred where supported (cross-cloud, broad validator coverage)."
+    validator_support: full
+  - name: cloudformation
+    display_name: "AWS CloudFormation"
+    description: "AWS-native IaC. Used when Terraform doesn't support a needed AWS resource."
+    validator_support: partial
+  - name: arm_template
+    display_name: "Azure ARM Template"
+    description: "Azure-native IaC. Used when Terraform doesn't support a needed Azure resource."
+    validator_support: partial
+  - name: gcp_deployment_manager
+    display_name: "GCP Deployment Manager"
+    description: "GCP-native IaC. Used when Terraform doesn't support a needed GCP resource."
+    validator_support: partial
+  - name: cli_scripts
+    display_name: "CLI scripts"
+    description: "aws/az/gcloud/gh CLI invocations. Last-resort when no IaC supports the resource."
+    validator_support: minimal
+  - name: manual
+    display_name: "Manual prerequisite"
+    description: "User must do this themselves; declared as a prereq with check command."
+    validator_support: none
+  - name: mixed
+    display_name: "Mixed mechanisms"
+    description: "Multiple mechanisms used within the same phase or lab; per-resource declaration governs."
+    validator_support: per-resource

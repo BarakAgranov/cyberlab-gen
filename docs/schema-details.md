@@ -105,7 +105,12 @@ SemVer = Annotated[str, StringConstraints(
 Sha256Hex = Annotated[str, StringConstraints(
     pattern=r"^[a-f0-9]{64}$",
 )]
+
+# Union of the two registry-key shapes; ADR 0015.
+RegistryKey = SnakeName | FacetName
 ```
+
+`RegistryKey` is the union of the two shapes a registry entry can be keyed by: most registries key on `SnakeName`, the `facets` registry keys on `FacetName`. Any container keyed on an entry's registry key — notably `OverlayRegistryFile.proposals` (§6.6) — must admit both, or facet proposals become structurally impossible (the colon in a `FacetName` fails the `SnakeName` pattern). See ADR 0015.
 
 ### 2.2 Closed enums from the architecture
 
@@ -1410,16 +1415,21 @@ class OverlayRegistryFile[E: BaseModel](ArtifactModel):
     """
 
     entries: list[E] = Field(default_factory=list)
-    # Keyed by entry name (or id, whichever the entry type uses).
-    # Every key must correspond to an entry in `entries`; entries without a
-    # proposals key are maintainer-curated additions to the overlay (rare).
-    proposals: dict[SnakeName, ProposalAuditBlock] = Field(default_factory=dict)
+    # Keyed by entry registry-key: `SnakeName` for five registries, `FacetName`
+    # (`category:value`) for facets. Typed as `RegistryKey` (the union of the
+    # two) so facet proposals are representable — a `SnakeName`-only key type
+    # silently makes facet proposals impossible (the colon in a `FacetName`
+    # fails the `SnakeName` pattern at parse time). See ADR 0015. The no-orphan
+    # rule below still rejects any key with no matching entry, so the union does
+    # not loosen the cross-registry guarantee. Entries without a proposals key
+    # are maintainer-curated additions to the overlay (rare).
+    proposals: dict[RegistryKey, ProposalAuditBlock] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _proposal_keys_match_entries(self) -> "OverlayRegistryFile[E]":
-        entry_names = {self._entry_key(e) for e in self.entries}
+        entry_keys = {self._entry_key(e) for e in self.entries}
         for name in self.proposals:
-            if name not in entry_names:
+            if name not in entry_keys:
                 raise ValueError(
                     f"proposals[{name!r}] has no corresponding entry in `entries`"
                 )
@@ -1427,8 +1437,17 @@ class OverlayRegistryFile[E: BaseModel](ArtifactModel):
 
     @staticmethod
     def _entry_key(entry: BaseModel) -> str:
-        """Most entries key by `name`; external-source entries key by `id`."""
-        return getattr(entry, "name", None) or getattr(entry, "id")
+        """Resolve the registry key via each entry class's `ENTRY_KEY_FIELD`.
+
+        Each entry type declares `ENTRY_KEY_FIELD: ClassVar[str]` naming its key
+        field (`name` for most types, `id` for external-source and lab-credential
+        entries). Reading it explicitly beats the older `getattr(entry, "name",
+        None) or getattr(entry, "id")` chain: a missing declaration surfaces as a
+        clear `AttributeError` rather than silently falling back, and a facet's
+        key resolves to its full `FacetName` (e.g. `target:aws`).
+        """
+        key_field: str = getattr(type(entry), "ENTRY_KEY_FIELD")
+        return getattr(entry, key_field)
 ```
 
 Promotion from overlay to bundled drops the proposals block: the entry is copied to the bundled file's `entries:` list and the corresponding key under `proposals:` is removed. The bundled-file Pydantic shape is just `BundledRegistryFile[E]` with only an `entries: list[E]` field — no `proposals:` block, validated under `extra="forbid"` so a bundled file accidentally carrying proposal audit fails Layer 1.

@@ -35,6 +35,7 @@ from cyberlab_gen.schemas.primitives import (
     FacetName,
     HttpUrl,
     NonEmptyString,
+    RegistryKey,
     SnakeName,
 )
 
@@ -330,8 +331,15 @@ class OverlayRegistryFile[E: BaseModel](ArtifactModel):
     """
 
     entries: list[E] = Field(default_factory=list[E])
-    proposals: dict[SnakeName, ProposalAuditBlock] = Field(
-        default_factory=dict[SnakeName, ProposalAuditBlock]
+    # Keyed by entry registry-key: ``SnakeName`` for five registries,
+    # ``FacetName`` (``category:value``) for facets. Typed as ``RegistryKey``
+    # (the union) so facet proposals are representable — a ``SnakeName``-only
+    # key type silently makes facet proposals impossible (the colon fails the
+    # pattern at parse time). See ADR 0015. The no-orphan-key rule below still
+    # rejects a key that has no matching entry, so the union doesn't loosen the
+    # cross-registry guarantee.
+    proposals: dict[RegistryKey, ProposalAuditBlock] = Field(
+        default_factory=dict[RegistryKey, ProposalAuditBlock]
     )
 
     @model_validator(mode="after")

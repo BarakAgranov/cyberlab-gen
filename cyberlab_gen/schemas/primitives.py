@@ -74,11 +74,26 @@ Sha256Hex = Annotated[
 ]
 """SHA-256 hex digest (lowercase). schema-details.md §2.1."""
 
+RegistryKey = SnakeName | FacetName
+"""Union of the two registry-key shapes. schema-details.md §6.6; ADR 0015.
+
+Most registry entries key by ``SnakeName`` (value_types, execution_contexts,
+external_data_sources, static_catalogs, lab_credentials). The ``facets``
+registry keys by ``FacetName`` (``category:value``, e.g. ``target:aws``). A
+container keyed on entry-key -- notably ``OverlayRegistryFile.proposals`` --
+must admit both, or facet proposals are structurally impossible: the colon in
+a ``FacetName`` fails the ``SnakeName`` pattern at parse time. This is not a
+loosening. ``OverlayRegistryFile._proposal_keys_match_entries`` still rejects
+any key with no matching entry, so a value_types overlay carrying a
+facet-shaped proposal key fails on the no-corresponding-entry rule.
+"""
+
 __all__ = [
     "FacetName",
     "HttpUrl",
     "KebabId",
     "NonEmptyString",
+    "RegistryKey",
     "SemVer",
     "Sha256Hex",
     "SnakeName",

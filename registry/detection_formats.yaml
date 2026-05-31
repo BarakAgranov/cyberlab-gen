@@ -1,0 +1,20 @@
+# Closed bundled-only catalog. Source: docs/registry-details.md §7.3.
+# Closed enum per schema.md §4.7.
+# Membership owned by the DetectionFormat StrEnum (cyberlab_gen/schemas/enums.py).
+entries:
+  - name: sigma
+    display_name: "Sigma"
+    file_extension: ".yml"
+    description: "Portable, SIEM-agnostic detection format."
+  - name: kql
+    display_name: "Kusto Query Language (KQL)"
+    file_extension: ".kql"
+    description: "Microsoft Sentinel / Defender 365 native query language."
+  - name: spl
+    display_name: "Search Processing Language (SPL)"
+    file_extension: ".spl"
+    description: "Splunk native search language."
+  - name: esql
+    display_name: "Elasticsearch ESQL"
+    file_extension: ".esql"
+    description: "Elastic's piped query language."
