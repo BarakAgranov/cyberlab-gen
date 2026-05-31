@@ -1,0 +1,47 @@
+# Bundled MITRE ATT&CK technique catalog (read locally; not live-fetched).
+# Referenced by `static_catalogs` entry `mitre_attack_techniques`
+# (registry/static_catalogs.yaml -> entries_ref). Source: registry-details.md
+# §5.1 ("MITRE ATT&CK technique catalog ... read locally").
+#
+# Phase 1 ships a *seed* subset of the ATT&CK Enterprise matrix — enough to
+# exercise the enrichment pass's local technique validation/enrichment (Task 4)
+# and the curated-blog walks. It grows by maintainer PR as the curated set
+# grows; it is NOT a live mirror of the full matrix.
+#
+# Each entry: name (the technique id, the closed key the enum-less catalog
+# validates against), display_name, tactic (one ATT&CK tactic the technique
+# belongs to), and a short description. `name` matches the MitreTechniqueId
+# pattern (T#### or T####.###).
+entries:
+  - name: T1078
+    display_name: "Valid Accounts"
+    tactic: "defense-evasion"
+    description: "Adversaries obtain and abuse credentials of existing accounts."
+  - name: T1078.004
+    display_name: "Valid Accounts: Cloud Accounts"
+    tactic: "defense-evasion"
+    description: "Adversaries abuse valid cloud accounts to gain access."
+  - name: T1098
+    display_name: "Account Manipulation"
+    tactic: "persistence"
+    description: "Adversaries manipulate accounts to maintain access to systems."
+  - name: T1190
+    display_name: "Exploit Public-Facing Application"
+    tactic: "initial-access"
+    description: "Adversaries exploit weaknesses in internet-facing hosts or systems."
+  - name: T1530
+    display_name: "Data from Cloud Storage"
+    tactic: "collection"
+    description: "Adversaries access data from cloud storage objects."
+  - name: T1552
+    display_name: "Unsecured Credentials"
+    tactic: "credential-access"
+    description: "Adversaries search compromised systems for insecurely stored credentials."
+  - name: T1552.005
+    display_name: "Unsecured Credentials: Cloud Instance Metadata API"
+    tactic: "credential-access"
+    description: "Adversaries query the cloud instance metadata API for credentials."
+  - name: T1580
+    display_name: "Cloud Infrastructure Discovery"
+    tactic: "discovery"
+    description: "Adversaries enumerate cloud infrastructure resources and configuration."

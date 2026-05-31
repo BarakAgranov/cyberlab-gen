@@ -89,6 +89,20 @@ Sha256Hex = Annotated[
 ]
 """SHA-256 hex digest (lowercase). schema-details.md §2.1."""
 
+MitreTechniqueId = Annotated[str, StringConstraints(pattern=r"^T\d{4}(\.\d{3})?$")]
+"""MITRE ATT&CK technique id, e.g. ``T1059`` or ``T1059.001``. schema.md §4.7.
+
+Structural identifier (not content), so a bare string — validated against the
+bundled MITRE catalog at enrichment time (``pipeline.md §3.2.4``), not as a
+registry-enum constraint.
+"""
+
+MitreTacticId = Annotated[str, StringConstraints(pattern=r"^TA\d{4}$")]
+"""MITRE ATT&CK tactic id, e.g. ``TA0001``. schema-details.md §4.5."""
+
+CveId = Annotated[str, StringConstraints(pattern=r"^CVE-\d{4}-\d{4,}$")]
+"""CVE identifier, e.g. ``CVE-2021-44228``. schema-details.md §4.5."""
+
 RegistryKey = SnakeName | FacetName
 """Union of the two registry-key shapes. schema-details.md §6.6; ADR 0015.
 
@@ -104,10 +118,13 @@ facet-shaped proposal key fails on the no-corresponding-entry rule.
 """
 
 __all__ = [
+    "CveId",
     "ExternalDataSourceId",
     "FacetName",
     "HttpUrl",
     "KebabId",
+    "MitreTacticId",
+    "MitreTechniqueId",
     "NonEmptyString",
     "RegistryKey",
     "SemVer",

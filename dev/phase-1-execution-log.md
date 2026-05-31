@@ -163,3 +163,63 @@ walls, paywalls), so future agents don't try to record a Cloudflare challenge
 ini key — cassettes live per-module by default.
 
 ---
+
+## Task 4: Pre-Planner enrichment skeleton + materiality check
+
+**Date:** 2026-06-01
+**Implementer:** Claude (Opus 4.8) coding agent
+**Time taken:** ~1 session
+**Commit:** Phase 1 Task 4: pre-Planner enrichment skeleton + materiality check
+
+### What was built
+
+`cyberlab_gen/framework/enrichment.py`: the deterministic (non-agent) pre-Planner
+enrichment pass. `enrich(spec, config)` walks the `external_data_sources` entries,
+enriches CVE references (`external_references.cves[*]` -> `.cvss_score` / `.severity`)
+via an injectable `NvdClient` (with an `HttpxNvdClient` live/VCR-recordable adapter and
+an NVD-v2 response parser), and validates MITRE technique ids against a new bundled
+local catalog. Every rewrite sets `source=external_api` with both blog + API citations;
+contradictions set `discrepancy_with_blog=True` and are classified per the entry's
+`discrepancy_materiality_rules` (default material; severity by CVSS tier). Material ones
+append a `MaterialDiscrepancy` to the spec's top-level list (run-report-only in Phase 1);
+non-material are silent provenance rewrites. Budget (default 100) is spent CVE-first;
+budget-exhaustion / rate-limit (`ExternalApiRateLimitError`) / not-integrated-stub
+each produce an honest `SkippedLookup` and never raise. Added `registry/mitre_attack_techniques.yaml`
+(8-technique seed) + `MitreTechniqueCatalog`/`MitreTechniqueEntry` models + `load_mitre_techniques()`
+/ `load_static_catalogs()` loaders; added `EnrichmentError` + `ExternalApiRateLimitError`
+to `errors.py`. 15 enrichment tests (both-citations external_api fill, cross-tier material,
+same-tier silent, numeric-cvss material via registry rule, budget exhaustion, rate-limit,
+MITRE known/unknown/no-budget, stub-skip honesty, framework-only-authorship) + 2 bundled-catalog
+smoke tests. `just verify` green: ruff clean, format clean, pyright 0 errors, 418 passed.
+
+### Surprises and friction
+
+Three genuine drifts, resolved in ADR 0020. (1) The bundled NVD entry's `enrichment_triggers`
+JSONPaths are stale vs. the Task-1 schema (`techniques.mitre[*].cve_ids[*]` — no such field;
+`external_references.cve_references[*]` — the field is `.cves`). Per the authority gradient the
+Task-1 schema wins, so enrichment operates on the real typed fields, not the trigger strings; the
+registry drift is flagged for the maintainer. (2) `schema-details.md §4`/§7 still don't pin the
+`material_discrepancies` element shape — reused ADR 0017's `MaterialDiscrepancy` unchanged. (3) No
+bundled MITRE catalog existed despite `registry-details.md §5.1` describing one; added a seed plus
+model + loader. Also: `Severity` is a `StrEnum`, so `member.value` trips pyright-strict's
+member-literal narrowing — used `str(member)` instead. The "VCR for NVD/MITRE" intent is met via the
+injectable `NvdClient` seam (the pure-Python equivalent of a recorded cassette) + an injected MITRE
+catalog; a live `HttpxNvdClient` is provided for when an end-to-end cassette is wired in Task 6+.
+
+### Deferred to later phases
+
+The third interactive review surface for material discrepancies (Phase 4). Live MITRE/GitHub/bulletin
+lookups (Phase 2+ stubs). Wiring `enrich()` into the orchestrator between Extractor-Jury and the
+post-Extractor interrupt, and recording `EnrichmentResult` into the live run report (Task 6 / Task 7).
+A real recorded NVD cassette through `HttpxNvdClient` (Task 6 end-to-end).
+
+### Doc-improvement notes for the next brief writer
+
+Correct the NVD `enrichment_triggers` field paths in `registry/external_data_sources.yaml` to the
+real Task-1 schema (or add `cve_ids` to `ChainStepTechniques` if per-step CVE attribution is wanted).
+`schema-details.md §5` / `registry-details.md §5.1` should record that the bundled MITRE catalog now
+lives at `registry/mitre_attack_techniques.yaml` with `MitreTechniqueCatalog` + `load_mitre_techniques()`,
+and pick the canonical filename for the wheel-packaging story (ADR 0010). `schema-details.md §4`/§7
+still owes a `MaterialDiscrepancy` block + cross-reference row (carried over from ADR 0017).
+
+---

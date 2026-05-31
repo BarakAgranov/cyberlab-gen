@@ -21,9 +21,9 @@ not authored.
 
 import re
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import Literal, Self
 
-from pydantic import Field, StringConstraints, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from cyberlab_gen.schemas.base import ArtifactModel
 from cyberlab_gen.schemas.enums import (
@@ -42,10 +42,13 @@ from cyberlab_gen.schemas.enums import (
     SpecKind,
 )
 from cyberlab_gen.schemas.primitives import (
+    CveId,
     ExternalDataSourceId,
     FacetName,
     HttpUrl,
     KebabId,
+    MitreTacticId,
+    MitreTechniqueId,
     NonEmptyString,
     SemVer,
     Sha256Hex,
@@ -59,16 +62,9 @@ from cyberlab_gen.schemas.provenance import (
     ProvenanceString,
 )
 
-# Reusable constrained-string aliases for the technique-id patterns. These are
-# structural identifiers (not content), so they are bare strings, not Provenance.
-MitreTechniqueId = Annotated[str, StringConstraints(pattern=r"^T\d{4}(\.\d{3})?$")]
-"""MITRE ATT&CK technique id, e.g. ``T1059`` or ``T1059.001``. schema.md §4.7."""
-
-MitreTacticId = Annotated[str, StringConstraints(pattern=r"^TA\d{4}$")]
-"""MITRE ATT&CK tactic id, e.g. ``TA0001``. schema-details.md §4.5."""
-
-CveId = Annotated[str, StringConstraints(pattern=r"^CVE-\d{4}-\d{4,}$")]
-"""CVE identifier, e.g. ``CVE-2021-44228``. schema-details.md §4.5."""
+# The technique/CVE id primitives now live in ``primitives.py`` (so the registry
+# meta-schemas can reference ``MitreTechniqueId`` too); re-bound here for the
+# blocks below and for callers that import them from this module.
 
 
 # --- §4.1 SourceBlock ------------------------------------------------------

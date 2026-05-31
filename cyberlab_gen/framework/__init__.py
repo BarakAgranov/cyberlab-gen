@@ -12,6 +12,16 @@ an `IngestionResult`. Re-exported here so cross-subpackage callers (the CLI's
 `extract` verb, the orchestrator) import through the package surface.
 """
 
+from cyberlab_gen.framework.enrichment import (
+    EnrichmentConfig,
+    EnrichmentResult,
+    HttpxNvdClient,
+    LookupPriority,
+    NvdClient,
+    NvdCveData,
+    SkippedLookup,
+    enrich,
+)
 from cyberlab_gen.framework.ingestion import (
     DEFAULT_TIMEOUT_SECONDS,
     IngestionConfig,
@@ -24,8 +34,16 @@ from cyberlab_gen.framework.ingestion import (
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
+    "EnrichmentConfig",
+    "EnrichmentResult",
+    "HttpxNvdClient",
     "IngestionConfig",
+    "LookupPriority",
+    "NvdClient",
+    "NvdCveData",
+    "SkippedLookup",
     "compute_content_hash",
+    "enrich",
     "ingest",
     "normalize_html",
     "read_cached",

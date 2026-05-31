@@ -45,8 +45,10 @@ from cyberlab_gen.schemas.registries import (
     ExternalDataSourceEntry,
     FacetEntry,
     LabCredentialEntry,
+    MitreTechniqueCatalog,
     OverlayRegistryFile,
     StaticCatalogEntry,
+    StaticCatalogsRegistry,
     ValueTypeEntry,
 )
 

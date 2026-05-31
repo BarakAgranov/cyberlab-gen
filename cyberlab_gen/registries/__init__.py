@@ -20,8 +20,10 @@ from cyberlab_gen.registries.loader import (
     default_overlay_dir,
     load_bundled,
     load_bundled_file,
+    load_mitre_techniques,
     load_overlay,
     load_overlay_file,
+    load_static_catalogs,
 )
 from cyberlab_gen.registries.merge import (
     MergedRegistries,
@@ -40,7 +42,9 @@ __all__ = [
     "load_bundled",
     "load_bundled_file",
     "load_merged_registries",
+    "load_mitre_techniques",
     "load_overlay",
     "load_overlay_file",
+    "load_static_catalogs",
     "merge_layers",
 ]
