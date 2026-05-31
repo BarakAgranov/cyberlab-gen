@@ -58,6 +58,21 @@ TradecraftName = Annotated[
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 """String with at least one character. schema-details.md §2.1."""
 
+ThesisType = SnakeName
+"""Open-set thesis-type name (snake_case). schema-details.md §2.3.
+
+Validated against the thesis-types catalog at Layer 1 rather than as a Pydantic
+enum constraint, because the valid set depends on which registries are loaded
+(ADR 0016). Structurally it is just a ``SnakeName``.
+"""
+
+ExternalDataSourceId = SnakeName
+"""Open-set external-data-source id (snake_case). schema-details.md §2.3.
+
+Validated against the ``external_data_sources`` registry at Layer 1. Structurally
+just a ``SnakeName`` (e.g. ``nvd``, ``mitre_attack``).
+"""
+
 SemVer = Annotated[
     str,
     StringConstraints(
@@ -89,6 +104,7 @@ facet-shaped proposal key fails on the no-corresponding-entry rule.
 """
 
 __all__ = [
+    "ExternalDataSourceId",
     "FacetName",
     "HttpUrl",
     "KebabId",
@@ -97,5 +113,6 @@ __all__ = [
     "SemVer",
     "Sha256Hex",
     "SnakeName",
+    "ThesisType",
     "TradecraftName",
 ]
