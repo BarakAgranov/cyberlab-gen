@@ -1,7 +1,25 @@
-"""Agents subpackage — per-agent contracts and Pydantic AI integrations.
+"""Agent layer public surface.
 
-One submodule per agent (Extractor, Planner, Generators, juries, Critic,
-Repair Agent) per the inventory in `docs/agents.md §5.2`. Each agent owns its
-prompt, tool list, and output schema. Empty in Phase 0; the first agent
-(Extractor) lands in Phase 1.
+Tasks 3/5 import the call surface and prompt loader from here, never from a
+submodule directly. See pipeline.md §3.5 and dev/decisions/0017.
 """
+
+from __future__ import annotations
+
+from cyberlab_gen.agents.call_surface import (
+    DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
+    AgentRunner,
+)
+from cyberlab_gen.agents.prompts import (
+    BASE_PROMPT_FILENAME,
+    OVERLAY_DIRNAME,
+    load_prompt,
+)
+
+__all__ = [
+    "BASE_PROMPT_FILENAME",
+    "DEFAULT_STRUCTURAL_RETRY_ATTEMPTS",
+    "OVERLAY_DIRNAME",
+    "AgentRunner",
+    "load_prompt",
+]

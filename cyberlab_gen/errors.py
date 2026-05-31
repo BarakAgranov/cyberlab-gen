@@ -165,3 +165,33 @@ class ToolLoopError(ProviderError):
     call on the final iteration of ``complete_with_tools``, the provider
     raises this. Treated as agent failure per ``pipeline.md`` §3.7.
     """
+
+
+class AgentFailure(CyberlabGenError):  # noqa: N818 -- "Failure" is the architectural term, not "Error"
+    """An agent stage exhausted its structural-retry budget.
+
+    Raised by the agent call surface (``cyberlab_gen.agents.call_surface``)
+    after the provider repeatedly returns ``MalformedOutput`` — i.e. the
+    provider's own malformed-output retries (``provider-interface.md`` §6.2)
+    were exhausted and the call surface's stage-level structural-retry budget
+    (``pipeline.md`` §3.7) was then exhausted too. This is the "agent-failure
+    path"; the orchestrator (Phase 1 Task 6) routes it to
+    refinement-or-abandon per ``pipeline.md`` §3.2.12.
+
+    Distinct from ``ProviderError``: the provider succeeded mechanically; the
+    model could not produce a schema-valid result for this stage. Distinct from
+    refinement: this is *structural* retry, never quality-driven
+    (``architecture.md`` §1.7). The two-layer budget is recorded in ADR 0018.
+    Subclasses ``CyberlabGenError`` directly (not ``ProviderError``) — it is an
+    agent-stage outcome, not a provider-layer error.
+    """
+
+
+class ConfigError(CyberlabGenError):  # noqa: N818 -- ends in "Error"; flagged only by N818's suffix heuristic
+    """A required configuration or bundled resource is missing or invalid.
+
+    Raised by the prompt loader (``cyberlab_gen.agents.prompts``) when an
+    agent's base prompt file is absent. A base prompt is a bundled, packaged
+    resource; its absence is a packaging/config fault surfaced to the user, not
+    a provider or agent-quality failure.
+    """
