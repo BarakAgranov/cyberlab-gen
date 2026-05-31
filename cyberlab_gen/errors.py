@@ -195,3 +195,53 @@ class ConfigError(CyberlabGenError):
     resource; its absence is a packaging/config fault surfaced to the user, not
     a provider or agent-quality failure.
     """
+
+
+class IngestionError(CyberlabGenError):
+    """Ingestion-stage errors (fetch, normalize, cache).
+
+    Pins ``stage='ingestion'`` so the run report can group ingestion failures
+    without each call site re-supplying it. Raised by
+    ``cyberlab_gen.framework.ingestion`` (``pipeline.md`` §3.2.1,
+    ``implementation-plan.md`` §4.2). The three subtypes below partition the
+    failure modes §4.2 enumerates; all three fail with a clear message and
+    *never* attempt to bypass the obstacle (``implementation-plan.md`` §4.6
+    risks). Carries the offending ``url`` so user-facing output can name it.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        url: str | None = None,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, stage="ingestion", run_id=run_id, cause=cause)
+        self.url = url
+
+
+class UnreachableUrlError(IngestionError):
+    """The URL could not be fetched at all (DNS, connect, timeout, 4xx/5xx).
+
+    ``implementation-plan.md`` §4.2: "URL unreachable → fail with clear
+    message." Raised after transient-retry exhaustion (``pipeline.md`` §3.7).
+    """
+
+
+class PaywallError(IngestionError):
+    """The response indicates a paywall, not readable content.
+
+    ``implementation-plan.md`` §4.2: paywall detection (HTTP 403, very-short
+    body) fails with a clear message. The framework does *not* attempt to
+    bypass the paywall (CLAUDE.md hard rule; §4.6 risks).
+    """
+
+
+class BotDetectedError(IngestionError):
+    """The response is a bot-detection / anti-automation interstitial.
+
+    ``implementation-plan.md`` §4.2: bot-detected (Cloudflare interstitial,
+    etc.) fails with a clear message. The framework does *not* attempt to
+    solve a CAPTCHA or evade bot detection (CLAUDE.md hard rule; §4.6 risks).
+    """

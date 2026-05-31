@@ -106,3 +106,60 @@ Add `pytest-asyncio` + `asyncio_mode = "auto"` to the Phase-1 dependency list in
 the brief so the next agent doesn't rediscover the silent-no-op.
 
 ---
+
+## Task 3: Ingestion stage
+
+**Date:** 2026-06-01
+**Implementer:** Claude (Opus 4.8) coding agent
+**Time taken:** ~2 hours
+**Commit:** Phase 1 Task 3: ingestion stage (fetch/normalize/hash/cache + failure modes)
+
+### What was built
+
+`cyberlab_gen/framework/ingestion.py`: a deterministic (non-agent) Ingestion
+stage. `ingest(url)` fetches via an injectable `httpx.Client` with a 10s default
+timeout (configurable through `IngestionConfig`) and transient-failure retry
+reusing `providers.retries.TRANSIENT_RETRIES` (§3.7); `normalize_html` converts
+HTML to heading-preserving text via the stdlib `html.parser` (no new HTML dep);
+`compute_content_hash` SHA-256s the normalized text; the raw + normalized
+payloads and an `ingestion.yaml` land in `<cache>/<content-hash>/`; `read_cached`
+/ `read_cached_text` are the cache-then-read side (no re-fetch). Added
+`IngestionError` + `UnreachableUrlError`/`PaywallError`/`BotDetectedError` to the
+top-level `errors.py` (ADR 0009); all failures emit clear messages and never
+bypass the obstacle (CLAUDE.md hard rule). 20 tests in
+`tests/unit/framework/test_ingestion.py`: happy path on a checked-in
+pytest-recording cassette (real `example.com`), cache-hit-avoids-refetch,
+redirect→canonical-url metadata, the three failure modes, transient
+retry/recovery. Added `pytest-recording` dev dep. `just verify` green (385
+passed, pyright 0 errors).
+
+### Surprises and friction
+
+Two doc tensions, both in ADR 0019. (1) The brief mandates VCR cassettes, but
+paywalls/bot-walls have no stable reproducible URL and recording one edges
+toward probing anti-automation — so the happy path uses a real recorded cassette
+while the three failure modes use `httpx.MockTransport` (hermetic, type-checked).
+(2) Pinning `record_mode='none'` in `vcr_config` *overrode* the
+`--record-mode=once` CLI flag and blocked recording; dropping it (plugin default
+is already replay-only) fixed it. Also: `vcr_cassette_dir` is not a recognized
+pytest ini key (emits an Unknown-config warning); removed it and let cassettes
+live in pytest-recording's default `tests/<pkg>/cassettes/<module>/` location.
+Minor: `httpx.codes.*` members are tuple-valued enums that never `==` a bare
+`int` under pyright strict — used plain int constants for status classification.
+
+### Deferred to later phases
+
+Long-blog chunking (Extractor concern, §3.2.2 — not Ingestion). A heavier HTML
+library (bs4/trafilatura) if eval shows stdlib normalization hurts extraction
+(revisit Task 8). `run_id` threading into `IngestionError` (orchestrator task,
+ADR 0009).
+
+### Doc-improvement notes for the next brief writer
+
+`coding-conventions.md §8.4` should bless `httpx.MockTransport` as the sanctioned
+hermetic alternative for failure modes that can't be reliably recorded (bot
+walls, paywalls), so future agents don't try to record a Cloudflare challenge
+(ADR 0019). It should also note that pytest-recording has no `vcr_cassette_dir`
+ini key — cassettes live per-module by default.
+
+---
