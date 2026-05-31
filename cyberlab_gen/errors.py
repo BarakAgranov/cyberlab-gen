@@ -187,7 +187,7 @@ class AgentFailure(CyberlabGenError):  # noqa: N818 -- "Failure" is the architec
     """
 
 
-class ConfigError(CyberlabGenError):  # noqa: N818 -- ends in "Error"; flagged only by N818's suffix heuristic
+class ConfigError(CyberlabGenError):
     """A required configuration or bundled resource is missing or invalid.
 
     Raised by the prompt loader (``cyberlab_gen.agents.prompts``) when an
