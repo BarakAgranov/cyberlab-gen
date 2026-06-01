@@ -34,6 +34,7 @@ from cyberlab_gen.schemas.base import ArtifactModel
 from cyberlab_gen.schemas.primitives import (
     FacetName,
     HttpUrl,
+    MitreTechniqueId,
     NonEmptyString,
     RegistryKey,
     SnakeName,
@@ -376,3 +377,63 @@ class BundledRegistryFile[E: BaseModel](ArtifactModel):
     """
 
     entries: list[E] = Field(default_factory=list[E])
+
+
+# --- Bundled MITRE ATT&CK technique catalog (read locally, §5.1) -----------
+
+
+class MitreTechniqueEntry(ArtifactModel):
+    """One technique in the bundled MITRE ATT&CK catalog (``registry-details.md §5.1``).
+
+    ``name`` is a ``MitreTechniqueId`` (``T####`` / ``T####.###``): the closed key
+    the pre-Planner enrichment pass validates extracted technique ids against
+    (``pipeline.md §3.2.4``, ADR 0020). The remaining fields are the metadata
+    enrichment attaches when a technique resolves locally. The catalog is read on
+    demand by enrichment, not part of ``MergedRegistries`` (like the closed
+    catalogs of ADR 0016).
+    """
+
+    name: MitreTechniqueId
+    display_name: NonEmptyString
+    tactic: NonEmptyString
+    description: NonEmptyString
+
+
+class MitreTechniqueCatalog(ArtifactModel):
+    """The bundled MITRE ATT&CK technique catalog file shape (read locally).
+
+    Loaded via ``cyberlab_gen.registries.loader.load_mitre_techniques``; never
+    live-fetched in Phase 1. Grows by maintainer PR as the curated set grows.
+    """
+
+    entries: list[MitreTechniqueEntry] = Field(default_factory=list[MitreTechniqueEntry])
+
+
+# --- Bundled MITRE ATT&CK technique catalog (read locally, §5.1) -----------
+
+
+class MitreTechniqueEntry(ArtifactModel):
+    """One technique in the bundled MITRE ATT&CK catalog (``registry-details.md §5.1``).
+
+    ``name`` is a ``MitreTechniqueId`` (``T#### `` / ``T####.###``): the closed
+    key the pre-Planner enrichment pass validates extracted technique ids
+    against (``pipeline.md §3.2.4``, ADR 0020). The remaining fields are the
+    metadata enrichment attaches when a technique resolves locally. The catalog
+    is read on demand by enrichment, not part of ``MergedRegistries`` (like the
+    closed catalogs in ADR 0016).
+    """
+
+    name: MitreTechniqueId
+    display_name: NonEmptyString
+    tactic: NonEmptyString
+    description: NonEmptyString
+
+
+class MitreTechniqueCatalog(ArtifactModel):
+    """The bundled MITRE ATT&CK technique catalog file shape (read locally).
+
+    Loaded via ``cyberlab_gen.registries.loader.load_mitre_techniques``; never
+    live-fetched in Phase 1. Grows by maintainer PR as the curated set grows.
+    """
+
+    entries: list[MitreTechniqueEntry] = Field(default_factory=list[MitreTechniqueEntry])

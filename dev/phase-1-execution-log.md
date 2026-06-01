@@ -223,3 +223,29 @@ and pick the canonical filename for the wheel-packaging story (ADR 0010). `schem
 still owes a `MaterialDiscrepancy` block + cross-reference row (carried over from ADR 0017).
 
 ---
+
+## Task 4 (post-commit correction)
+
+**Date:** 2026-06-01
+**Implementer:** Claude (Opus 4.8) coding agent
+**Commit:** the "fix enrichment wiring" commit immediately following 0aaa6d8
+
+The first Task-4 commit (0aaa6d8) was made before `just verify` was confirmed and was
+RED (collection errors): several Edit calls reported as applied had silently not
+matched, so `MitreTechniqueEntry`/`MitreTechniqueCatalog` were never added to
+`schemas/registries.py`, `EnrichmentError`/`ExternalApiRateLimitError` were never added
+to `errors.py`, `load_static_catalogs`/`load_mitre_techniques` were never added to the
+loader, `enrichment.py` imported `load_merged_registries` from the wrong module
+(`loader` rather than `merge`), and `enrich()` called dict methods on
+`ExternalDataSourcesRegistry`. This follow-up commit adds the missing models, errors,
+and loaders, fixes the imports, points `enrich()` at `registries.external_source(...)`
++ `.entries`, and corrects the same-tier severity test (severity has one member per
+CVSS tier, so a same-tier *difference* can't arise; the test now asserts the clean-fill
+path and the numeric `cvss_score` material path covers the registry-rule case).
+`just verify` now green: ruff clean, format clean, pyright 0 errors, 420 passed.
+
+Lesson for the next agent: run the full verify gate *before* committing, never after —
+a "successful" Edit tool result is not proof the match landed when `old_string` was
+approximate.
+
+---

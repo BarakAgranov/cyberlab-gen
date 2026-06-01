@@ -293,7 +293,7 @@ def test_same_tier_cvss_difference_is_non_material_silent_rewrite() -> None:
     client = _FakeNvd(
         {"CVE-2021-2": NvdCveData(cve_id="CVE-2021-2", cvss_severity="HIGH", cvss_score=8.9)}
     )
-    result = enrich(spec, _no_registry_config(nvd_client=client))
+    enrich(spec, _no_registry_config(nvd_client=client))
 
     cve = spec.external_references.cves[0]  # type: ignore[union-attr]
     # severity rewritten to external_api but values agree (both HIGH) -> no

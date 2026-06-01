@@ -245,3 +245,32 @@ class BotDetectedError(IngestionError):
     etc.) fails with a clear message. The framework does *not* attempt to
     solve a CAPTCHA or evade bot detection (CLAUDE.md hard rule; §4.6 risks).
     """
+
+
+class EnrichmentError(CyberlabGenError):
+    """Pre-Planner enrichment failed in a non-recoverable way (``pipeline.md §3.2.4``).
+
+    Most enrichment failures (rate-limit, budget exhaustion, source not
+    integrated) degrade *gracefully* — they record an ``unknown_from_blog``
+    reason and continue rather than raising. This is reserved for the rare
+    unrecoverable case (e.g., a malformed bundled registry).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, stage="enrichment", run_id=run_id, cause=cause)
+
+
+class ExternalApiRateLimitError(EnrichmentError):
+    """An external data source rate-limited a framework enrichment call.
+
+    Distinct from the LLM-provider ``TransientFailure``: this is an external
+    *data* source (NVD, GitHub, ...). The enrichment pass catches it and records
+    the skipped lookup (``unknown_from_blog.reason: "external API rate-limited at
+    enrichment time"``) rather than failing the run (``pipeline.md §3.2.4``).
+    """

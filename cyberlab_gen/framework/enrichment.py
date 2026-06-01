@@ -52,10 +52,8 @@ from typing import TYPE_CHECKING, Protocol
 from pydantic import Field
 
 from cyberlab_gen.errors import ExternalApiRateLimitError
-from cyberlab_gen.registries.loader import (
-    load_merged_registries,
-    load_mitre_techniques,
-)
+from cyberlab_gen.registries.loader import load_mitre_techniques
+from cyberlab_gen.registries.merge import load_merged_registries
 from cyberlab_gen.schemas.attack_spec import AttackSpec, MaterialDiscrepancy
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.schemas.enums import (
@@ -720,10 +718,10 @@ def enrich(spec: AttackSpec, config: EnrichmentConfig | None = None) -> Enrichme
     budget_remaining = [cfg.budget]
 
     registries = cfg.registries if cfg.registries is not None else load_merged_registries()
-    sources = registries.external_data_sources
+    sources = registries.external_data_sources.entries
 
     # CVEs first (priority order). NVD is the only integrated external source.
-    nvd_entry = sources.get(_NVD_SOURCE_ID)
+    nvd_entry = registries.external_source(_NVD_SOURCE_ID)
     if nvd_entry is not None:
         _enrich_cves(spec, nvd_entry, cfg, result, budget_remaining)
 
@@ -731,7 +729,7 @@ def enrich(spec: AttackSpec, config: EnrichmentConfig | None = None) -> Enrichme
     _enrich_techniques(spec, cfg, result)
 
     # Registered-but-not-integrated sources: honest skips.
-    for entry in sources.values():
+    for entry in sources:
         if entry.id == _NVD_SOURCE_ID:
             continue
         _record_stub_skips(entry, cfg, result)

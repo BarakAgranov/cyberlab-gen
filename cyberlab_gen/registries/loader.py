@@ -167,6 +167,31 @@ def _check_unique_keys[E: BaseModel](entries: list[E], entry_type: type[E], path
         )
 
 
+def load_static_catalogs() -> StaticCatalogsRegistry:
+    """Load and validate the bundled ``static_catalogs`` registry.
+
+    Has the same ``{entries: [...]}`` container shape as the six first-class
+    registries but is validated directly against its ``StaticCatalogsRegistry``
+    model (it is bundled-only; ``schema.md §4.14``).
+    """
+    return StaticCatalogsRegistry.model_validate(
+        _read_yaml(bundled_registry_dir() / "static_catalogs.yaml")
+    )
+
+
+def load_mitre_techniques() -> MitreTechniqueCatalog:
+    """Load and validate the bundled MITRE ATT&CK technique catalog.
+
+    Read locally (``registry-details.md §5.1``), never live-fetched. Used by the
+    pre-Planner enrichment pass (Task 4, ADR 0020) to validate/enrich technique
+    references without a network call. Not part of ``MergedRegistries`` (read on
+    demand, like the closed catalogs of ADR 0016).
+    """
+    return MitreTechniqueCatalog.model_validate(
+        _read_yaml(bundled_registry_dir() / "mitre_attack_techniques.yaml")
+    )
+
+
 def load_bundled_file[E: BaseModel](path: Path, entry_type: type[E]) -> BundledRegistryFile[E]:
     """Load a bundled registry YAML and validate as ``BundledRegistryFile[E]``.
 
