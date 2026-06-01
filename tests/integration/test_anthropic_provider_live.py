@@ -26,6 +26,7 @@ import os
 from decimal import Decimal
 from pathlib import Path
 
+import anthropic
 import pytest
 from pydantic import BaseModel
 
@@ -66,7 +67,19 @@ async def test_complete_against_real_anthropic_api() -> None:
             "uv run pytest tests/integration/test_anthropic_provider_live.py --record-mode=once"
         )
 
-    provider = AnthropicProvider()
+    # The anthropic SDK client requires *a* key to construct, even when the HTTP
+    # call is served from a VCR cassette. With a real key present we exercise the
+    # default lazy-client path (recording); during offline replay we inject a
+    # client built with a non-functional placeholder — VCR serves the recorded
+    # response, so the placeholder never reaches the network.
+    real_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    provider = (
+        AnthropicProvider()
+        if real_key
+        else AnthropicProvider(
+            client=anthropic.AsyncAnthropic(api_key="placeholder-not-a-real-key")
+        )
+    )
     messages = [
         Message(
             role=MessageRole.SYSTEM,

@@ -469,8 +469,8 @@ async def test_complete_with_tools_coerces_final_output_when_model_ends_with_tex
     ("capability", "expected_model"),
     [
         (CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT, _HAIKU),
-        (CapabilityHint.LONG_CONTEXT_EXTRACTION, "claude-opus-4-7"),
-        (CapabilityHint.HIGH_QUALITY_REASONING, "claude-opus-4-7"),
+        (CapabilityHint.LONG_CONTEXT_EXTRACTION, "claude-opus-4-8"),
+        (CapabilityHint.HIGH_QUALITY_REASONING, "claude-opus-4-8"),
     ],
 )
 async def test_capability_resolves_to_first_anthropic_model(

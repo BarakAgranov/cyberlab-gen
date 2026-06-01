@@ -53,7 +53,7 @@ def test_load_model_rankings_bundled() -> None:
     }
     hq = rankings.by_capability[CapabilityHint.HIGH_QUALITY_REASONING]
     assert hq[0].provider == "anthropic"
-    assert hq[0].model == "claude-opus-4-7"
+    assert hq[0].model == "claude-opus-4-8"
 
 
 def test_is_provider_configured_mock_always_true(monkeypatch: pytest.MonkeyPatch) -> None:

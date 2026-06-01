@@ -2,14 +2,27 @@
 #
 # Cache pricing follows vendor convention: cache_write is typically more
 # expensive than input; cache_read is typically cheaper than input.
-# Anthropic Opus 4.7 reference (May 2026): cache_read = 10% of input;
+# Anthropic Opus reference: cache_read = 10% of input;
 # 5-minute cache_write = 1.25x input; 1-hour cache_write = 2x input.
 #
 # Phase 0 ships bundled-only; user overrides at
 # `~/.cyberlab-gen/pricing.yaml` (merge over collision) land in a later
 # task. The provider-interface.md §5.2 schema is authoritative.
+#
+# Prices below confirmed against the official Anthropic pricing page
+# (platform.claude.com/docs/en/about-claude/pricing) as of 2026-06-01.
 
 anthropic:
+  # Current Opus tier. Authoritative rates (June 2026): identical $5/$25
+  # standard rates to Opus 4.7/4.6, per the official pricing page.
+  claude-opus-4-8:
+    input: 5.00
+    output: 25.00
+    cache_read: 0.50
+    cache_write_5min: 6.25
+    cache_write_1h: 10.00
+  # Retained: still served (non-deprecated) and pinned by cost-ledger unit
+  # tests as a known-rate reference.
   claude-opus-4-7:
     input: 5.00
     output: 25.00
@@ -28,12 +41,15 @@ anthropic:
     cache_read: 0.30
     cache_write_5min: 3.75
     cache_write_1h: 6.00
+  # Authoritative Haiku 4.5 rates (June 2026). NOTE: prior values
+  # (0.80/4.00/0.08/1.00/1.60) were the *retired Haiku 3.5* rates mistakenly
+  # carried under this id; corrected here against the official pricing page.
   claude-haiku-4-5-20251001:
-    input: 0.80
-    output: 4.00
-    cache_read: 0.08
-    cache_write_5min: 1.00
-    cache_write_1h: 1.60
+    input: 1.00
+    output: 5.00
+    cache_read: 0.10
+    cache_write_5min: 1.25
+    cache_write_1h: 2.00
 
 # OpenAI prices intentionally left as a commented placeholder.
 # Filled at release time per current vendor pricing, alongside the

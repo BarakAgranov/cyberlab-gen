@@ -548,3 +548,83 @@ date→ISO-string so both quoted and bare-date YAML forms load. Added
   refinement — worth saying so in §7.4.
 
 ---
+
+## Post-Task-8: served-model ranking/pricing fix + recorded live-call cassette
+
+**Date:** 2026-06-01
+**Implementer:** Phase-1 follow-up agent (AnthropicProvider live-extract blockers)
+**Time taken:** ~1 session
+**Commit:** ships in the same commit as this entry (no tag)
+
+### What was built / changed
+
+Two blockers between the real `AnthropicProvider` (commit 93e82a7) and a working
+live extract, plus one adjacent data-correctness fix discovered en route:
+
+1. **Stale Opus ranking → 404.** `model_rankings.yaml` resolved the primary
+   (first-`anthropic`) entry for `high_quality_reasoning` and
+   `long_context_extraction` to `claude-opus-4-7`. Current Opus is
+   `claude-opus-4-8`; a live extract would 404 → `HardFailure`. Bumped both
+   primary entries to `claude-opus-4-8`. The secondary fallbacks
+   (`claude-opus-4-6`, `claude-sonnet-4-6`) are left as-is — the official
+   pricing page lists 4.7/4.6 as still served (non-deprecated), and the adapter
+   only ever resolves the *first* `anthropic` entry anyway (`_resolve_model`),
+   so the fallbacks are inert but harmless. Updated the two unit tests that pin
+   the resolved id (`test_ranking.py`, `test_anthropic_provider.py`) to 4-8.
+
+2. **Missing/incorrect pricing rows.** Added a `claude-opus-4-8` row to
+   `pricing.yaml`. NOT provisional: confirmed against the official Anthropic
+   pricing page (platform.claude.com/docs/.../pricing) on 2026-06-01 — Opus 4.8
+   standard rates are identical to 4.7/4.6 ($5 in / $25 out; cache_read $0.50,
+   5m-write $6.25, 1h-write $10.00). Kept the `claude-opus-4-7` row (unreferenced
+   by rankings now, but pinned as a known-rate reference by `test_cost_ledger`).
+
+3. **(Adjacent, beyond the literal two blockers) Haiku 4.5 mispriced.** The
+   `claude-haiku-4-5-20251001` row carried the *retired Haiku 3.5* rates
+   (0.80/4.00/0.08/1.00/1.60). The authoritative Haiku 4.5 rates are
+   1.00/5.00/0.10/1.25/2.00. Since the live cassette test bills exactly this
+   model and the whole point of `pricing.yaml` is honest cost, corrected it to
+   the authoritative values. No test pinned the old numbers, so nothing broke.
+
+4. **Recorded the live-call cassette.** Ran the committed live test with
+   `--record-mode=once` against a real Anthropic Messages API call (Haiku 4.5,
+   `fast_cheap_structured_output`). The Haiku id was already current/served — no
+   change needed.
+
+### Surprises and friction
+
+- **Cassette filter missed response headers.** `vcr_config.filter_headers` only
+  scrubs *request* headers (vcrpy behaviour). The first recording leaked
+  `set-cookie` (Cloudflare `_cfuvid`), `anthropic-organization-id` (real org
+  UUID), and `request-id` in the *response*. Added a `before_record_response`
+  hook to `tests/integration/conftest.py` that strips the same sensitive set
+  case-insensitively, deleted the cassette, and re-recorded. Verified the final
+  cassette contains no `sk-ant`, `x-api-key`, `authorization`, `cookie`,
+  `set-cookie`, `anthropic-organization-id`, or `request-id`. (No API key/auth
+  header was ever present — those are request headers and were already stripped.)
+
+- **Live test could not replay offline as committed.** The replay path was never
+  exercised (the test always skipped with no cassette). `anthropic.AsyncAnthropic()`
+  requires *a* key to *construct*, even when VCR serves the HTTP — so replay with
+  no key failed at client construction. Fixed in the test: when no real key is in
+  the env (replay), inject a client built with a non-functional placeholder key;
+  VCR serves the recorded response so it never reaches the network. With a real
+  key (recording) the default lazy-client path is still exercised, and the
+  skip-guard semantics are unchanged. After the fix: `just verify` 507 passed
+  (was 506 + 1 skip — the live test now actually runs in replay), and
+  `--record-mode=none` (network-blocked) replays clean.
+
+### Verification
+
+`just verify` green (507 passed, 0 skipped). Live cassette replays offline with
+no key and `--record-mode=none`.
+
+### Deferred / flagged to the user
+
+- Secondary ranking fallbacks (`claude-opus-4-6`) are inert given
+  `_resolve_model`'s first-`anthropic`-wins rule; if true within-provider
+  fallback is ever wanted, that's an adapter change, not a config one.
+- The Haiku-4.5 pricing correction is beyond the literal two blockers — flagged
+  in the report for visibility.
+
+---
