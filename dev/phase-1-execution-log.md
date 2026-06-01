@@ -628,3 +628,73 @@ no key and `--record-mode=none`.
   in the report for visibility.
 
 ---
+
+## Post-Task-8: provider-backed eval run resilience (skip / incremental archive / progress)
+
+**Date:** 2026-06-01
+**Implementer:** Phase-1 follow-up agent (provider-backed eval hardening)
+**Time taken:** ~1 session
+**Commit:** ships in the same commit as this entry (no tag)
+**ADR:** 0028
+
+### What was built / changed
+
+Three fixes to the provider-backed `just eval` run loop after a real ~$3.93 run
+crashed on the synthetic `TBD`-URL blog and lost all of its output. All three
+are framework-side and deterministic (`architecture.md §1.5`).
+
+1. **Problem 1 — crash on unresolved URL → graceful skip.** `run_blog_set`
+   (`eval/runner/runner.py`) now partitions blog ids *before* any provider call:
+   on a `provider_backed` run, a blog whose `url_is_resolved()` is false (the
+   `long-multi-stage-cloud-campaign` fixture) is recorded in the new
+   `EvalReport.skipped: list[SkippedBlog]` (reason `"synthetic fixture, no live
+   URL"`) and left out of `blog_ids`, instead of `url_for` raising and aborting
+   the run. The skip is gated on `provider_backed` so offline/fake runs (which
+   fetch nothing) still cover all three curated blogs. **Note:** the working tree
+   had "fixed" this by *deleting* the long blog from `manifest.yaml` — reverted,
+   because ADR 0014 keeps it in the set and `tests/eval/test_manifest.py` pins
+   its presence. The run tolerates it; the manifest keeps it.
+
+2. **Problem 2 — late crash lost all completed work → incremental archive.**
+   `run_blog_set` gained an optional `on_partial` callback invoked with the
+   report-so-far after each blog completes; `run_eval` passes a closure that
+   re-archives to the same (timestamp-stable) path. A crash on a later blog now
+   leaves every completed blog's real result on disk. Test added:
+   `tests/eval/test_resilience.py::test_partial_report_archived_when_a_later_blog_crashes`
+   drives `run_eval` with a runner that raises on the 3rd curated blog and
+   asserts the first two blogs' records are already archived when the exception
+   propagates.
+
+3. **Problem 3 — silent terminal → live stderr progress.** New
+   `eval/runner/progress.py::StderrEvalProgress` (driven through the new
+   `EvalProgress` protocol in `runner.py`) emits one flushed stderr line per
+   event: run start (counts + which ran vs skipped), each run start
+   (`[2/3] extracting <id>, run 1/3 ...`), each run finish (verdict, layer1
+   pass/FAIL, cost so far), each skip, and the archive path. stdout keeps only
+   the final machine-readable summary.
+
+### Surprises and friction
+
+- The expensive crash was actually *two* compounding bugs: Problem 1 produced the
+  exception, Problem 2 ensured it destroyed the already-paid-for output. Fixing
+  either alone would have left money at risk; both were needed.
+- `run_eval`'s incremental archive makes a `try/finally` redundant — the report
+  is rebuilt per blog anyway, so archiving each rebuild covers crash resilience
+  without a separate exception path. Chose that over the `try/finally` option.
+- `EvalReport` gained a field, which amends the ADR-0025 report shape — recorded
+  in ADR 0028. The field defaults empty, so the committed offline fixture
+  `eval/reports/gen0-20260601T120000Z.yaml` (which omits it) still loads.
+
+### Verification
+
+`just verify` green — ruff check, ruff format --check, pyright strict, and
+pytest all pass (512 passed, exit 0; was 507 + 5 new resilience tests).
+
+### Deferred / flagged to the user
+
+- `url_for` in `_build_provider_backed_runner` still raises on a `TBD` URL as a
+  defensive backstop; it is now unreachable for `TBD` blogs (skipped upstream).
+- Progress cadence is per-run; if a single extraction is itself slow, there is no
+  sub-run heartbeat. Out of scope here.
+
+---

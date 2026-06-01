@@ -30,6 +30,21 @@ if TYPE_CHECKING:
 REPORTS_RELDIR = "eval/reports"
 
 
+class SkippedBlog(ArtifactModel):
+    """A curated blog the run could not execute, with the reason (ADR 0028).
+
+    A provider-backed run cannot fetch a blog whose ``url`` is the ``TBD``
+    sentinel (the synthetic long-blog fixture). Rather than crash the whole run,
+    the harness records the blog here and continues; the report stays an honest
+    account of what ran and what did not.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    blog_id: str
+    reason: str
+
+
 class EvalReport(ArtifactModel):
     """One ``just eval`` run's archived report (ADR 0025).
 
@@ -50,6 +65,9 @@ class EvalReport(ArtifactModel):
     blog_ids: list[str] = Field(default_factory=list[str])
     aggregates: list[BlogAggregate] = Field(default_factory=list[BlogAggregate])
     records: list[BlogRunRecord] = Field(default_factory=list[BlogRunRecord])
+    #: Blogs that could not run (e.g. an unresolved ``TBD`` URL). Defaults empty so
+    #: pre-existing archived reports (which omit it) still load (ADR 0028).
+    skipped: list[SkippedBlog] = Field(default_factory=list[SkippedBlog])
 
     def overall_layer1_pass_rate(self) -> float:
         """Layer-1 pass rate across every run in the report (``implementation-plan.md §4.5``)."""
@@ -115,6 +133,7 @@ def load_report(path: Path) -> EvalReport:
 __all__ = [
     "REPORTS_RELDIR",
     "EvalReport",
+    "SkippedBlog",
     "archive_report",
     "load_report",
     "report_to_yaml",

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from eval.runner.manifest import BlogSetManifest
-    from eval.runner.runner import EvalPipelineRunner
+    from eval.runner.runner import EvalPipelineRunner, EvalProgress
 
 #: The provider whose configuration gates a real (provider-backed) eval run.
 _LIVE_PROVIDER = "anthropic"
@@ -65,6 +65,7 @@ def run_eval(
     n: int = DEFAULT_N,
     manifest_path: Path | None = None,
     reports_dir: Path | None = None,
+    progress: EvalProgress | None = None,
 ) -> tuple[EvalReport, Path]:
     """Run the curated set through ``runner`` N times, archive the report, return both.
 
@@ -72,13 +73,30 @@ def run_eval(
     dir). ``provider_backed`` is recorded on the report so offline runs are
     distinguishable in the archive. Returns the report and the path it was
     archived to.
+
+    The report is archived **incrementally** — after each blog completes — so a
+    crash on a later blog never loses the money already spent on the earlier ones
+    (ADR 0028). ``progress`` (when given) receives live events for stderr output.
     """
     from eval.runner.report import REPORTS_RELDIR
 
     manifest = load_manifest(manifest_path)
-    report = run_blog_set(manifest=manifest, runner=runner, n=n, provider_backed=provider_backed)
     target_dir = reports_dir if reports_dir is not None else _default_reports_dir(REPORTS_RELDIR)
+
+    def _archive_partial(partial: EvalReport) -> None:
+        archive_report(partial, reports_dir=target_dir)
+
+    report = run_blog_set(
+        manifest=manifest,
+        runner=runner,
+        n=n,
+        provider_backed=provider_backed,
+        on_partial=_archive_partial,
+        progress=progress,
+    )
     path = archive_report(report, reports_dir=target_dir)
+    if progress is not None:
+        progress.report_archived(path)
     return report, path
 
 
@@ -116,10 +134,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    from eval.runner.progress import StderrEvalProgress
+
     runner = _build_provider_backed_runner(manifest)  # pragma: no cover - needs a live provider
-    report, path = run_eval(runner=runner, provider_backed=True)  # pragma: no cover
+    report, path = run_eval(  # pragma: no cover
+        runner=runner, provider_backed=True, progress=StderrEvalProgress()
+    )
+    # Final machine-readable summary stays on stdout (progress went to stderr).
     print(  # noqa: T201 # pragma: no cover
-        f"eval: ran {report.runs_per_blog} run(s) x {len(report.blog_ids)} blog(s); "
+        f"eval: ran {report.runs_per_blog} run(s) x {len(report.blog_ids)} blog(s)"
+        f"{f' ({len(report.skipped)} skipped)' if report.skipped else ''}; "
         f"Layer-1 pass rate {report.overall_layer1_pass_rate():.0%}; "
         f"valid-spec blogs {report.blogs_with_valid_spec()}/{len(report.blog_ids)}; "
         f"archived to {path}"
@@ -140,8 +164,10 @@ def _build_provider_backed_runner(
 
     Each run gets a fresh ``ExtractRunner`` (so cached blog content from one blog
     doesn't bleed into the next) and a fresh ``CostLedger`` (so ``cost_usd`` is
-    per-run). The URL comes from the manifest entry; a ``TBD`` URL (the synthetic
-    long-blog fixture) is skipped with a clear error rather than fetched.
+    per-run). The URL comes from the manifest entry. A ``TBD`` URL (the synthetic
+    long-blog fixture) is skipped upstream by ``run_blog_set`` before any run, so
+    ``url_for`` never sees one; it still raises on a ``TBD`` URL as a defensive
+    backstop should it ever be called directly (ADR 0028).
     """
     from cyberlab_gen.agents.extractor.extractor import Extractor
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury

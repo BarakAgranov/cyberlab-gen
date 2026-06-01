@@ -1,0 +1,63 @@
+"""Live stderr progress for a provider-backed ``just eval`` run (ADR 0028).
+
+A multi-minute, real-money run must not be silent. :class:`StderrEvalProgress`
+emits one concise line per event to **stderr** so the machine-readable summary
+and the archived report keep ``stdout`` clean. Output is flushed per line so it
+appears in real time rather than buffered to the end.
+
+The :class:`~eval.runner.runner.EvalProgress` protocol (defined alongside the
+runner to avoid an import cycle) is the surface the harness drives; this is the
+production implementation. Tests inject a recording fake or capture stderr.
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+    from pathlib import Path
+
+    from eval.runner.metrics import BlogRunRecord
+
+
+class StderrEvalProgress:
+    """Write one progress line per event to stderr, flushed immediately (ADR 0028)."""
+
+    def _emit(self, line: str) -> None:
+        print(line, file=sys.stderr, flush=True)  # noqa: T201 -- progress goes to stderr
+
+    def run_started(
+        self, *, ran_ids: list[str], skipped_ids: list[str], n: int, provider_backed: bool
+    ) -> None:
+        mode = "provider-backed" if provider_backed else "offline"
+        line = (
+            f"eval: starting {mode} run — {n} run(s) over {len(ran_ids)} blog(s): "
+            f"{', '.join(ran_ids) or '(none)'}"
+        )
+        if skipped_ids:
+            line += f"; {len(skipped_ids)} skipped: {', '.join(skipped_ids)}"
+        self._emit(line)
+
+    def blog_run_started(
+        self, blog_id: str, *, blog_pos: int, blog_total: int, run_index: int, n: int
+    ) -> None:
+        self._emit(f"[{blog_pos}/{blog_total}] extracting {blog_id}, run {run_index + 1}/{n} ...")
+
+    def blog_run_finished(self, record: BlogRunRecord, *, n: int, cost_so_far: Decimal) -> None:
+        layer1 = "pass" if record.layer1_passed else "FAIL"
+        self._emit(
+            f"      {record.blog_id} run {record.run_index + 1}/{n} done: "
+            f"verdict={record.verdict}, layer1={layer1}, "
+            f"shipped={record.shipped}, cost so far ${cost_so_far:.4f}"
+        )
+
+    def blog_skipped(self, blog_id: str, *, reason: str) -> None:
+        self._emit(f"eval: SKIP {blog_id} — {reason}")
+
+    def report_archived(self, path: Path) -> None:
+        self._emit(f"eval: report archived → {path}")
+
+
+__all__ = ["StderrEvalProgress"]

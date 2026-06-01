@@ -22,15 +22,16 @@ nothing (it never fabricates results).
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
 
 from cyberlab_gen.agents.extractor_jury.schema import Verdict
 from eval.runner.metrics import BlogAggregate, BlogRunRecord, structural_completeness
-from eval.runner.report import EvalReport
+from eval.runner.report import EvalReport, SkippedBlog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from decimal import Decimal
+    from pathlib import Path
 
     from cyberlab_gen.cli.extract import ExtractRunner
     from cyberlab_gen.providers.cost_ledger import CostLedger
@@ -40,6 +41,9 @@ if TYPE_CHECKING:
 #: Default repeated-run count per blog (``eval.md §7.6``; the Phase-1 exit
 #: criterion runs N=3, ``implementation-plan.md §4.5``).
 DEFAULT_N = 3
+
+#: Reason recorded for a blog skipped because it has no live URL (ADR 0028).
+_UNRESOLVED_URL_REASON = "synthetic fixture, no live URL"
 
 
 class EvalPipelineRunner(Protocol):
@@ -52,6 +56,31 @@ class EvalPipelineRunner(Protocol):
     """
 
     def run_once(self, blog_id: str, *, run_index: int) -> BlogRunRecord: ...
+
+
+class EvalProgress(Protocol):
+    """Live-progress surface the run loop drives (ADR 0028).
+
+    The production implementation is
+    :class:`eval.runner.progress.StderrEvalProgress`, which writes one concise
+    line per event to stderr. ``None`` means run silently. Defined here (not in
+    ``progress.py``) so the runner depends only on the structural type and there
+    is no import cycle.
+    """
+
+    def run_started(
+        self, *, ran_ids: list[str], skipped_ids: list[str], n: int, provider_backed: bool
+    ) -> None: ...
+
+    def blog_run_started(
+        self, blog_id: str, *, blog_pos: int, blog_total: int, run_index: int, n: int
+    ) -> None: ...
+
+    def blog_run_finished(self, record: BlogRunRecord, *, n: int, cost_so_far: Decimal) -> None: ...
+
+    def blog_skipped(self, blog_id: str, *, reason: str) -> None: ...
+
+    def report_archived(self, path: Path) -> None: ...
 
 
 class ProviderBackedEvalRunner:
@@ -177,6 +206,8 @@ def run_blog_set(
     provider_backed: bool,
     blog_ids: list[str] | None = None,
     generated_at: datetime | None = None,
+    on_partial: Callable[[EvalReport], None] | None = None,
+    progress: EvalProgress | None = None,
 ) -> EvalReport:
     """Run every curated blog ``n`` times through ``runner`` and build an :class:`EvalReport`.
 
@@ -185,30 +216,84 @@ def run_blog_set(
     aggregate carries mean/median/variance, and the report carries the flat run
     records too. ``provider_backed`` is recorded on the report so an offline run
     (fake runner) is distinguishable from a real one in the archive.
+
+    A *provider-backed* run cannot fetch a blog whose URL is the ``TBD`` sentinel
+    (the synthetic long-blog fixture), so such a blog is **skipped** — recorded in
+    ``EvalReport.skipped`` and left out of ``blog_ids`` — rather than crashing the
+    run (ADR 0028). An offline run does not fetch URLs, so it skips nothing.
+
+    ``on_partial`` is invoked with the report-so-far after each blog completes, so
+    a caller can archive incrementally; a crash on a later blog then still leaves
+    the earlier blogs' results on disk (ADR 0028, Problem 2). ``progress`` receives
+    one event per step for live stderr output.
     """
     if n < 1:
         raise ValueError("n (runs per blog) must be >= 1")
     ids = blog_ids if blog_ids is not None else [e.id for e in manifest.curated]
+    gen_at = generated_at if generated_at is not None else datetime.now(UTC)
+
+    # Partition into blogs that will run vs. blogs skipped for an unresolved URL.
+    # The skip is decided *before* any provider call (it never reaches the runner).
+    ran_ids: list[str] = []
+    skipped: list[SkippedBlog] = []
+    for blog_id in ids:
+        if provider_backed and not manifest.entry(blog_id).url_is_resolved():
+            skipped.append(SkippedBlog(blog_id=blog_id, reason=_UNRESOLVED_URL_REASON))
+        else:
+            ran_ids.append(blog_id)
+
+    if progress is not None:
+        progress.run_started(
+            ran_ids=ran_ids,
+            skipped_ids=[s.blog_id for s in skipped],
+            n=n,
+            provider_backed=provider_backed,
+        )
+        for s in skipped:
+            progress.blog_skipped(s.blog_id, reason=s.reason)
+
     records: list[BlogRunRecord] = []
     aggregates: list[BlogAggregate] = []
-    for blog_id in ids:
-        blog_runs = [runner.run_once(blog_id, run_index=i) for i in range(n)]
+    done_ids: list[str] = []
+    total_cost = Decimal("0")
+    total = len(ran_ids)
+
+    def _build() -> EvalReport:
+        return EvalReport(
+            generated_at=gen_at,
+            rotation_generation=manifest.rotation_generation,
+            runs_per_blog=n,
+            provider_backed=provider_backed,
+            blog_ids=list(done_ids),
+            aggregates=list(aggregates),
+            records=list(records),
+            skipped=list(skipped),
+        )
+
+    for pos, blog_id in enumerate(ran_ids, start=1):
+        blog_runs: list[BlogRunRecord] = []
+        for i in range(n):
+            if progress is not None:
+                progress.blog_run_started(blog_id, blog_pos=pos, blog_total=total, run_index=i, n=n)
+            record = runner.run_once(blog_id, run_index=i)
+            blog_runs.append(record)
+            total_cost += record.cost_usd
+            if progress is not None:
+                progress.blog_run_finished(record, n=n, cost_so_far=total_cost)
         records.extend(blog_runs)
         aggregates.append(BlogAggregate.from_runs(blog_id, blog_runs))
-    return EvalReport(
-        generated_at=generated_at if generated_at is not None else datetime.now(UTC),
-        rotation_generation=manifest.rotation_generation,
-        runs_per_blog=n,
-        provider_backed=provider_backed,
-        blog_ids=ids,
-        aggregates=aggregates,
-        records=records,
-    )
+        done_ids.append(blog_id)
+        # Archive what's finished so a crash on a later blog never loses it.
+        if on_partial is not None:
+            on_partial(_build())
+
+    return _build()
 
 
 __all__ = [
     "DEFAULT_N",
     "EvalPipelineRunner",
+    "EvalProgress",
     "ProviderBackedEvalRunner",
     "record_from_run",
     "run_blog_set",
