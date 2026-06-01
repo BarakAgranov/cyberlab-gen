@@ -656,6 +656,38 @@ async def test_complete_with_tools_errored_tool_still_yields_is_error_result() -
     assert results["c1"]["is_error"] is False
 
 
+def test_debug_summarize_messages_flags_the_unanswered_tool_use() -> None:
+    # The instrumentation must point at the malformed message: an assistant turn
+    # whose tool_use id is not answered in the next message is flagged MALFORMED,
+    # and a balanced turn is not.
+    from cyberlab_gen.providers.anthropic_provider import (
+        _debug_summarize_messages,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    messages = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": [
+                _tool_use("c1", "external_lookup", {"q": "a"}),
+                _tool_use("c2", _EMIT_NAME, {"greeting": "x", "audience": "y"}),
+            ],
+        },
+        # only c1 answered — c2 (the emit) is orphaned, reproducing the real 400.
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": "r"}]},
+    ]
+    summary = _debug_summarize_messages(messages)
+    assert "[1] role=assistant" in summary
+    assert "MALFORMED" in summary
+    assert "'c2'" in summary  # names the orphaned id
+    # a fully-answered version is not flagged.
+    messages[2]["content"] = [  # type: ignore[index]
+        {"type": "tool_result", "tool_use_id": "c1", "content": "r"},
+        {"type": "tool_result", "tool_use_id": "c2", "content": "r"},
+    ]
+    assert "MALFORMED" not in _debug_summarize_messages(messages)
+
+
 async def test_complete_with_tools_coerces_final_output_when_model_ends_with_text() -> None:
     executor = _Executor(content="result")
     provider = _provider(

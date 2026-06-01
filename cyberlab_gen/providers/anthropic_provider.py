@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import sys
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast
@@ -517,6 +518,12 @@ class AnthropicProvider(Provider):
                 if exc.status_code == 429 or exc.status_code >= 500:
                     last_exc = exc
                 else:
+                    # TEMPORARY INSTRUMENTATION (no loop-logic change): a non-retryable
+                    # 4xx (the tool-loop 400) is where the malformed message array bit
+                    # us. Dump roles + tool_use/tool_result ids per message to stderr so
+                    # the real failing conversation shape is visible. Remove once the
+                    # loop fix is verified against the dumped shape.
+                    _dump_message_array_on_error(messages, model=model, exc=exc)
                     raise HardFailure(
                         f"Anthropic call failed ({exc.status_code}): {exc}", cause=exc
                     ) from exc
@@ -704,6 +711,71 @@ def _block_input(block: object) -> dict[str, Any]:
     if isinstance(value, dict):
         return cast("dict[str, Any]", value)
     return {}
+
+
+def _dbg_field(block: object, name: str) -> Any:  # noqa: ANN401 -- reads a dict-or-SDK-block field
+    if isinstance(block, dict):
+        return cast("dict[str, Any]", block).get(name)
+    return getattr(block, name, None)
+
+
+def _debug_summarize_messages(messages: list[dict[str, Any]]) -> str:
+    """One readable line per message: index, role, tool_use ids, tool_result ids.
+
+    Roles and ids only — never message content — so it is safe to print and
+    leaks nothing. Assistant turns whose ``tool_use`` ids are not all answered by
+    a ``tool_result`` in the immediately following message are flagged ``<<<
+    MALFORMED`` so the offending message is obvious without the API round-trip.
+    """
+    rows: list[tuple[int, object, list[object], list[object], int]] = []
+    for i, msg in enumerate(messages):
+        content = _dbg_field(msg, "content")
+        tool_use_ids: list[object] = []
+        tool_result_ids: list[object] = []
+        text_blocks = 0
+        if isinstance(content, list):
+            for block in cast("list[object]", content):
+                kind = _dbg_field(block, "type")
+                if kind == "tool_use":
+                    tool_use_ids.append(_dbg_field(block, "id"))
+                elif kind == "tool_result":
+                    tool_result_ids.append(_dbg_field(block, "tool_use_id"))
+                elif kind == "text":
+                    text_blocks += 1
+        elif isinstance(content, str):
+            text_blocks = 1
+        rows.append((i, _dbg_field(msg, "role"), tool_use_ids, tool_result_ids, text_blocks))
+
+    lines: list[str] = []
+    for idx, (i, role, tool_use_ids, tool_result_ids, text_blocks) in enumerate(rows):
+        note = ""
+        if role == "assistant" and tool_use_ids:
+            answered: set[object] = set(rows[idx + 1][3]) if idx + 1 < len(rows) else set()
+            missing = [tid for tid in tool_use_ids if tid not in answered]
+            if missing:
+                note = f"  <<< MALFORMED: no tool_result for {missing} in the next message"
+        lines.append(
+            f"  [{i}] role={role} text_blocks={text_blocks} "
+            f"tool_use={tool_use_ids} tool_result={tool_result_ids}{note}"
+        )
+    return "\n".join(lines)
+
+
+def _dump_message_array_on_error(
+    messages: list[dict[str, Any]], *, model: str, exc: object
+) -> None:
+    """Print the message-array summary + the vendor error to stderr (instrumentation)."""
+    status = getattr(exc, "status_code", "?")
+    summary = _debug_summarize_messages(messages)
+    banner = (
+        f"\n=== ANTHROPIC {status} TOOL-LOOP DEBUG (model={model}) ===\n"
+        f"error: {exc}\n"
+        f"message array ({len(messages)} messages; roles + tool ids only):\n"
+        f"{summary}\n"
+        f"=== end tool-loop debug ===\n"
+    )
+    print(banner, file=sys.stderr, flush=True)  # noqa: T201 -- temporary stderr instrumentation
+    logger.error("anthropic %s tool-loop failure; message array:\n%s", status, summary)
 
 
 def _text_of(response: object) -> str:
