@@ -26,10 +26,11 @@ Global option surface (decided in ADR 0013):
 ``typer.BadParameter``. The stubs do not consume the mode.
 """
 
+import sys
 from decimal import Decimal
 from importlib import metadata
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -38,11 +39,29 @@ from cyberlab_gen.cli.context import CliContext
 from cyberlab_gen.providers import CostLedger
 from cyberlab_gen.state import LocalState
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from cyberlab_gen.cli.extract import ExtractRunner
+
 # Test hook: integration tests read this after ``runner.invoke`` to assert
 # that the global flags were plumbed into the per-invocation context.
 # Production code MUST NOT read this. Reset to ``None`` between tests by the
 # fixture in ``tests/integration/test_cli.py``.
 last_invocation_context: CliContext | None = None
+
+# Test seam (ADR 0024): the ``extract`` verb builds its pipeline runner through
+# this factory. Tests override it to inject a fake ``ExtractRunner`` so the
+# interrupt menus are exercised without a live provider. ``None`` → the verb
+# builds the production ``PipelineExtractRunner`` (which needs a configured
+# provider and raises ``HardFailure`` without one). Reset between tests.
+extract_runner_factory: "Callable[[LocalState], ExtractRunner] | None" = None
+
+# Test seam: CliRunner replaces ``sys.stdin`` with a non-TTY stream during
+# ``invoke``, so the real ``isatty()`` check can't be driven from a test that
+# wants to exercise the interactive menus. ``None`` → use the real check
+# (production); ``True``/``False`` → force the TTY verdict. Reset between tests.
+stdin_tty_override: bool | None = None
 
 
 app = typer.Typer(
@@ -171,6 +190,99 @@ def generate(
     del url  # Phase-0 stub: argument accepted but unused.
     output.print_info(_GENERATE_STUB_MESSAGE)
     raise typer.Exit(code=1)
+
+
+def _build_extract_runner(state: LocalState) -> "ExtractRunner":
+    """Build the production :class:`PipelineExtractRunner` (or the injected fake).
+
+    The ``extract_runner_factory`` test seam (ADR 0024) lets the CLI tests supply
+    a fake runner so the interrupt menus are driven without a live provider. In
+    production the factory is ``None`` and this wires Ingestion + the agents +
+    Validator Layer 1 onto the orchestrator; the agents resolve a configured
+    provider and raise ``HardFailure`` (``provider-interface.md §6.3``) if none
+    is configured.
+    """
+    if extract_runner_factory is not None:
+        return extract_runner_factory(state)
+    from cyberlab_gen.agents.extractor.extractor import Extractor
+    from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
+    from cyberlab_gen.cli.extract import PipelineExtractRunner
+    from cyberlab_gen.providers.anthropic_provider import AnthropicProvider
+    from cyberlab_gen.providers.ranking import build_provider_registry
+    from cyberlab_gen.registries.merge import load_merged_registries
+    from cyberlab_gen.validators.layer1 import Layer1Validator
+
+    registry = build_provider_registry()
+    provider = AnthropicProvider()
+    registries = load_merged_registries()
+    return PipelineExtractRunner(
+        extractor=Extractor(provider=provider, registry=registry, registries=registries),
+        validator=Layer1Validator(registries=registries),
+        jury=ExtractorJury(provider=provider, registry=registry, registries=registries),
+        state=state,
+    )
+
+
+@app.command()
+def extract(
+    ctx: typer.Context,
+    url: Annotated[
+        str,
+        typer.Argument(help="Blog URL to extract an AttackSpec from."),
+    ],
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive",
+            help="Pause at the post-Extractor interrupt for review. Default mode.",
+        ),
+    ] = False,
+    auto: Annotated[
+        bool,
+        typer.Option(
+            "--auto",
+            help="Run without interrupts (except budget-overrun); auto-accept proposals.",
+        ),
+    ] = False,
+) -> None:
+    """Extract a validated ``attack-spec.yaml`` from a blog URL (Phase 1)."""
+    from cyberlab_gen.cli.extract import run_extract
+    from cyberlab_gen.errors import CyberlabGenError
+    from cyberlab_gen.framework.orchestrator import JuryRejectionError
+
+    if interactive and auto:
+        raise typer.BadParameter(
+            "--interactive and --auto are mutually exclusive",
+            param_hint="--interactive / --auto",
+        )
+    cli_ctx = ctx.obj
+    assert isinstance(cli_ctx, CliContext)
+    runner = _build_extract_runner(cli_ctx.state)
+    # ``stdin_tty_override`` is a test seam: CliRunner swaps ``sys.stdin`` for a
+    # non-TTY stream during invoke, so the interactive menus can't be driven via
+    # the real isatty() check. Tests set this to True to exercise them; None →
+    # the real check (production).
+    stdin_is_tty = sys.stdin.isatty() if stdin_tty_override is None else stdin_tty_override
+    try:
+        written = run_extract(
+            url=url,
+            interactive=interactive,
+            auto=auto,
+            runner=runner,
+            ledger=cli_ctx.cost_ledger,
+            stdin_is_tty=stdin_is_tty,
+        )
+    except JuryRejectionError as exc:
+        output.print_error(f"extraction halted: {exc}", exc=exc)
+        raise typer.Exit(code=1) from exc
+    except CyberlabGenError as exc:
+        output.print_error(f"extraction failed: {exc}", exc=exc)
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:  # headless --interactive rejection (pipeline.md §3.1)
+        output.print_error(str(exc), exc=exc)
+        raise typer.Exit(code=2) from exc
+    if written is None:
+        raise typer.Exit(code=1)  # aborted / out-of-scope-auto / budget-abort
 
 
 @app.command()

@@ -419,3 +419,62 @@ the run report").
   later) consults.
 
 ---
+
+## Task 7: extract CLI verb + post-Extractor interactive interrupt
+
+**Date:** 2026-06-01
+**Implementer:** Phase 1 Task 7 agent
+**Time taken:** ~1 session
+**Commit:** Phase 1 Task 7: extract verb + post-Extractor interrupt (four-option + per-proposal menus, headless guard, budget-overrun both modes)
+
+### What was built
+
+`cyberlab_gen/cli/extract.py` holds the verb's engine: a `RunResult`
+(`InternalModel`) bundling the enriched AttackSpec + proposals + material
+discrepancies + next-stage cost estimate, an `ExtractRunner` Protocol seam with
+the production `PipelineExtractRunner` (Ingestion -> `build_pipeline`, reading the
+final `PipelineState.extraction` for proposals), the four-option menu
+(Approve/Feedback/Edit/Abort), the per-proposal Accept/Edit loop with
+`$EDITOR`-revalidation-and-reopen-on-invalid, the YAML (de)serializer
+(`spec_to_yaml` / `write_attack_spec` via `ruamel.yaml`), the `--auto` path
+(out-of-scope halt, auto-accept up to the cap=5), and the budget-overrun
+interrupt honored in both modes. `cli/main.py` gains a thin `extract` verb and
+two test seams (`extract_runner_factory`, `stdin_tty_override`). 16 new tests in
+`tests/integration/test_cli_extract.py`; `just verify` green (458 passed).
+
+### Surprises and friction
+
+`run_pipeline` (ADR 0023) returns only a `PipelineOutcome`, which carries neither
+the registry proposals nor a next-stage cost estimate the §3.2.5 per-proposal
+surface and the §3.1.1 budget interrupt need. Rather than churn Task 6's locked
+return type, Task 7 owns a thin runner seam that packs everything into a
+`RunResult` (ADR 0024). Two test-seam frictions: `CliRunner` swaps `sys.stdin`
+for a non-TTY stream during `invoke`, so the headless check needed a
+`stdin_tty_override` module hook to exercise the interactive menus; and there is
+no real "next-stage cost" in Phase 1 (no Planner), so the estimate is a
+runner-supplied figure (default 0) — the budget *mechanism* is real and tested,
+the real estimate drops in with the Planner. AttackSpec had no YAML serializer
+yet; added one in the CLI layer using the already-bundled `ruamel.yaml`.
+
+### Deferred to later phases
+
+- The third review surface (material discrepancies at an interrupt) — Phase 4;
+  Phase 1 lists them in the run report only (implemented as `_emit_run_report`).
+- Real provider-backed end-to-end `extract` runs — Task 8 / eval harness; Task 7
+  tests use the fake `ExtractRunner` (no live provider, no cassettes).
+- A structured run-report artifact — Phase 4; the report is currently CLI prose.
+- Overlay-write of accepted proposals — Phase 1 records acceptance in the report;
+  the overlay write path lands with the proposal-lifecycle work.
+
+### Doc-improvement notes for the next brief writer
+
+- `pipeline.md §3.2.5` names three review surfaces but Phase 1 has only two
+  (material discrepancies are report-only); the brief already flags this, but the
+  doc itself could carry a "Phase 1: surfaces 1-2 only" margin note.
+- The "estimated next-stage spend" the budget-overrun interrupt reads (§3.1.1)
+  has no defined source until the Planner ships; worth naming where the estimate
+  comes from in `pipeline.md §3.5` / the cost-ledger docs.
+- ADR 0013's flag-surface note about adding `--interactive` to `generate`'s
+  inline example now also applies to the new `extract` verb.
+
+---
