@@ -13,7 +13,7 @@ Architectural source: ``provider-interface.md`` §4/§6, ADR 0018, ADR 0027.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import anthropic
 import httpx
@@ -433,6 +433,227 @@ async def test_complete_with_tools_raises_tool_loop_error_when_never_finishes() 
             agent_label=AgentLabel.EXTRACTOR,
             max_iterations=2,
         )
+
+
+def _block_field(block: object, name: str) -> Any:  # noqa: ANN401 -- reads a heterogeneous block field
+    if isinstance(block, dict):
+        return cast("dict[str, Any]", block).get(name)
+    return getattr(block, name, None)
+
+
+def _contract_400() -> anthropic.APIStatusError:
+    """The exact 400 Anthropic raises when a tool_use has no following tool_result."""
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(400, request=request)
+    return anthropic.APIStatusError(
+        "messages.N: tool_use ids were found without tool_result blocks immediately after",
+        response=response,
+        body=None,
+    )
+
+
+class _ContractCheckingMessages(_FakeMessages):
+    """A fake ``messages`` that enforces Anthropic's tool_use/tool_result contract.
+
+    On every ``create`` it validates the ``messages`` array the adapter built: each
+    assistant turn with N ``tool_use`` blocks must be *immediately* followed by a
+    user message carrying a ``tool_result`` for every one of those ids, before any
+    other content. A violation raises the real 400 — so a loop that drops or
+    mis-orders a tool_result fails here exactly as it did in production.
+    """
+
+    async def create(self, **kwargs: Any) -> Any:  # noqa: ANN401 -- mirrors the SDK signature
+        self._assert_contract(list(kwargs.get("messages", [])))
+        return await super().create(**kwargs)
+
+    @staticmethod
+    def _assert_contract(messages: list[Any]) -> None:
+        for i, msg in enumerate(messages):
+            content = _block_field(msg, "content")
+            if _block_field(msg, "role") != "assistant" or not isinstance(content, list):
+                continue
+            tool_use_ids = [
+                _block_field(b, "id")
+                for b in cast("list[Any]", content)
+                if _block_field(b, "type") == "tool_use"
+            ]
+            if not tool_use_ids:
+                continue
+            nxt = messages[i + 1] if i + 1 < len(messages) else None
+            nxt_content = _block_field(nxt, "content") if nxt is not None else None
+            if _block_field(nxt, "role") != "user" or not isinstance(nxt_content, list):
+                raise _contract_400()
+            result_ids: list[Any] = []
+            seen_other = False
+            for b in cast("list[Any]", nxt_content):
+                if _block_field(b, "type") == "tool_result":
+                    if seen_other:
+                        raise _contract_400()  # tool_results must lead the message
+                    result_ids.append(_block_field(b, "tool_use_id"))
+                else:
+                    seen_other = True
+            if any(tid not in result_ids for tid in tool_use_ids):
+                raise _contract_400()
+
+
+class _ContractClient:
+    def __init__(self, outcomes: list[Any]) -> None:
+        self.messages = _ContractCheckingMessages(outcomes)
+
+
+def _contract_provider(outcomes: list[Any]) -> AnthropicProvider:
+    return AnthropicProvider(
+        client=_ContractClient(outcomes),
+        transient_retries=_NO_SLEEP_TRANSIENT,
+        malformed_retries=_TWO_ATTEMPT_MALFORMED,
+    )
+
+
+def _result_blocks(messages: list[Any]) -> list[dict[str, Any]]:
+    """The tool_result blocks of the last user message that carries them."""
+    for msg in reversed(messages):
+        content = _block_field(msg, "content")
+        if _block_field(msg, "role") == "user" and isinstance(content, list):
+            blocks = [
+                cast("dict[str, Any]", b)
+                for b in cast("list[Any]", content)
+                if _block_field(b, "type") == "tool_result"
+            ]
+            if blocks:
+                return blocks
+    raise AssertionError("no tool_result message found")
+
+
+async def test_complete_with_tools_multi_tool_turn_answers_every_call_id_in_order() -> None:
+    # The production failure: one assistant turn with multiple tool_use blocks
+    # (here two real tools AND a premature emit) must be answered by a tool_result
+    # for EVERY id, in order — else Anthropic 400s. Fails on the pre-fix loop,
+    # which dropped the emit block's result.
+    executor = _Executor(content="lookup-result")
+    provider = _contract_provider(
+        [
+            _Response(
+                [
+                    _tool_use("c1", "external_lookup", {"q": "CVE-1"}),
+                    _tool_use("c2", "external_lookup", {"q": "CVE-2"}),
+                    _tool_use("e1", _EMIT_NAME, {"greeting": "premature", "audience": "x"}),
+                ],
+                _Usage(100, 20),
+                stop_reason="tool_use",
+            ),
+            _Response(
+                [_tool_use("c3", _EMIT_NAME, {"greeting": "done", "audience": "analyst"})],
+                _Usage(40, 10),
+            ),
+        ]
+    )
+    resp = await provider.complete_with_tools(
+        _messages(),
+        output_schema=Greeting,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        tools=[_lookup_tool()],
+        tool_executor=executor,
+        agent_label=AgentLabel.EXTRACTOR,
+        max_iterations=5,
+    )
+    assert resp.output == Greeting(greeting="done", audience="analyst")
+    # Both real tools executed, in order; the emit block is not "executed".
+    assert [c.call_id for c in executor.seen] == ["c1", "c2"]
+    fake: _FakeMessages = provider._client.messages  # type: ignore[union-attr]
+    result_ids = [b["tool_use_id"] for b in _result_blocks(fake.calls[1]["messages"])]
+    assert result_ids == ["c1", "c2", "e1"]  # every call_id, in order, none dropped
+
+
+async def test_complete_with_tools_multi_turn_sequence_then_emits() -> None:
+    # Model calls a tool, gets a result, calls TWO more (parallel), then emits.
+    executor = _Executor(content="r")
+    provider = _contract_provider(
+        [
+            _Response(
+                [_tool_use("c1", "external_lookup", {"q": "a"})],
+                _Usage(10, 5),
+                stop_reason="tool_use",
+            ),
+            _Response(
+                [
+                    _tool_use("c2", "external_lookup", {"q": "b"}),
+                    _tool_use("c3", "propose_facet", {"name": "target:aws"}),
+                ],
+                _Usage(10, 5),
+                stop_reason="tool_use",
+            ),
+            _Response(
+                [_tool_use("e", _EMIT_NAME, {"greeting": "ok", "audience": "a"})],
+                _Usage(10, 5),
+            ),
+        ]
+    )
+    resp = await provider.complete_with_tools(
+        _messages(),
+        output_schema=Greeting,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        tools=[_lookup_tool()],
+        tool_executor=executor,
+        agent_label=AgentLabel.EXTRACTOR,
+        max_iterations=5,
+    )
+    assert resp.output == Greeting(greeting="ok", audience="a")
+    # Every real tool call across both turns ran and is surfaced, in order.
+    assert [c.call_id for c in executor.seen] == ["c1", "c2", "c3"]
+    assert [c.call_id for c in resp.tool_calls] == ["c1", "c2", "c3"]
+
+
+class _PartialFailExecutor:
+    """Executes normally except for ``fail_id``, where ``execute`` RAISES."""
+
+    def __init__(self, fail_id: str) -> None:
+        self._fail_id = fail_id
+        self.seen: list[ToolCall] = []
+
+    async def execute(self, call: ToolCall) -> ToolResult:
+        self.seen.append(call)
+        if call.call_id == self._fail_id:
+            raise RuntimeError("nvd exploded")
+        return ToolResult(call_id=call.call_id, content="ok")
+
+
+async def test_complete_with_tools_errored_tool_still_yields_is_error_result() -> None:
+    # One of two parallel tool calls raises during execution. Its tool_result must
+    # still be present (with is_error), never dropped — else the next turn 400s.
+    # The pre-fix loop let the executor exception abort the whole call.
+    executor = _PartialFailExecutor(fail_id="c2")
+    provider = _contract_provider(
+        [
+            _Response(
+                [
+                    _tool_use("c1", "external_lookup", {"q": "a"}),
+                    _tool_use("c2", "external_lookup", {"q": "b"}),
+                ],
+                _Usage(10, 5),
+                stop_reason="tool_use",
+            ),
+            _Response(
+                [_tool_use("e", _EMIT_NAME, {"greeting": "done", "audience": "a"})],
+                _Usage(10, 5),
+            ),
+        ]
+    )
+    resp = await provider.complete_with_tools(
+        _messages(),
+        output_schema=Greeting,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        tools=[_lookup_tool()],
+        tool_executor=executor,
+        agent_label=AgentLabel.EXTRACTOR,
+        max_iterations=5,
+    )
+    assert resp.output == Greeting(greeting="done", audience="a")
+    fake: _FakeMessages = provider._client.messages  # type: ignore[union-attr]
+    results = {b["tool_use_id"]: b for b in _result_blocks(fake.calls[1]["messages"])}
+    assert set(results) == {"c1", "c2"}  # both answered, neither dropped
+    assert results["c2"]["is_error"] is True
+    assert "nvd exploded" in results["c2"]["content"]
+    assert results["c1"]["is_error"] is False
 
 
 async def test_complete_with_tools_coerces_final_output_when_model_ends_with_text() -> None:

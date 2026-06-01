@@ -308,37 +308,66 @@ class AnthropicProvider(Provider):
                     output=output, model=model, trace=trace, calls_made=calls_made, acc=acc
                 )
 
-            # The model invoked real tools: execute each, feed results back, loop.
+            # The model invoked real tools. Anthropic's contract (ADR 0029): the
+            # user message that follows an assistant turn with N ``tool_use`` blocks
+            # must contain a ``tool_result`` for EVERY one of those ids, in order,
+            # before any other content. So iterate *all* tool_use blocks in the
+            # turn — not just the real ones — and answer each. A dropped or
+            # mis-ordered block (the old loop orphaned a co-emitted emit call, and
+            # aborted on an executor exception) is the 400 that killed every run.
             convo.append({"role": "assistant", "content": content})
-            assistant_calls = [
-                ToolCall(call_id=_block_id(b), tool_name=_block_name(b), arguments=_block_input(b))
-                for b in real_uses
-            ]
+            tool_use_blocks = [b for b in content if _is_tool_use(b)]
+
+            result_blocks: list[dict[str, Any]] = []
+            turn_calls: list[ToolCall] = []
+            tool_trace: list[Message] = []
+            for block in tool_use_blocks:
+                call_id = _block_id(block)
+                if _block_name(block) == emit_name:
+                    # A premature emit alongside real tool calls: it cannot be
+                    # executed (its arguments were formed before these results), but
+                    # it still needs a tool_result so nothing dangles. Nudge the
+                    # model to re-emit once it has seen the results, then loop.
+                    result_blocks.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call_id,
+                            "content": (
+                                f"Review the tool results in this message, then call "
+                                f"{emit_name} again with your final answer."
+                            ),
+                            "is_error": False,
+                        }
+                    )
+                    continue
+                call = ToolCall(
+                    call_id=call_id,
+                    tool_name=_block_name(block),
+                    arguments=_block_input(block),
+                )
+                turn_calls.append(call)
+                content_text, is_error = await _execute_tool(tool_executor, call)
+                result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "content": content_text,
+                        "is_error": is_error,
+                    }
+                )
+                tool_trace.append(
+                    Message(role=MessageRole.TOOL, content=content_text, tool_call_id=call_id)
+                )
+
             trace.append(
                 Message(
                     role=MessageRole.ASSISTANT,
                     content=_text_of(response),
-                    tool_calls=assistant_calls,
+                    tool_calls=turn_calls,
                 )
             )
-            calls_made.extend(assistant_calls)
-
-            result_blocks: list[dict[str, Any]] = []
-            for call in assistant_calls:
-                result = await tool_executor.execute(call)
-                result_blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": call.call_id,
-                        "content": result.content,
-                        "is_error": result.is_error,
-                    }
-                )
-                trace.append(
-                    Message(
-                        role=MessageRole.TOOL, content=result.content, tool_call_id=call.call_id
-                    )
-                )
+            trace.extend(tool_trace)
+            calls_made.extend(turn_calls)
             convo.append({"role": "user", "content": result_blocks})
 
         raise ToolLoopError(
@@ -628,6 +657,26 @@ def _emit_tool(output_schema: type[BaseModel]) -> dict[str, Any]:
         ),
         "input_schema": output_schema.model_json_schema(),
     }
+
+
+async def _execute_tool(tool_executor: ToolExecutor, call: ToolCall) -> tuple[str, bool]:
+    """Run one tool call, turning an executor *exception* into an error result (ADR 0029).
+
+    Anthropic requires a ``tool_result`` for every ``tool_use``, including tools
+    whose execution failed — a dropped block triggers the 400 that aborted the
+    run. An executor that raises therefore becomes an ``is_error`` result here
+    rather than killing the loop; the model can then recover within its budget.
+    Returns ``(content, is_error)``.
+    """
+    try:
+        result = await tool_executor.execute(call)
+    # Broad by design: any executor failure must still yield a tool_result (ADR 0029).
+    except Exception as exc:
+        logger.warning(
+            "tool %s (call %s) raised during execution: %s", call.tool_name, call.call_id, exc
+        )
+        return f"tool execution failed: {exc}", True
+    return result.content, result.is_error
 
 
 def _translate_tool(tool: ToolDefinition) -> dict[str, Any]:

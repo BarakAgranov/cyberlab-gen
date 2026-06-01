@@ -698,3 +698,110 @@ pytest all pass (512 passed, exit 0; was 507 + 5 new resilience tests).
   sub-run heartbeat. Out of scope here.
 
 ---
+
+## Post-Task-8: tool-loop multi-tool-call 400 fix + Extractor-tools reality check
+
+**Date:** 2026-06-01
+**Implementer:** Phase-1 follow-up agent (provider-backed eval, tool path)
+**Time taken:** ~1 session
+**Commit:** ships in the same commit as this entry (no tag)
+**ADR:** 0029
+
+### What was built / changed (Problem 1 + 2)
+
+All 6 real provider-backed extractions failed identically with Anthropic 400
+`tool_use ids were found without tool_result blocks immediately after: toolu_...`.
+
+**Root cause:** `AnthropicProvider.complete_with_tools` appended the model's full
+assistant `content` to the conversation (which, under Claude parallel tool use,
+can hold the forced **emit** `tool_use` block *and* real tool `tool_use` blocks
+in one turn) but built `tool_result` blocks only for the *real* (`real_uses`)
+calls. A co-emitted emit block was left unanswered → 400. A second path to the
+same failure: an executor that *raised* propagated straight out, leaving a turn
+with zero `tool_result`s.
+
+**Fix (`cyberlab_gen/providers/anthropic_provider.py`):** the tool-execution
+branch now iterates **every** `tool_use` block in the turn, in order, and answers
+each in the single following user message — real tools via
+`tool_executor.execute`, a co-emitted emit via a non-error "review results, call
+emit again" nudge (it loops and re-emits cleanly), and an executor that raises
+via a new `_execute_tool` helper that converts the exception into an `is_error`
+`tool_result`. No `tool_use` is ever left without a `tool_result`.
+
+**Tests (`tests/unit/providers/test_anthropic_provider.py`):** added a
+**contract-checking fake client** that raises the real 400 when the adapter
+builds an unbalanced `messages` array, then three tests: (1) a single turn with
+2 real tools + emit — every call_id answered, in order; (2) a multi-turn sequence
+(tool → results → 2 parallel tools → emit); (3) a turn where one tool *raises* —
+its `is_error` result is still present. Confirmed (1) and (3) **fail on the
+pre-fix loop** (orphaned emit 400; uncaught `RuntimeError`) and pass after; (2)
+is multi-turn coverage and passed both. The prior single-call test (0–1 tool
+calls) is what let the bug through.
+
+### Problem 3 — what the Extractor's tools ACTUALLY return today (investigated, not assumed)
+
+The Extractor has exactly three tools (`tools.py`). Findings, with refs:
+
+- **`external_lookup` — effectively a STUB at runtime for both documented uses.**
+  Two reasons, both independent of the loop bug:
+  1. **CVE via NVD:** the executor only contacts NVD when an `NvdClient` is wired
+     (`tools.py:211` `if self._nvd_client is None:`). **Nothing wires it** — both
+     `eval/runner/cli.py::_build_provider_backed_runner` and
+     `cli/main.py:219` build `Extractor(provider=…, registry=…, registries=…)`
+     with `nvd_client` defaulting to `None`. So `external_lookup(source_id='nvd',
+     params={'cve_id': …})` returns the honest `"nvd lookup unavailable (no client
+     wired); record as requires external research"`, `found=False`
+     (`tools.py:211-220`). The real NVD API is never contacted during extraction.
+     Note: the HTTP client itself (`framework/enrichment.py::HttpxNvdClient`,
+     :241-265) **is fully implemented and real** (httpx GET against NVD v2,
+     429→rate-limit, 404→None, parses CVSS/CWE/description) — it is just never
+     injected. So this is "implemented but unwired", not "not implemented".
+  2. **MITRE technique via the local catalog:** `external_lookup` **does not read
+     the MITRE catalog at all.** It special-cases only `source_id == 'nvd'`
+     (`tools.py:192`); any other id hits `external_source(source_id)` which returns
+     `None` because `mitre_attack_techniques` is **not** an entry in
+     `registry/external_data_sources.yaml` (only `nvd` is). Result:
+     `"unknown external source id 'mitre…'"`, `is_error=True` (`tools.py:185-190`).
+     Even if it were registered, a non-nvd id returns `"source … not integrated in
+     Phase 1"`, `found=False` (`tools.py:196-201`). The real
+     `mitre_attack_techniques.yaml` **is** loaded and used — but only by the
+     framework checks (`extractor.py::_check_mitre`, `load_mitre_techniques()`)
+     and the enrichment pass (`enrichment.py::_enrich_techniques`), never by the
+     agent-callable tool.
+
+- **`propose_value_type` — REAL/working** (`tools.py:247-262`): validates args
+  into `ProposedValueType`, records to the run side-channel, returns a
+  confirmation. It records a proposal (its actual job); it does not fetch data.
+
+- **`propose_facet` — REAL/working** (`tools.py:266-294`): mechanical authority
+  gate (only `target:*` / blog-derived `lab_class_signal:*` via
+  `EXTRACTOR_FACET_CATEGORIES`, rejecting e.g. `runtime:*`), validates into
+  `ProposedFacet`, records to the side-channel.
+
+**Net:** after this loop fix, the next blog extraction's `external_lookup` calls
+will return honest *stub/empty* strings (no live CVE data, no catalog lookups);
+the two `propose_*` tools genuinely record proposals. The search-before-claim and
+CVE-hallucination framework checks consequently can't *confirm* any external_api
+CVE (no lookup ever returns `found=True`), which steers the model toward
+`unknown_from_blog` provenance — the honest posture, but worth knowing the
+extracted spec will contain no NVD-enriched CVE metadata.
+
+### Deferred / flagged to the user (NOT fixed here)
+
+- **Wire `NvdClient` into the Extractor** (and/or the enrichment pass) if live CVE
+  enrichment is wanted in the eval. Non-trivial: needs an `httpx.Client` +
+  `HttpxNvdClient` constructed and threaded through
+  `_build_provider_backed_runner` / `_build_extract_runner`, plus a key/rate-limit
+  decision (`NVD_API_KEY`). Flagged, not done — matches the "looks done, is
+  unwired" pattern the brief warned about.
+- **MITRE is not an `external_lookup`-reachable source.** If the model should be
+  able to verify technique ids via the tool (not just the post-hoc framework
+  check), `mitre_attack_techniques` needs an `external_data_sources` entry and a
+  local-catalog branch in `_external_lookup`. Architectural; flagged.
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (515 passed,
+exit 0; was 512 + 3 new multi-tool-call tests).
+
+---
