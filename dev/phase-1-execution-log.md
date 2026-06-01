@@ -361,7 +361,7 @@ internal models the agent authors, distinct from the framework-stamped audit blo
 **Date:** 2026-06-01
 **Implementer:** Claude (Opus 4.8)
 **Time taken:** ~1 session
-**Commit:** Phase 1 Task 6: Validator Layer 1 + refinement coordinator + LangGraph orchestration
+**Commit:** d05f25534208826a1e6df8f805b06afd6a06e8fd
 
 ### What was built
 
