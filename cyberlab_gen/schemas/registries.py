@@ -407,13 +407,3 @@ class MitreTechniqueCatalog(ArtifactModel):
     """
 
     entries: list[MitreTechniqueEntry] = Field(default_factory=list[MitreTechniqueEntry])
-
-
-class MitreTechniqueCatalog(ArtifactModel):
-    """The bundled MITRE ATT&CK technique catalog file shape (read locally).
-
-    Loaded via ``cyberlab_gen.registries.loader.load_mitre_techniques``; never
-    live-fetched in Phase 1. Grows by maintainer PR as the curated set grows.
-    """
-
-    entries: list[MitreTechniqueEntry] = Field(default_factory=list[MitreTechniqueEntry])

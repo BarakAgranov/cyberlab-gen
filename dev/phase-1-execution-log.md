@@ -286,3 +286,72 @@ its exit code BEFORE `git commit`. A green-looking Edit/format result is not a
 green gate. The orchestrator reads the final commit; a RED commit is a failed task.
 
 ---
+
+## Task 5: Extractor agent + Extractor-Jury agent
+
+**Date:** 2026-06-01
+**Implementer:** Claude (Opus 4.8) coding agent
+**Time taken:** ~3 h
+**Commit:** Phase 1 Task 5: Extractor + Extractor-Jury agents, tools, JuryVerdict, provenance verifier, ADR 0021, CALIBRATION
+
+### What was built
+
+The two heart-of-Phase-1 agents, both built on the Task-2 `AgentRunner`
+call surface (capability hints, never model names). `cyberlab_gen/agents/extractor/`
+holds the `Extractor` stage (typed output `AttackSpec`, `long_context_extraction`),
+its three tools (`external_lookup`/`propose_value_type`/`propose_facet`) in
+`tools.py`, and `ExtractorToolExecutor` collecting the lookup trace + proposals as
+a side-channel. `cyberlab_gen/agents/extractor_jury/` holds the `JuryVerdict`
+schema (`approve`/`revise`/`reject` with a verdict↔feedback consistency validator),
+the `verify_provenance` framework helper (per-source structural grounding + the
+external_api trace cross-check), and the `ExtractorJury` stage
+(`high_quality_reasoning`, same tool inventory). The three framework checks —
+search-before-claim, MITRE hallucination (bundled catalog), CVE hallucination (NVD)
+— run mechanically after the provider call and re-prompt within a content-level
+retry budget independent of the call surface's structural budget. Added
+`ExtractionError` to `errors.py`, in-flight `ProposedValueType`/`ProposedFacet`
+in `agents/proposals.py`, real versioned prompt files, `CALIBRATION.md` (asymmetric
+discipline recorded), ADR 0021, and 43 tests across three files (all four exit
+criteria for each agent). `just verify` green: ruff/format clean, pyright 0 errors,
+420 passed.
+
+### Surprises and friction
+
+(1) The `MockProvider` does not drive the tool-use loop — it returns the registered
+response and never invokes the `ToolExecutor`. That is actually *convenient* for
+the search-before-claim test (empty trace + an external_api field => rejection),
+and the MITRE-recovery test uses a `message_matcher` keyed on the re-prompt text to
+return a clean spec on the second attempt. But it means the executor's tool-dispatch
+logic is tested directly (`test_extractor_tools.py`), not through the provider.
+(2) **Doc-vs-code drift found and fixed:** `schemas/registries.py` still had a
+*duplicate* `MitreTechniqueCatalog` class (byte-identical, lines 402 & 412) in the
+uncommitted working tree — despite Task 4's "final" log entry claiming it was
+deduped. It tripped ruff F811 and blocked the gate; removed the second copy. The
+prior entry's dedup must have only covered `MitreTechniqueEntry`, not the `Catalog`.
+(3) The in-flight proposal shape was genuinely under-specified (docs pin only the
+overlay-resident `ProposalAuditBlock`); resolved in ADR 0021 with `Proposed*`
+internal models the agent authors, distinct from the framework-stamped audit block.
+
+### Deferred to later phases
+
+- `propose_external_source_pattern` (listed in `agents.md §5.4` but not the brief's
+  tool list) — flagged in ADR 0021, deferred. Phase 2 should reconcile the inventory.
+- Chunking for long blogs (`agents.md §5.4` notes; eval long-blog case is Task 8).
+- The Extractor→enrichment→Jury *wiring* (orchestration) is Task 6; this task ships
+  the stages and their seams, not the state machine.
+- `low_jury_confidence` / disagreement-without-progress handling lives in the
+  refinement coordinator (Task 6); the Jury only emits `retry_recommended` here.
+
+### Doc-improvement notes for the next brief writer
+
+- The two distinct Extractor retry budgets (structural-malformation vs.
+  hallucination/search-before-claim) are an implementation reality the docs don't
+  name explicitly; `architecture.md §8.4` calibration should list both.
+- `agents.md §5.4`'s tool list (`propose_external_source_pattern`) and the Task 5
+  brief's tool list disagree — reconcile.
+- Provenance-mismatch verification splits cleanly into mechanical structure-checking
+  (framework, `verify_provenance`) vs. semantic "does the passage say this" (LLM
+  in the jury prompt). `agents.md §5.5` blends them; calling out the split would
+  sharpen the contract.
+
+---

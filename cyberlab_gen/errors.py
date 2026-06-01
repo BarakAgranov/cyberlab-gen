@@ -247,6 +247,33 @@ class BotDetectedError(IngestionError):
     """
 
 
+class ExtractionError(CyberlabGenError):
+    """Extraction-stage errors (``pipeline.md §3.2.2``, ``agents.md §5.4``).
+
+    Pins ``stage='extraction'``. Raised by the Extractor stage
+    (``cyberlab_gen.agents.extractor``) when its *content-level* retry budget is
+    exhausted: the provider returned a structurally valid ``AttackSpec`` but it
+    repeatedly failed a framework check — search-before-claim (a
+    ``source: external_api`` field with no matching tool call,
+    ``schema.md §4.15``) or MITRE/CVE hallucination (an id absent from the
+    bundled MITRE catalog / NVD, ``pipeline.md §3.2.2``).
+
+    Distinct from ``AgentFailure`` (the call surface's *structural*-malformation
+    budget, ADR 0018) and from ``ProviderError`` (the provider succeeded
+    mechanically). This is a *retry* outcome, never refinement
+    (``architecture.md §1.7``). The two budgets are independent per ADR 0021.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, stage="extraction", run_id=run_id, cause=cause)
+
+
 class EnrichmentError(CyberlabGenError):
     """Pre-Planner enrichment failed in a non-recoverable way (``pipeline.md §3.2.4``).
 
