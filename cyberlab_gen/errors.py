@@ -274,6 +274,38 @@ class ExtractionError(CyberlabGenError):
         super().__init__(message, stage="extraction", run_id=run_id, cause=cause)
 
 
+class ValidationError(CyberlabGenError):
+    """A mechanical Validator layer halted the pipeline (``validation.md §6.4``).
+
+    Pins ``stage='validation'``. Raised by the orchestrator
+    (``cyberlab_gen.framework.orchestrator``) when Validator Layer 1 reports
+    structural violations that the responsible agent could not resolve within its
+    *structural-retry* budget (``validation.md §6.10``, ``architecture.md §1.7``).
+
+    Layer 1 failures route to the agent's **retry** mechanism, never to the
+    refinement coordinator (``validation.md §6.10`` — the discipline this error
+    enforces): when retry is exhausted the pipeline halts with this error rather
+    than escalating to refinement. The unresolved findings are carried as
+    ``findings`` so the run report can name every violation.
+
+    Named ``ValidationError`` per the Task-6 brief and ADR 0009. It deliberately
+    shadows the name of ``pydantic.ValidationError``; the two are never imported
+    into the same namespace (this hierarchy is framework-stage errors, Pydantic's
+    is the artifact-parse error), and the brief locks the name.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        findings: list[str] | None = None,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, stage="validation", run_id=run_id, cause=cause)
+        self.findings = findings or []
+
+
 class EnrichmentError(CyberlabGenError):
     """Pre-Planner enrichment failed in a non-recoverable way (``pipeline.md §3.2.4``).
 

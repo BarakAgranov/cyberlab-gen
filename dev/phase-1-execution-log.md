@@ -355,3 +355,67 @@ internal models the agent authors, distinct from the framework-stamped audit blo
   sharpen the contract.
 
 ---
+
+## Task 6: Validator Layer 1 + minimal refinement coordinator + orchestration
+
+**Date:** 2026-06-01
+**Implementer:** Claude (Opus 4.8)
+**Time taken:** ~1 session
+**Commit:** Phase 1 Task 6: Validator Layer 1 + refinement coordinator + LangGraph orchestration
+
+### What was built
+
+`cyberlab_gen/validators/layer1.py` (`Layer1Validator` → `Layer1Result`/`Layer1Finding`):
+static schema re-validation, `spec_kind` discriminator, and registry reference
+resolution (facets → merged registry; thesis types → closed `thesis_types`
+catalog; CVE/advisory sources → `external_data_sources`; closed-enum
+catalog-drift checks). A new `cyberlab_gen/registries/catalog_loader.py` loads
+the five closed catalogs (ADR 0016) since no loader existed yet.
+`cyberlab_gen/framework/orchestrator.py` assembles Ingestion→Extractor→
+Validator-L1→Jury→enrichment as a LangGraph `StateGraph` over a typed
+`PipelineState`, with `RefinementCoordinator`-style routing: Layer-1 failure →
+Extractor **retry** (own structural-retry budget, halt with `ValidationError` on
+exhaustion); Jury `revise` → bounded **refinement** (cap 3) → ship with
+`low_jury_confidence` on cap exhaustion; `reject` → halt (`JuryRejectionError`).
+`ValidationError` added to `errors.py`. Tests: `tests/unit/validators/test_layer1.py`
+(8) and `tests/unit/framework/test_orchestrator.py` (14) assert the retry-vs-
+refinement *path* directly (Jury never invoked while Layer 1 is red). Full suite
+442 green; `just verify` exit 0. ADRs 0022 (validator location) + 0023
+(orchestration + retry/refinement split).
+
+### Surprises and friction
+
+LangGraph **discards mutations made inside conditional-edge (routing) functions** —
+only node return values update the channel. The first cut put the counter/feedback
+bookkeeping in the routers and hit an infinite loop (recursion-limit error). Fix:
+all decisions live in nodes; routers are pure readers of a node-set `route` field
+(recorded in ADR 0023). Also, LangGraph calls `typing.get_type_hints` on the
+Pydantic state schema at build time, so the artifact types used in `PipelineState`
+fields (`ExtractionResult`/`AttackSpec`/`Layer1Result`) must be **runtime**
+imports, not `TYPE_CHECKING` — needs `# noqa: TC001`. `low_jury_confidence` was
+placed on the run-report-facing `PipelineOutcome`, not on `AttackSpec` (it is a
+framework-routing flag, not extractor content; `pipeline.md §3.2.3` puts it "in
+the run report").
+
+### Deferred to later phases
+
+- The `--interactive` post-Extractor interrupt + the four-option / per-proposal
+  menus are Task 7; the orchestrator only exposes `reject_interactive_when_headless`
+  and a mode-agnostic graph plus the outcome an interrupt would render.
+- Validator Layers 2/3/5 land beside `layer1.py` in Phase 2 (one module per layer).
+- LabManifest Layer-1 path (Phase 2); only the AttackSpec path exists now.
+- Budget-overrun interrupts, cost-ledger wiring into the loop, oscillation
+  handling, and the full refinement loop (`pipeline.md §3.2.12`) are Phase 4.
+
+### Doc-improvement notes for the next brief writer
+
+- `coding-conventions.md`/`CLAUDE.md` project map should add a `validators/`
+  subpackage line (ADR 0022) — it was anticipated by the brief but not in the map.
+- The LangGraph "routers can't mutate state" constraint is load-bearing for any
+  future orchestration task; worth a one-liner in the implementation docs so the
+  next agent doesn't rediscover it via an infinite loop.
+- The closed catalogs (ADR 0016) had no loader until this task; `registry-details.md
+  §7` could note that `catalog_loader.py` is the read path Layer 1 (and Layer 3
+  later) consults.
+
+---
