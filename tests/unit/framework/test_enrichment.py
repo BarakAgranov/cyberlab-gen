@@ -262,16 +262,20 @@ def test_cve_field_enriched_with_external_api_and_both_citations() -> None:
 
 def test_cross_tier_cvss_contradiction_is_material() -> None:
     # blog says LOW (tier 1), NVD says CRITICAL (tier 4) -> cross-tier -> material.
-    spec = _spec(cves=[_cve("CVE-2021-1", cvss=3.0, severity=Severity.LOW)])
+    spec = _spec(cves=[_cve("CVE-2021-0001", cvss=3.0, severity=Severity.LOW)])
     client = _FakeNvd(
-        {"CVE-2021-1": NvdCveData(cve_id="CVE-2021-1", cvss_score=9.8, cvss_severity="CRITICAL")}
+        {
+            "CVE-2021-0001": NvdCveData(
+                cve_id="CVE-2021-0001", cvss_score=9.8, cvss_severity="CRITICAL"
+            )
+        }
     )
     result = enrich(spec, _no_registry_config(nvd_client=client))
 
     assert len(spec.material_discrepancies) >= 1
     md = spec.material_discrepancies[0]
     assert md.source_of_record == "nvd"
-    assert "CVE-2021-1" in md.field_path
+    assert "CVE-2021-0001" in md.field_path
     # the field provenance carries the material classification + override.
     cve = spec.external_references.cves[0]  # type: ignore[union-attr]
     assert cve.severity is not None
@@ -289,9 +293,9 @@ def test_same_tier_cvss_difference_is_non_material_silent_rewrite() -> None:
     # numeric cvss_score differs but the cvss_score materiality rule (registry)
     # is "material"; severity is same-tier -> non-material. We assert the
     # severity path is the silent one.
-    spec = _spec(cves=[_cve("CVE-2021-2", severity=Severity.HIGH)])
+    spec = _spec(cves=[_cve("CVE-2021-0002", severity=Severity.HIGH)])
     client = _FakeNvd(
-        {"CVE-2021-2": NvdCveData(cve_id="CVE-2021-2", cvss_severity="HIGH", cvss_score=8.9)}
+        {"CVE-2021-0002": NvdCveData(cve_id="CVE-2021-0002", cvss_severity="HIGH", cvss_score=8.9)}
     )
     enrich(spec, _no_registry_config(nvd_client=client))
 
@@ -309,9 +313,13 @@ def test_numeric_cvss_contradiction_is_material_via_registry_rule() -> None:
     # The bundled NVD entry classifies the ``cvss_score`` field as *material*.
     # A differing numeric CVSS (blog 3.0, NVD 9.8) is therefore a material
     # discrepancy recorded both in provenance and in material_discrepancies.
-    spec = _spec(cves=[_cve("CVE-2021-9", cvss=3.0)])
+    spec = _spec(cves=[_cve("CVE-2021-0009", cvss=3.0)])
     client = _FakeNvd(
-        {"CVE-2021-9": NvdCveData(cve_id="CVE-2021-9", cvss_score=9.8, cvss_severity="CRITICAL")}
+        {
+            "CVE-2021-0009": NvdCveData(
+                cve_id="CVE-2021-0009", cvss_score=9.8, cvss_severity="CRITICAL"
+            )
+        }
     )
     enrich(spec, _no_registry_config(nvd_client=client))
 
@@ -328,17 +336,21 @@ def test_numeric_cvss_contradiction_is_material_via_registry_rule() -> None:
 
 
 def test_budget_exhaustion_skips_remaining_cves() -> None:
-    spec = _spec(cves=[_cve("CVE-2021-3"), _cve("CVE-2021-4")])
+    spec = _spec(cves=[_cve("CVE-2021-0003"), _cve("CVE-2021-0004")])
     client = _FakeNvd(
         {
-            "CVE-2021-3": NvdCveData(cve_id="CVE-2021-3", cvss_score=5.0, cvss_severity="MEDIUM"),
-            "CVE-2021-4": NvdCveData(cve_id="CVE-2021-4", cvss_score=5.0, cvss_severity="MEDIUM"),
+            "CVE-2021-0003": NvdCveData(
+                cve_id="CVE-2021-0003", cvss_score=5.0, cvss_severity="MEDIUM"
+            ),
+            "CVE-2021-0004": NvdCveData(
+                cve_id="CVE-2021-0004", cvss_score=5.0, cvss_severity="MEDIUM"
+            ),
         }
     )
     result = enrich(spec, _no_registry_config(nvd_client=client, budget=1))
 
     assert result.calls_made == 1
-    assert client.calls == ["CVE-2021-3"]  # only the first, budget then exhausted
+    assert client.calls == ["CVE-2021-0003"]  # only the first, budget then exhausted
     skipped_reasons = [s.reason for s in result.skipped]
     assert any("budget exhausted" in r for r in skipped_reasons)
 
@@ -347,7 +359,7 @@ def test_budget_exhaustion_skips_remaining_cves() -> None:
 
 
 def test_rate_limit_records_skip_and_continues() -> None:
-    spec = _spec(cves=[_cve("CVE-2021-5")])
+    spec = _spec(cves=[_cve("CVE-2021-0005")])
     client = _RateLimitedNvd()
     result = enrich(spec, _no_registry_config(nvd_client=client, budget=10))
 
@@ -402,7 +414,7 @@ def test_mitre_lookup_does_not_consume_budget() -> None:
 
 
 def test_no_client_skips_cves_as_not_integrated() -> None:
-    spec = _spec(cves=[_cve("CVE-2021-6")])
+    spec = _spec(cves=[_cve("CVE-2021-0006")])
     result = enrich(spec, _no_registry_config(nvd_client=None))
     assert result.calls_made == 0
     assert any("not integrated" in s.reason for s in result.skipped)
@@ -420,9 +432,9 @@ def test_enrichment_with_no_external_refs_is_a_noop() -> None:
 
 def test_every_enriched_field_is_external_api_authored() -> None:
     """Framework-only authorship: no enriched provenance is anything but external_api."""
-    spec = _spec(cves=[_cve("CVE-2021-7", cvss=2.0)])
+    spec = _spec(cves=[_cve("CVE-2021-0007", cvss=2.0)])
     client = _FakeNvd(
-        {"CVE-2021-7": NvdCveData(cve_id="CVE-2021-7", cvss_score=2.0, cvss_severity="LOW")}
+        {"CVE-2021-0007": NvdCveData(cve_id="CVE-2021-0007", cvss_score=2.0, cvss_severity="LOW")}
     )
     enrich(spec, _no_registry_config(nvd_client=client))
     cve = spec.external_references.cves[0]  # type: ignore[union-attr]

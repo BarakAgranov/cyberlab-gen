@@ -249,3 +249,40 @@ a "successful" Edit tool result is not proof the match landed when `old_string` 
 approximate.
 
 ---
+
+---
+
+## Task 4 (post-commit correction, final)
+
+**Date:** 2026-06-01
+**Implementer:** Claude (Opus 4.8) coding agent
+**Commit:** this commit (the one carrying this entry)
+
+The first two Task-4 commits (0aaa6d8, then a "fix enrichment wiring" follow-up)
+were each committed while `just verify` was still RED — committing before the gate
+was confirmed, twice. The root causes, all now fixed in this commit:
+
+- `MitreTechniqueEntry`/`MitreTechniqueCatalog` were declared **twice** in
+  `schemas/registries.py` (a redeclaration pyright error) — earlier "successful"
+  Edit results had not actually matched, and a later re-add stacked a duplicate.
+  One clean pair now remains.
+- `enrichment.py` imported `load_merged_registries` from `registries.loader`; it
+  lives in `registries.merge`. Fixed.
+- `EnrichmentConfig` was a slotted dataclass whose two trailing fields fell out of
+  the generated `__init__` under pytest's import path; switched to a plain
+  `@dataclass`. `MergedRegistries`/`MitreTechniqueCatalog` are imported at runtime
+  (not TYPE_CHECKING) so the dataclass field annotations resolve.
+- The NVD-response parser was rewritten with small `_as_dict`/`_as_object_list`
+  `cast` helpers so pyright strict is clean without per-line ignores.
+- The enrichment **test fixtures** used invalid CVE ids (`CVE-2021-1`); the
+  `CveId` pattern requires a 4+-digit sequence, so they were padded to
+  `CVE-2021-0001` etc. This was a test-data bug, not an enrichment-code bug.
+
+`just verify` is now genuinely green on this commit: ruff "All checks passed!",
+"67 files already formatted", pyright "0 errors", "420 passed", exit 0.
+
+**Lesson (re-stated, because it bit twice):** run the *full* `just verify` and read
+its exit code BEFORE `git commit`. A green-looking Edit/format result is not a
+green gate. The orchestrator reads the final commit; a RED commit is a failed task.
+
+---
