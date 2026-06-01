@@ -65,6 +65,9 @@ pythonVersion = "3.13"
 testpaths = ["tests"]
 # Phase 1: auto-detect `async def` tests (coding-conventions.md §8.6).
 asyncio_mode = "auto"
+# The eval harness (eval/) is top-level and NOT an installed package; put the
+# repo root on the path so tests/eval can `import eval.runner` (Task 8 / ADR 0025).
+pythonpath = ["."]
 
 [dependency-groups]
 dev = [

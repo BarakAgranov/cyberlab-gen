@@ -478,3 +478,73 @@ yet; added one in the CLI layer using the already-bundled `ruamel.yaml`.
   inline example now also applies to the new `extract` verb.
 
 ---
+
+## Task 8: Eval harness Phase 1 additions
+
+**Date:** 2026-06-01
+**Implementer:** Phase-1 Task-8 agent
+**Time taken:** ~1 session
+**Commit:** Phase 1 Task 8: eval harness (per-blog runner, metrics, jury-review tooling, report archive)
+
+### What was built
+
+The Phase-1 eval harness under `eval/runner/` (top-level, not packaged): a
+manifest loader (`manifest.py`, ADR-0014 shape), the per-run metrics +
+structural-completeness formula + per-blog aggregation (`metrics.py`,
+`eval.md §7.4`/§7.6), the per-blog runner that invokes the Extractor pipeline N=3
+times through an injectable `EvalPipelineRunner` seam (`runner.py`), the archived
+`EvalReport` + writer (`report.py`, `eval/reports/`), the manual jury-decision
+review tooling producing per-blog/overall false-approval & false-rejection rates
+(`review.py`, `eval.md §7.5`), and the `just eval` entrypoint (`cli.py`). `just
+eval` now runs the harness (offline: reports "no provider configured" and runs
+nothing; provider-backed when `ANTHROPIC_API_KEY` is set, reusing the Task-7
+production wiring). 34 new tests in `tests/eval/` incl. the required smoke test;
+`just verify` green (492 passed). The curated manifest grew from 3 dead
+placeholders to the 2 real walked blogs + one synthetic long blog
+(`long-multi-stage-cloud-campaign`) added to exercise chunking; every `walk:`
+path now resolves (test-enforced). CALIBRATION.md gained the six Phase-1 locked
+items with driving evidence (ADR 0025).
+
+### Surprises and friction
+
+No live provider exists in CI, so the harness is driven through an injectable
+runner seam (same discipline as Task 7's `ExtractRunner`, ADR 0024); the metric/
+aggregation/archive/review logic is fully tested offline, and the only
+CI-unexercised path is the live provider call itself. `RunResult` (ADR 0024)
+omits the Layer-1 result and per-run cost the metrics need, so the harness owns
+its own `BlogRunRecord` + a thin `EvalPipelineRunner` protocol rather than
+churning the locked CLI type (ADR 0025). YAML safe-load types a bare ISO date as
+`datetime.date`, not `str` — the manifest `accessed_date` field (typed per
+ADR 0014 as `ISO 8601 date | TBD`) needed a `before` validator to coerce
+date→ISO-string so both quoted and bare-date YAML forms load. Added
+`pythonpath = ["."]` to pytest config so `tests/eval` can `import eval.runner`
+(the harness is top-level, not an installed package).
+
+### Deferred to later phases
+
+- A real provider-backed `just eval` run + the first empirical calibration —
+  needs a configured provider; CALIBRATION.md locks the architecture-default
+  baseline with structural evidence and names what each value re-derives.
+- Held-out set + rotation (`held_out: []` in Phase 1) — Phase 4
+  (`implementation-plan.md §1.6`); the manifest shape already supports it.
+- Layer 2/3/5 pass-rate metrics, refinement-oscillation metrics, Critic
+  subjective scores, the jury-pass-but-Critic-fail proxy — Phase 2/3/4 when
+  their producers exist (`eval.md §7.13`).
+- Coverage-matrix emission per release (`eval.md §7.3`) — the manifest carries
+  `coverage_tags`; the matrix tooling is Phase 4.
+
+### Doc-improvement notes for the next brief writer
+
+- `eval.md §7.3` still names v1 set sizes (18 curated / 12 held-out) as if
+  Phase-1-relevant; `implementation-plan.md §4.3` ("3-5 blogs") is the Phase-1
+  truth. The §7.3 sizes are a post-launch target — worth a margin note so the
+  next implementer doesn't try to seed 18 blogs.
+- ADR 0014's manifest shape is still not promoted into `eval.md §7.3`; the
+  Task-8 brief flagged this and the loader depends on the ADR. Promoting it (or a
+  `§7.3.1`) and noting the `accessed_date` bare-YAML-date gotcha would help.
+- The "structural completeness" metric (`eval.md §7.4`) is named but not given a
+  formula; ADR 0025 pins a Phase-1 one (optional-content-block coverage). The
+  per-field `unknown_from_blog` breakdown the §7.10 schema walk wants is a Phase-4
+  refinement — worth saying so in §7.4.
+
+---

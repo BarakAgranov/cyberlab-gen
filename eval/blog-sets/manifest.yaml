@@ -1,42 +1,68 @@
-# Curated blog set manifest. Phase 0 scaffolding: three placeholder entries
-# whose `url` / `title` / `walk:` paths are TBD until a human collaborator
-# picks the blogs and writes the walks under dev/curated-blog-walks/.
+# Curated blog set manifest. Phase 1 (Task 8): grown from the Phase-0
+# placeholder skeleton to the real walked blogs plus one long blog to exercise
+# chunking (implementation-plan.md §4.3 "grow to 3-5 blogs", §4.6 long-blog
+# risk). The Phase-0 placeholders whose walks were never written have been
+# removed; every `walk:` path below now resolves to a real file under
+# dev/curated-blog-walks/ (enforced by tests/eval/test_manifest.py).
+#
 # Schema invented (eval.md §7.3 names the file but specifies no shape) —
-# see dev/decisions/0014-blog-set-manifest-schema.md.
+# see dev/decisions/0014-blog-set-manifest-schema.md (authoritative).
+# Harness-loader + per-run metrics: dev/decisions/0025-eval-harness-phase1-shape.md.
 
 spec_version: 1
 spec_kind: BlogSetManifest
 
 # Rotation generation. Bumped each release when blogs move between curated and
-# held_out. Phase 0 starts at generation 0 (pre-release).
+# held_out. Held-out rotation lands in Phase 4 (implementation-plan.md §1.6);
+# Phase 1 ships generation 0 with an empty held_out set.
 rotation_generation: 0
 
 curated:
-  - id: aws-ttp-placeholder
-    shape: aws_ttp                       # implementation-plan.md §3.2 line 180
-    url: TBD                             # filled when blog picked
-    title: TBD
-    publisher: TBD
-    accessed_date: TBD                   # ISO 8601 date (YYYY-MM-DD)
-    walk: dev/curated-blog-walks/aws-ttp-placeholder.md
-    coverage_tags: []                    # eval.md §7.3 coverage dimensions; filled when walked
-
-  - id: supply-chain-placeholder
-    shape: supply_chain                  # implementation-plan.md §3.2 line 181
-    url: TBD
-    title: TBD
-    publisher: TBD
-    accessed_date: TBD
-    walk: dev/curated-blog-walks/supply-chain-placeholder.md
-    coverage_tags: []
-
-  - id: incident-analysis-placeholder
+  - id: ai-assisted-aws-intrusion
     shape: incident_analysis             # implementation-plan.md §3.2 line 182
-    url: TBD
-    title: TBD
-    publisher: TBD
-    accessed_date: TBD
-    walk: dev/curated-blog-walks/incident-analysis-placeholder.md
-    coverage_tags: []
+    url: https://www.sysdig.com/blog/ai-assisted-cloud-intrusion-achieves-admin-access-in-8-minutes
+    title: "AI-assisted cloud intrusion achieves admin access in 8 minutes"
+    publisher: Sysdig
+    accessed_date: 2026-05-20
+    walk: dev/curated-blog-walks/ai-assisted-aws-intrusion.md
+    coverage_tags:
+      - cloud:aws
+      - shape:incident_analysis
+      - complexity:complex          # 9+ chain steps (eval.md §7.3)
+      - defender_techniques:present
+      - thesis:vulnerability_chain
 
-held_out: []                             # empty in Phase 0; populated v0.2+ per eval.md §7.3
+  - id: aws-codebuild-actor-id-regex-bypass
+    shape: supply_chain                  # implementation-plan.md §3.2 line 181
+    url: https://www.wiz.io/blog/wiz-research-codebreach-vulnerability-aws-codebuild
+    title: "CodeBreach: Infiltrating the AWS Console Supply Chain and Hijacking AWS GitHub Repositories via CodeBuild"
+    publisher: Wiz
+    accessed_date: 2026-05-20
+    walk: dev/curated-blog-walks/aws-codebuild-actor-id-regex-bypass.md
+    coverage_tags:
+      - cloud:aws
+      - platform:github
+      - shape:supply_chain
+      - complexity:medium           # 4-8 chain steps
+      - vulnerability_disclosure:present
+      - thesis:vulnerability_chain
+
+  # Long blog included to exercise the Extractor's chunking on a large input
+  # (implementation-plan.md §4.6 long-blog risk; Task-8 brief "include at least
+  # one long blog"). Synthetic: a curated long-form TTP walkthrough whose walk
+  # documents the expected chunk boundaries and ground-truth chain.
+  - id: long-multi-stage-cloud-campaign
+    shape: aws_ttp                       # implementation-plan.md §3.2 line 180
+    url: TBD                              # synthetic long-blog fixture; no live URL yet
+    title: "Long-form multi-stage cloud campaign (chunking exercise)"
+    publisher: TBD
+    accessed_date: 2026-06-01
+    walk: dev/curated-blog-walks/long-multi-stage-cloud-campaign.md
+    coverage_tags:
+      - cloud:aws
+      - shape:aws_ttp
+      - complexity:complex          # 9+ chain steps; long input
+      - long_blog:chunking
+      - thesis:ttp_chain
+
+held_out: []                             # empty in Phase 1; populated Phase 4 per eval.md §7.3 / implementation-plan.md §1.6

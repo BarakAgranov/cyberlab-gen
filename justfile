@@ -28,7 +28,7 @@ test:
     uv run pytest
 
 eval:
-    @echo "Eval harness not yet implemented; see Phase 1+."
+    uv run python -m eval.runner.cli
 
 docs:
     @echo "Doc preview not yet implemented."

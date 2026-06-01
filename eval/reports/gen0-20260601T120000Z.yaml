@@ -1,0 +1,168 @@
+spec_version: 1
+spec_kind: EvalReport
+generated_at: '2026-06-01T12:00:00Z'
+rotation_generation: 0
+runs_per_blog: 3
+provider_backed: false
+blog_ids:
+- ai-assisted-aws-intrusion
+- aws-codebuild-actor-id-regex-bypass
+- long-multi-stage-cloud-campaign
+aggregates:
+- blog_id: ai-assisted-aws-intrusion
+  runs: 3
+  shipped_count: 3
+  layer1_pass_rate: 1.0
+  mean_cost_usd: '0.01'
+  mean_completeness_score: 0.8000000000000002
+  mean_structural_completeness: 0.2857142857142857
+  median_structural_completeness: 0.2857142857142857
+  structural_completeness_cv: 0.0
+  high_variance: false
+  total_value_type_proposals: 0
+  total_facet_proposals: 0
+  mean_extras_count: 0.0
+- blog_id: aws-codebuild-actor-id-regex-bypass
+  runs: 3
+  shipped_count: 3
+  layer1_pass_rate: 1.0
+  mean_cost_usd: '0.01'
+  mean_completeness_score: 0.8000000000000002
+  mean_structural_completeness: 0.2857142857142857
+  median_structural_completeness: 0.2857142857142857
+  structural_completeness_cv: 0.0
+  high_variance: false
+  total_value_type_proposals: 0
+  total_facet_proposals: 0
+  mean_extras_count: 0.0
+- blog_id: long-multi-stage-cloud-campaign
+  runs: 3
+  shipped_count: 3
+  layer1_pass_rate: 1.0
+  mean_cost_usd: '0.01'
+  mean_completeness_score: 0.8000000000000002
+  mean_structural_completeness: 0.2857142857142857
+  median_structural_completeness: 0.2857142857142857
+  structural_completeness_cv: 0.0
+  high_variance: false
+  total_value_type_proposals: 0
+  total_facet_proposals: 0
+  mean_extras_count: 0.0
+records:
+- blog_id: ai-assisted-aws-intrusion
+  run_index: 0
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: ai-assisted-aws-intrusion
+  run_index: 1
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: ai-assisted-aws-intrusion
+  run_index: 2
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: aws-codebuild-actor-id-regex-bypass
+  run_index: 0
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: aws-codebuild-actor-id-regex-bypass
+  run_index: 1
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: aws-codebuild-actor-id-regex-bypass
+  run_index: 2
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: long-multi-stage-cloud-campaign
+  run_index: 0
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: long-multi-stage-cloud-campaign
+  run_index: 1
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
+- blog_id: long-multi-stage-cloud-campaign
+  run_index: 2
+  shipped: true
+  layer1_passed: true
+  cost_usd: '0.01'
+  completeness_score: 0.8
+  structural_completeness: 0.2857142857142857
+  value_type_proposals: 0
+  facet_proposals: 0
+  extras_count: 0
+  verdict: approve
+  low_jury_confidence: false
+  halt_reason:
