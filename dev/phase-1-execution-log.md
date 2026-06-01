@@ -484,7 +484,7 @@ yet; added one in the CLI layer using the already-bundled `ruamel.yaml`.
 **Date:** 2026-06-01
 **Implementer:** Phase-1 Task-8 agent
 **Time taken:** ~1 session
-**Commit:** Phase 1 Task 8: eval harness (per-blog runner, metrics, jury-review tooling, report archive)
+**Commit:** c9c2a714557930b431f07097884fb18916b67b0b
 
 ### What was built
 
