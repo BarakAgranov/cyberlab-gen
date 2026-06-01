@@ -14,7 +14,7 @@ Phase 0 — skeleton. Provider abstraction, Pydantic schemas, registry loaders, 
 
 ## Project map
 
-- `cyberlab_gen/` — the Python package. Subpackages: `cli/`, `framework/`, `agents/`, `schemas/`, `providers/`, `registries/`, `state/`. Cross-subpackage imports go through `__init__.py` re-exports.
+- `cyberlab_gen/` — the Python package. Subpackages: `cli/`, `framework/`, `agents/`, `schemas/`, `providers/`, `registries/`, `validators/`, `state/`. Cross-subpackage imports go through `__init__.py` re-exports. (`validators/` holds the mechanical validation layers — Phase 1 ships Layer 1 as `static_schema_validator.py`; see ADR 0022/0026.)
 - `registry/` — bundled YAML registries shipped with the package.
 - `eval/` — eval harness and curated blog sets. Top-level, sibling of `cyberlab_gen/`. Not part of the installed package.
 - `tests/` — pytest tests: `unit/`, `integration/`, `eval/`.

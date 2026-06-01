@@ -210,14 +210,14 @@ def _build_extract_runner(state: LocalState) -> "ExtractRunner":
     from cyberlab_gen.providers.anthropic_provider import AnthropicProvider
     from cyberlab_gen.providers.ranking import build_provider_registry
     from cyberlab_gen.registries.merge import load_merged_registries
-    from cyberlab_gen.validators.layer1 import Layer1Validator
+    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
     registry = build_provider_registry()
     provider = AnthropicProvider()
     registries = load_merged_registries()
     return PipelineExtractRunner(
         extractor=Extractor(provider=provider, registry=registry, registries=registries),
-        validator=Layer1Validator(registries=registries),
+        validator=StaticSchemaValidator(registries=registries),
         jury=ExtractorJury(provider=provider, registry=registry, registries=registries),
         state=state,
     )

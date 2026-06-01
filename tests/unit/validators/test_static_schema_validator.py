@@ -40,7 +40,7 @@ from cyberlab_gen.schemas.enums import (
     ReproducibilityTier,
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
-from cyberlab_gen.validators.layer1 import Layer1Code, Layer1Validator
+from cyberlab_gen.validators.static_schema_validator import StaticSchemaCode, StaticSchemaValidator
 
 _HASH = "a" * 64
 
@@ -115,8 +115,8 @@ def _spec(
     )
 
 
-def _validator() -> Layer1Validator:
-    return Layer1Validator(registries=load_merged_registries())
+def _validator() -> StaticSchemaValidator:
+    return StaticSchemaValidator(registries=load_merged_registries())
 
 
 # --- tests -----------------------------------------------------------------
@@ -136,7 +136,7 @@ def test_unknown_facet_fails() -> None:
     result = _validator().validate(spec)
     assert not result.passed
     codes = {f.code for f in result.findings}
-    assert Layer1Code.UNKNOWN_FACET in codes
+    assert StaticSchemaCode.UNKNOWN_FACET in codes
     assert any("facets[0]" in f.location for f in result.findings)
 
 
@@ -145,7 +145,7 @@ def test_unknown_thesis_type_fails() -> None:
     spec = _spec(thesis_type="totally_made_up_thesis")
     result = _validator().validate(spec)
     assert not result.passed
-    assert any(f.code is Layer1Code.UNKNOWN_THESIS_TYPE for f in result.findings)
+    assert any(f.code is StaticSchemaCode.UNKNOWN_THESIS_TYPE for f in result.findings)
 
 
 def test_unknown_external_source_in_cve_fails() -> None:
@@ -160,7 +160,7 @@ def test_unknown_external_source_in_cve_fails() -> None:
     )
     result = _validator().validate(_spec(external=external))
     assert not result.passed
-    assert any(f.code is Layer1Code.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
+    assert any(f.code is StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
 
 
 def test_unknown_external_source_in_advisory_fails() -> None:
@@ -174,7 +174,7 @@ def test_unknown_external_source_in_advisory_fails() -> None:
         ]
     )
     result = _validator().validate(_spec(external=external))
-    assert any(f.code is Layer1Code.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
+    assert any(f.code is StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
 
 
 def test_known_external_source_passes() -> None:

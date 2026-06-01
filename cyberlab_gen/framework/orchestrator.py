@@ -15,7 +15,7 @@ as a LangGraph ``StateGraph`` over a single typed ``PipelineState`` channel. Two
 distinct failure mechanisms are encoded **explicitly** (ADR 0023):
 
 * **Layer-1 (structural) failures → the Extractor's *retry* mechanism.** A
-  failing ``Layer1Result`` re-runs the Extractor with the findings as structural
+  failing ``StaticSchemaResult`` re-runs the Extractor with the findings as structural
   feedback, bounded by a per-stage structural-retry budget
   (``DEFAULT_STRUCTURAL_RETRY_ATTEMPTS``). On exhaustion the pipeline **halts**
   with ``ValidationError`` — it never escalates to refinement
@@ -55,7 +55,7 @@ from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult, enrich
 from cyberlab_gen.schemas.attack_spec import AttackSpec  # noqa: TC001
 from cyberlab_gen.schemas.base import InternalModel
-from cyberlab_gen.validators.layer1 import Layer1Result  # noqa: TC001
+from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult  # noqa: TC001
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
     from cyberlab_gen.schemas.ingestion import IngestionResult
-    from cyberlab_gen.validators.layer1 import Layer1Validator
+    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ class PipelineState(BaseModel):
 
     Holds only data (not the agent instances — those are captured by the node
     closures, ADR 0023). ``arbitrary_types_allowed`` because the in-flight
-    ``ExtractionResult`` / ``AttackSpec`` / ``Layer1Result`` / ``JuryVerdict`` are
+    ``ExtractionResult`` / ``AttackSpec`` / ``StaticSchemaResult`` / ``JuryVerdict`` are
     carried as live objects across nodes (they never serialize here — this is an
     internal runtime view, ADR 0008-style reasoning).
     """
@@ -147,7 +147,7 @@ class PipelineState(BaseModel):
     # in-flight artifacts (None until the producing node runs)
     extraction: ExtractionResult | None = None
     spec: AttackSpec | None = None
-    layer1: Layer1Result | None = None
+    layer1: StaticSchemaResult | None = None
     verdict: JuryVerdict | None = None
     enrichment: EnrichmentResult | None = None
 
@@ -248,7 +248,7 @@ class _Node(StrEnum):
 def build_pipeline(
     *,
     extractor: _ExtractorLike,
-    validator: Layer1Validator,
+    validator: StaticSchemaValidator,
     jury: _JuryLike,
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
@@ -433,7 +433,7 @@ async def run_pipeline(
     ingestion: IngestionResult,
     blog_content: str,
     extractor: Extractor,
-    validator: Layer1Validator,
+    validator: StaticSchemaValidator,
     jury: ExtractorJury,
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,

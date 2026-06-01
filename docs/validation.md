@@ -442,6 +442,19 @@ The deduplication is recorded in the iteration-causality log so the user can see
 
 The coordinator also tracks oscillation per `pipeline.md §3.2.12` (cycle / phase-level repeat / cascade) using its iteration-causality log.
 
+#### 6.10.1 The four redo mechanisms (consolidated taxonomy)
+
+The system has **four** distinct "redo" mechanisms. They were previously assembled from five sources (`pipeline.md §3.7`, `§6.10` above, and ADRs 0018/0021/0023); this is the single place that names them together. Three are *retry*; one is *refinement*; the hard rule is that they never cross.
+
+| # | Mechanism | Trigger | Owner | Class |
+|---|---|---|---|---|
+| 1 | **Transient retry** | Network/provider unreachable, timeout, transient 5xx, 429 rate-limit | Provider layer (`provider-interface.md §6.1`, `pipeline.md §3.7`) | retry |
+| 2 | **Malformed-output retry** | Response doesn't parse against the declared `output_schema` (unparseable / wrong shape) | Two layers: provider-internal re-prompt then the agent call surface's stage budget (`provider-interface.md §6.2`, ADR 0018) | retry |
+| 3 | **Grounding / search-before-claim retry** | Valid, schema-correct JSON but *ungrounded facts*: a hallucinated MITRE/CVE id, or an `external_api` field with no matching tool-call evidence | The producing agent's content-level retry (`agents.md §5.4`, `pipeline.md §3.2.2`, ADR 0021) | retry |
+| 4 | **Refinement** | A *quality* verdict from a jury or the Critic (e.g. the Extractor-Jury `revise` verdict, a validator Layer 2/3 finding, a Critic `refine`) | Refinement loop coordinator (`pipeline.md §3.2.12`, ADR 0023) | refinement |
+
+**The hard rule (`architecture.md §1.7`):** mechanisms 1–3 are **retry** — structural-flakiness recovery, stage-local budget, same-or-re-prompted input, raising the agent-failure path on exhaustion. Mechanism 4 is **refinement** — quality-driven, pipeline-wide budget, *original input plus structured feedback*. They never cross: a structural failure (1–3) never consumes refinement budget, and a quality verdict (4) is never re-run as a bare retry. In particular, a **Layer 1 failure is structural and routes to retry (mechanism 2 or 3), never refinement** (`§6.10`, first bullet); only Layer 2/3 and jury/Critic verdicts feed mechanism 4.
+
 ### 6.11 What the validator does not do
 
 A few things deliberately outside the Validator's scope:

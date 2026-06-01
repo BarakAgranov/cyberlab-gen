@@ -14,7 +14,7 @@ invocation has a live model behind it.
 
 The production runner (:class:`ProviderBackedEvalRunner`) wraps the Task-7
 ``PipelineExtractRunner`` (Ingestion → orchestrator) and the Task-6
-``Layer1Validator`` and yields a :class:`~eval.runner.metrics.BlogRunRecord` per
+``StaticSchemaValidator`` and yields a :class:`~eval.runner.metrics.BlogRunRecord` per
 run. When no provider is configured the harness reports that cleanly and runs
 nothing (it never fabricates results).
 """
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from cyberlab_gen.cli.extract import ExtractRunner
     from cyberlab_gen.providers.cost_ledger import CostLedger
-    from cyberlab_gen.validators.layer1 import Layer1Validator
+    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
     from eval.runner.manifest import BlogSetManifest
 
 #: Default repeated-run count per blog (``eval.md §7.6``; the Phase-1 exit
@@ -58,7 +58,7 @@ class ProviderBackedEvalRunner:
     """The production :class:`EvalPipelineRunner`: real Ingestion → orchestrator (ADR 0025).
 
     Wraps a Task-7 ``ExtractRunner`` (which drives Ingestion → the LangGraph
-    pipeline) plus the Task-6 ``Layer1Validator`` so the per-run record carries
+    pipeline) plus the Task-6 ``StaticSchemaValidator`` so the per-run record carries
     the Layer-1 pass/fail the ``RunResult`` omits (ADR 0024 left it off the CLI
     type). Requires a configured provider behind the runner; absent one the agents
     raise at resolve time (``provider-interface.md §6.3``) — the harness CLI guards
@@ -72,7 +72,7 @@ class ProviderBackedEvalRunner:
         self,
         *,
         extract_runner_factory: Callable[[], ExtractRunner],
-        validator: Layer1Validator,
+        validator: StaticSchemaValidator,
         url_for: Callable[[str], str],
         cost_ledger_factory: Callable[[], CostLedger],
     ) -> None:

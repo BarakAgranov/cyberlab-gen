@@ -7,22 +7,25 @@ deterministic checks and never invokes an LLM. ADR 0022 records this subpackage'
 location.
 
 Phase 1 ships Layer 1 only (static schema + registry reference resolution +
-``spec_kind`` discriminator). Layers 2/3/5 land in Phase 2 beside ``layer1`` as
-one module per layer. Each layer *returns findings*; it never routes — the
-orchestrator (``cyberlab_gen.framework.orchestrator``) reads the result and
-decides what to do (``validation.md §6.10``, ``architecture.md §1.5``).
+``spec_kind`` discriminator), implemented in ``static_schema_validator`` —
+descriptively named per ADR 0026 (the numbered ``layerN`` file/class convention
+is rejected; numbered *report keys* like ``layer_1`` are retained). Layers 2/3/5
+land in Phase 2 beside it as one descriptively-named module per layer. Each layer
+*returns findings*; it never routes — the orchestrator
+(``cyberlab_gen.framework.orchestrator``) reads the result and decides what to do
+(``validation.md §6.10``, ``architecture.md §1.5``).
 """
 
-from cyberlab_gen.validators.layer1 import (
-    Layer1Code,
-    Layer1Finding,
-    Layer1Result,
-    Layer1Validator,
+from cyberlab_gen.validators.static_schema_validator import (
+    StaticSchemaCode,
+    StaticSchemaFinding,
+    StaticSchemaResult,
+    StaticSchemaValidator,
 )
 
 __all__ = [
-    "Layer1Code",
-    "Layer1Finding",
-    "Layer1Result",
-    "Layer1Validator",
+    "StaticSchemaCode",
+    "StaticSchemaFinding",
+    "StaticSchemaResult",
+    "StaticSchemaValidator",
 ]

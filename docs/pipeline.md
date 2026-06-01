@@ -576,7 +576,7 @@ Provider calls can fail in several ways. The pipeline handles each as follows.
 
 **Quota exceeded.** Hard fail with clear error indicating which provider, what was exceeded, and what the user can do (raise quota, switch provider, retry later). Pipeline writes a checkpoint (see below) so the user can resume.
 
-**Malformed structured output.** The provider returned text that doesn't parse against the declared schema. Counted against retry budget within the stage. After 3 malformed outputs, treated as agent failure and routed to refinement-or-abandon per §3.2.12.
+**Malformed structured output.** The provider returned text that doesn't parse against the declared schema. This is handled at two layers — see `provider-interface.md §6.2` for the provider side and ADR 0018 for the resolution; the two sections describe the same model and do not conflict. First, the provider re-prompts the model internally (up to 2 attempts — initial + 1 retry) and on exhaustion raises `MalformedOutput`; that provider-internal count is *not* charged to the stage retry budget. That single `MalformedOutput` then surfaces as **one** structural failure of the stage, which the agent call surface may itself retry against the stage's structural-retry budget — this is the budget "counted against" here. When the stage budget is exhausted it is treated as agent failure and routed to refinement-or-abandon per §3.2.12. (Per `architecture.md §1.7`, this structural retry is distinct from refinement.)
 
 **Mid-pipeline provider outage.** When a provider call fails after retries are exhausted, the pipeline writes a checkpoint to `~/.cyberlab-gen/checkpoints/<run-id>/` containing:
 

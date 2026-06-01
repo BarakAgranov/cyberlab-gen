@@ -513,6 +513,10 @@ class AttackSpec(ArtifactModel):
     defenses: list[DefenseBlock] = Field(default_factory=list)
     reproducibility: ReproducibilityBlock | None = None
     gaps: list[GapEntry] = Field(default_factory=list)
+    # Populated by pre-Planner enrichment (Task 4), never by an agent; declared
+    # now per ADR 0017. See §4.9. A top-level index into the spec; the
+    # authoritative per-field record lives in each field's own Provenance.
+    material_discrepancies: list[MaterialDiscrepancy] = Field(default_factory=list)
     extraction_metadata: ExtractionMetadataBlock
 
     extras: list[ExtrasEntry] = Field(default_factory=list)
@@ -724,6 +728,8 @@ class DetectionFormatEntry(BaseModel):
 
 ### 4.5 `ExternalRefsBlock` and `RealWorldIncidentsBlock`
 
+> **CVE field — AttackSpec side.** `ExternalRefsBlock.cves` below is the **AttackSpec's** CVE list (what the Extractor found in the blog, enriched in place by the framework's pre-Planner pass). Its sibling on the *other* artifact is `CoreBlock.cve_references` on the LabManifest (§5.1) — same `CveReference` element type, different artifact. The near-identical names are intentional siblings, not duplicates. ADR 0020's choice to enrich *this* field (`external_references.cves`) in Phase 1 is correct and stands.
+
 ```python
 class ExternalRefsBlock(BaseModel):
     """schema.md §4.8."""
@@ -879,6 +885,26 @@ class ExtrasEntry(BaseModel):
     citations: list[CitationBlock] = Field(default_factory=list)
 ```
 
+### 4.9 `MaterialDiscrepancy`
+
+The element type of the top-level `material_discrepancies` list on `AttackSpec`. Shape and rationale are recorded in `dev/decisions/0017-material-discrepancies-field.md`; this section promotes that shape into the schema doc (the code is authoritative — see `cyberlab_gen/schemas/attack_spec.py`).
+
+A `MaterialDiscrepancy` is written **only by the framework's pre-Planner enrichment pass** (`pipeline.md §3.2.4`, `schema.md §4.9` framework-only-authorship), never by an agent, when an `external_api` value materially overrides a `blog_explicit` value. It is a top-level **index** into the spec for the Phase 1 run report (and the Phase 4 third review surface); it is **not** the authoritative record. The authoritative per-field audit trail stays in the target field's own `Provenance` (`discrepancy_with_blog` / `overridden_blog_value` / `discrepancy_classification`). The list holds only *material* discrepancies — non-material ones are a silent provenance rewrite — so the entry carries no classification field.
+
+```python
+class MaterialDiscrepancy(ArtifactModel):
+    """A material blog-vs-authoritative discrepancy. ADR 0017."""
+
+    # JSONPath-like locator, same convention as GapEntry.field_path
+    field_path: NonEmptyString
+    summary: NonEmptyString
+    blog_value: NonEmptyString           # the original blog_explicit value (stringified)
+    authoritative_value: NonEmptyString  # the overriding external_api value (stringified)
+    source_of_record: ExternalDataSourceId  # which external source overrode
+```
+
+`blog_value` / `authoritative_value` are stringified summaries (not `Provenance[T]`) because this is an index surface, not the typed record. `source_of_record` reuses the `ExternalDataSourceId` alias, matching `CveReference.source_of_record` (§4.5).
+
 ---
 
 ## 5. The LabManifest envelope
@@ -908,6 +934,8 @@ class LabManifest(ArtifactModel):
 ```
 
 ### 5.1 `CoreBlock`
+
+> **CVE field — LabManifest side.** `CoreBlock.cve_references` below is the **LabManifest's** CVE list. Its sibling on the *other* artifact is `ExternalRefsBlock.cves` on the AttackSpec (§4.5) — same `CveReference` element type, different artifact, not a duplicate. Pre-Planner enrichment writes the AttackSpec's `external_references.cves`, not this field (ADR 0020); the Planner carries CVE references forward into the manifest.
 
 ```python
 class CoreBlock(BaseModel):
@@ -1483,6 +1511,7 @@ This table is the cheat sheet the implementing agent uses when generating code f
 | `schema.md §4.8` thesis | `ThesisBlock` | `types` is multi-value list of `ThesisType` |
 | `schema.md §4.8` real_world_incidents | `RealWorldIncidentsBlock` | tri-state status with rules |
 | `schema.md §4.8` reproducibility (lab) | `ReproducibilityBlock` | derived; not authored |
+| `schema.md §4.8` material_discrepancies | `MaterialDiscrepancy` | top-level index; framework-written by enrichment, never an agent; see §4.9 / ADR 0017 |
 | `schema.md §4.9` provenance | `Provenance[T]` | generic envelope, every content field |
 | `schema.md §4.9` citations | `CitationBlock` | kind-discriminated |
 | `schema.md §4.10` extras | `ExtrasEntry` | escape hatch at four levels |

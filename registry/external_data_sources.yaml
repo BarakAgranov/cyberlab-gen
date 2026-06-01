@@ -21,11 +21,13 @@ entries:
             pattern: "^CVE-[0-9]{4}-[0-9]+$"
         response_schema_ref: nvd_cve_response_v2
         cache_ttl: P7D
+    # Field paths corrected to the real AttackSpec schema per ADR 0020. The former
+    # "chain.chain_steps[*].techniques.mitre[*].cve_ids[*]" path was dropped:
+    # ChainStepTechniques has no cve_ids field. Per-step CVE attribution would be a
+    # schema change (add cve_ids to ChainStepTechniques) — flagged for maintainer
+    # decision in ADR 0020, NOT made here.
     enrichment_triggers:
-      - field: "chain.chain_steps[*].techniques.mitre[*].cve_ids[*]"
-        action: lookup
-        endpoint: lookup_cve
-      - field: "external_references.cve_references[*]"
+      - field: "external_references.cves[*]"
         action: lookup
         endpoint: lookup_cve
     discrepancy_materiality_rules:

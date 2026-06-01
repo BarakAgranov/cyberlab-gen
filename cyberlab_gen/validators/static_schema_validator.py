@@ -30,7 +30,7 @@ checks, in order:
    each appears in its closed catalog so a catalog/enum drift is caught.
 
 The validator **never mutates** the spec and **never routes**: it returns a
-``Layer1Result`` of findings, and the orchestrator
+``StaticSchemaResult`` of findings, and the orchestrator
 (``cyberlab_gen.framework.orchestrator``) reads it and decides what to do
 (``architecture.md §1.5``). A failing result routes back to the Extractor's
 retry, per ``validation.md §6.10``.
@@ -71,7 +71,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Layer1Code(StrEnum):
+class StaticSchemaCode(StrEnum):
     """The kinds of structural violation Layer 1 can report (``validation.md §6.4``)."""
 
     SCHEMA_INVALID = "schema_invalid"
@@ -82,7 +82,7 @@ class Layer1Code(StrEnum):
     CATALOG_DRIFT = "catalog_drift"
 
 
-class Layer1Finding(InternalModel):
+class StaticSchemaFinding(InternalModel):
     """One Layer-1 violation: a code, a field locator, and a human-readable detail.
 
     ``location`` uses the JSONPath-like convention shared with ``GapEntry`` so a
@@ -91,7 +91,7 @@ class Layer1Finding(InternalModel):
     not an artifact.
     """
 
-    code: Layer1Code
+    code: StaticSchemaCode
     location: str
     detail: str
 
@@ -100,18 +100,18 @@ class Layer1Finding(InternalModel):
         return f"{self.code.value}@{self.location}: {self.detail}"
 
 
-class Layer1Result(InternalModel):
+class StaticSchemaResult(InternalModel):
     """The Layer-1 verdict: a pass/fail plus the findings list (``validation.md §6.9``)."""
 
     passed: bool
-    findings: list[Layer1Finding] = Field(default_factory=list[Layer1Finding])
+    findings: list[StaticSchemaFinding] = Field(default_factory=list[StaticSchemaFinding])
 
     def rendered_findings(self) -> list[str]:
         """Every finding rendered as a one-line string (for ``ValidationError``)."""
         return [f.render() for f in self.findings]
 
 
-class Layer1Validator:
+class StaticSchemaValidator:
     """Runs Validator Layer 1 over an ``AttackSpec`` (``validation.md §6.4``).
 
     Constructed with the merged registries (bundled + overlay) and, optionally,
@@ -139,8 +139,8 @@ class Layer1Validator:
 
     # --- public surface ----------------------------------------------------
 
-    def validate(self, spec: AttackSpec) -> Layer1Result:
-        """Validate ``spec`` and return a ``Layer1Result``.
+    def validate(self, spec: AttackSpec) -> StaticSchemaResult:
+        """Validate ``spec`` and return a ``StaticSchemaResult``.
 
         Runs the three Layer-1 checks in cost order: schema (cheapest, and a
         schema failure short-circuits the rest because reference resolution would
@@ -150,9 +150,9 @@ class Layer1Validator:
         """
         schema_findings = self._check_schema(spec)
         if schema_findings:
-            return Layer1Result(passed=False, findings=schema_findings)
+            return StaticSchemaResult(passed=False, findings=schema_findings)
 
-        findings: list[Layer1Finding] = []
+        findings: list[StaticSchemaFinding] = []
         findings.extend(self._check_spec_kind(spec))
         findings.extend(self._check_facets(spec))
         findings.extend(self._check_thesis_types(spec))
@@ -162,18 +162,18 @@ class Layer1Validator:
         passed = not findings
         if not passed:
             logger.info("layer 1 failed with %d finding(s)", len(findings))
-        return Layer1Result(passed=passed, findings=findings)
+        return StaticSchemaResult(passed=passed, findings=findings)
 
     # --- check 1: static schema -------------------------------------------
 
-    def _check_schema(self, spec: AttackSpec) -> list[Layer1Finding]:
+    def _check_schema(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
         """Re-validate the spec against its own model (the JSON-Schema check)."""
         try:
             AttackSpec.model_validate(spec.model_dump(mode="json", by_alias=True))
         except PydanticValidationError as exc:
             return [
-                Layer1Finding(
-                    code=Layer1Code.SCHEMA_INVALID,
+                StaticSchemaFinding(
+                    code=StaticSchemaCode.SCHEMA_INVALID,
                     location=".".join(str(p) for p in err["loc"]) or "<root>",
                     detail=err["msg"],
                 )
@@ -183,12 +183,12 @@ class Layer1Validator:
 
     # --- check 2: spec_kind discriminator ---------------------------------
 
-    def _check_spec_kind(self, spec: AttackSpec) -> list[Layer1Finding]:
+    def _check_spec_kind(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
         """The spec must declare ``spec_kind == attack_spec`` at this load point."""
         if spec.spec_kind is not SpecKind.ATTACK_SPEC:
             return [
-                Layer1Finding(
-                    code=Layer1Code.SPEC_KIND_MISMATCH,
+                StaticSchemaFinding(
+                    code=StaticSchemaCode.SPEC_KIND_MISMATCH,
                     location="spec_kind",
                     detail=(
                         f"expected spec_kind={SpecKind.ATTACK_SPEC.value!r} at the AttackSpec "
@@ -200,14 +200,14 @@ class Layer1Validator:
 
     # --- check 3: registry reference resolution ---------------------------
 
-    def _check_facets(self, spec: AttackSpec) -> list[Layer1Finding]:
+    def _check_facets(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
         """Every declared facet must resolve in the merged ``facets`` registry."""
-        findings: list[Layer1Finding] = []
+        findings: list[StaticSchemaFinding] = []
         for i, facet in enumerate(spec.facets):
             if self._registries.facet(facet) is None:
                 findings.append(
-                    Layer1Finding(
-                        code=Layer1Code.UNKNOWN_FACET,
+                    StaticSchemaFinding(
+                        code=StaticSchemaCode.UNKNOWN_FACET,
                         location=f"facets[{i}]",
                         detail=(
                             f"facet {facet!r} does not resolve in the merged facets registry "
@@ -217,18 +217,18 @@ class Layer1Validator:
                 )
         return findings
 
-    def _check_thesis_types(self, spec: AttackSpec) -> list[Layer1Finding]:
+    def _check_thesis_types(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
         """Every thesis type must resolve in the ``thesis_types`` catalog (ADR 0016)."""
         if spec.thesis is None:
             return []
         catalog = self._get_thesis_types()
         known = {e.name for e in catalog.entries}
-        findings: list[Layer1Finding] = []
+        findings: list[StaticSchemaFinding] = []
         for i, thesis_type in enumerate(spec.thesis.types):
             if thesis_type not in known:
                 findings.append(
-                    Layer1Finding(
-                        code=Layer1Code.UNKNOWN_THESIS_TYPE,
+                    StaticSchemaFinding(
+                        code=StaticSchemaCode.UNKNOWN_THESIS_TYPE,
                         location=f"thesis.types[{i}]",
                         detail=(
                             f"thesis type {thesis_type!r} is not in the bundled thesis_types "
@@ -238,9 +238,9 @@ class Layer1Validator:
                 )
         return findings
 
-    def _check_external_sources(self, spec: AttackSpec) -> list[Layer1Finding]:
+    def _check_external_sources(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
         """Every external-data-source reference must resolve in the registry."""
-        findings: list[Layer1Finding] = []
+        findings: list[StaticSchemaFinding] = []
         if spec.external_references is None:
             return findings
         for i, cve in enumerate(spec.external_references.cves):
@@ -248,8 +248,8 @@ class Layer1Validator:
                 self._registries.external_source(cve.source_of_record) is None
             ):
                 findings.append(
-                    Layer1Finding(
-                        code=Layer1Code.UNKNOWN_EXTERNAL_SOURCE,
+                    StaticSchemaFinding(
+                        code=StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE,
                         location=f"external_references.cves[{i}].source_of_record",
                         detail=(
                             f"external data source {cve.source_of_record!r} does not resolve in "
@@ -260,8 +260,8 @@ class Layer1Validator:
         for i, adv in enumerate(spec.external_references.advisories):
             if self._registries.external_source(adv.source) is None:
                 findings.append(
-                    Layer1Finding(
-                        code=Layer1Code.UNKNOWN_EXTERNAL_SOURCE,
+                    StaticSchemaFinding(
+                        code=StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE,
                         location=f"external_references.advisories[{i}].source",
                         detail=(
                             f"external data source {adv.source!r} does not resolve in the "
@@ -271,7 +271,7 @@ class Layer1Validator:
                 )
         return findings
 
-    def _check_closed_catalog_membership(self, spec: AttackSpec) -> list[Layer1Finding]:
+    def _check_closed_catalog_membership(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
         """Confirm each closed-enum value used also appears in its closed catalog.
 
         The enum already constrains the field at Pydantic-construction time; this
@@ -280,7 +280,7 @@ class Layer1Validator:
         finding here means a bundled catalog is stale, which Layer 1 surfaces
         rather than silently tolerating.
         """
-        findings: list[Layer1Finding] = []
+        findings: list[StaticSchemaFinding] = []
         severity_names = {e.name for e in self._get_severity_levels().entries}
         component_names = {e.name for e in self._get_detection_components().entries}
         format_names = {e.name for e in self._get_detection_formats().entries}
@@ -311,12 +311,12 @@ class Layer1Validator:
         mechanism: ProvisioningMechanism,
         known: set[ProvisioningMechanism],
         step_id: str,
-    ) -> list[Layer1Finding]:
+    ) -> list[StaticSchemaFinding]:
         if mechanism in known:
             return []
         return [
-            Layer1Finding(
-                code=Layer1Code.CATALOG_DRIFT,
+            StaticSchemaFinding(
+                code=StaticSchemaCode.CATALOG_DRIFT,
                 location=f"chain.chain_steps[{step_id}].provisioning_mechanism",
                 detail=(
                     f"provisioning_mechanism {mechanism.value!r} is a valid enum member but is "
@@ -334,12 +334,12 @@ class Layer1Validator:
         known_severities: set[Severity],
         known_formats: set[DetectionFormat],
         location: str,
-    ) -> list[Layer1Finding]:
-        findings: list[Layer1Finding] = []
+    ) -> list[StaticSchemaFinding]:
+        findings: list[StaticSchemaFinding] = []
         if component not in known_components:
             findings.append(
-                Layer1Finding(
-                    code=Layer1Code.CATALOG_DRIFT,
+                StaticSchemaFinding(
+                    code=StaticSchemaCode.CATALOG_DRIFT,
                     location=f"{location}.component",
                     detail=(
                         f"detection component {component.value!r} is absent from the bundled "
@@ -349,8 +349,8 @@ class Layer1Validator:
             )
         if severity not in known_severities:
             findings.append(
-                Layer1Finding(
-                    code=Layer1Code.CATALOG_DRIFT,
+                StaticSchemaFinding(
+                    code=StaticSchemaCode.CATALOG_DRIFT,
                     location=f"{location}.severity",
                     detail=(
                         f"severity {severity.value!r} is absent from the bundled severity_levels "
@@ -361,8 +361,8 @@ class Layer1Validator:
         for f_i, entry in enumerate(formats):
             if entry.format not in known_formats:
                 findings.append(
-                    Layer1Finding(
-                        code=Layer1Code.CATALOG_DRIFT,
+                    StaticSchemaFinding(
+                        code=StaticSchemaCode.CATALOG_DRIFT,
                         location=f"{location}.formats[{f_i}].format",
                         detail=(
                             f"detection format {entry.format.value!r} is absent from the bundled "
@@ -411,8 +411,8 @@ class Layer1Validator:
 
 
 __all__ = [
-    "Layer1Code",
-    "Layer1Finding",
-    "Layer1Result",
-    "Layer1Validator",
+    "StaticSchemaCode",
+    "StaticSchemaFinding",
+    "StaticSchemaResult",
+    "StaticSchemaValidator",
 ]

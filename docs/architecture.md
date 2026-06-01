@@ -257,7 +257,7 @@ When the next iteration's estimated cost would push spend past the cap, the budg
 | Budget | Stage-local (default 3 attempts) | Pipeline-wide (per the caps above) |
 | Coordinator | Stage's own retry logic | Refinement loop coordinator (`pipeline.md §3.2.12`) |
 
-Refinement is for *quality* feedback; retry is for *structural* flakiness. Schema-invalid output goes to retry, not refinement.
+Refinement is for *quality* feedback; retry is for *structural* flakiness. Schema-invalid output goes to retry, not refinement. For the full operational breakdown — the four distinct redo mechanisms (transient, malformed-output, grounding/search-before-claim retries, and refinement), each with its trigger and owner — see `validation.md §6.10.1`.
 
 **Stopping strategies are pluggable.** v1 ships three: fixed-N iterations (baseline), score plateau, and validator+Critic verdict. The eval harness compares them; users can select via config. See `eval.md §7.7` for the comparison methodology.
 

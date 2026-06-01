@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.schemas.ingestion import IngestionResult
     from cyberlab_gen.state.local_state import LocalState
-    from cyberlab_gen.validators.layer1 import Layer1Validator
+    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ class PipelineExtractRunner:
         self,
         *,
         extractor: Extractor,
-        validator: Layer1Validator,
+        validator: StaticSchemaValidator,
         jury: ExtractorJury,
         state: LocalState | None = None,
     ) -> None:

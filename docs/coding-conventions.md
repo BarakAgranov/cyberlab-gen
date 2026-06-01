@@ -346,6 +346,19 @@ For schema validation and registry merge logic, use `hypothesis` to generate edg
 
 Async test functions use `pytest-asyncio` with `asyncio_mode = "auto"` set in `[tool.pytest.ini_options]`. Tests defined with `async def` are auto-detected; no decorator required. Use `pytest.mark.asyncio` only when overriding mode for a specific test (rare).
 
+### 8.7 Injectable seams at live boundaries
+
+Every boundary that crosses a **live LLM provider or the network** gets an injectable seam: define the dependency as a `Protocol` (or accept it as a constructor argument), ship a production implementation, and substitute a test fake or transport double in tests. The surrounding logic must be exercisable offline — no API key, no network, deterministic — so the only thing a real-provider run adds is the provider's own behavior, never first coverage of the logic around it.
+
+This is a hard convention, not a preference: it is why Phase 1's pipeline, extract verb, and eval harness are fully tested without a configured provider. Established precedents to copy:
+
+- **Ingestion** injects an `httpx.Client`; tests drive it with `httpx.MockTransport` (no real fetch). Recorded cassettes (`§8.4`) cover the one real-HTTP happy path. (`dev/decisions/0019-ingestion-fetch-injection-and-failure-fixtures.md`.)
+- **Agent call surface** takes a `Provider`; tests use `MockProvider` and a deliberately-failing double for the structural-retry path. (`dev/decisions/0018-agent-call-surface-structural-retry.md`.)
+- **`extract` verb** runs behind an `ExtractRunner` Protocol; tests supply a fake runner so every menu/branch is covered without the pipeline. (`dev/decisions/0024-extract-verb-runner-seam-and-interrupt.md`.)
+- **Eval harness** runs behind an `EvalPipelineRunner` seam; the harness and metrics are tested offline, and a real provider only swaps in the production runner. (`dev/decisions/0025-eval-harness-phase1-shape.md`.)
+
+A boundary that hits a live provider or the network without such a seam is a reviewable defect: it forces a key/network into the test path and tends to leave the surrounding logic uncovered.
+
 ---
 
 ## 9. Async, concurrency, IO

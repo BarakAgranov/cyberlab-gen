@@ -150,12 +150,12 @@ def _build_provider_backed_runner(
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.providers.ranking import build_provider_registry
     from cyberlab_gen.registries.merge import load_merged_registries
-    from cyberlab_gen.validators.layer1 import Layer1Validator
+    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
     from eval.runner.runner import ProviderBackedEvalRunner
 
     registry = build_provider_registry()
     registries = load_merged_registries()
-    validator = Layer1Validator(registries=registries)
+    validator = StaticSchemaValidator(registries=registries)
 
     def url_for(blog_id: str) -> str:
         entry = manifest.entry(blog_id)

@@ -62,7 +62,7 @@ from cyberlab_gen.schemas.enums import (
 )
 from cyberlab_gen.schemas.ingestion import IngestionResult
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
-from cyberlab_gen.validators.layer1 import Layer1Validator
+from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
@@ -196,8 +196,8 @@ class _FakeJury:
         return self._verdicts[idx]
 
 
-def _validator() -> Layer1Validator:
-    return Layer1Validator(registries=load_merged_registries())
+def _validator() -> StaticSchemaValidator:
+    return StaticSchemaValidator(registries=load_merged_registries())
 
 
 # --- tests -----------------------------------------------------------------

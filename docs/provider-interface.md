@@ -537,13 +537,17 @@ If retries are exhausted, the provider raises `ProviderError.TransientFailure` a
 
 ### 6.2 Malformed structured output
 
-When the provider returns text that doesn't parse against `output_schema`:
+When the provider returns text that doesn't parse against `output_schema`, retries happen at **two distinct layers**. This is the two-layer model resolved in `dev/decisions/0018-agent-call-surface-structural-retry.md`; `pipeline.md §3.7` describes the same two layers from the stage's side, and the two sections should be read together.
 
-- Retry up to 3 times (initial + 2 retries).
+**Layer A — provider-internal malformed-output retry (this layer).** The provider re-prompts the model with the previous parse error:
+
+- Retry up to 2 times (initial + 1 retry). The default was lowered from 3 to 2 to cap the worst-case provider call count for a persistently malformed stream (ADR 0018).
 - Each retry passes the previous parse error back to the model as a system-side note ("Your previous response did not match the schema; here is the error: ...").
-- Final failure raises `ProviderError.MalformedOutput`. Per `pipeline.md §3.7`, the framework routes this as agent failure.
+- On exhaustion the provider raises `ProviderError.MalformedOutput`.
 
-The retry count for malformed output is *not* counted against the agent's stage retry budget — the architecture treats parse failures as provider-layer concerns, distinct from agent-quality concerns. This matches the `architecture.md §1.1` retry-vs-refinement distinction.
+This provider-internal retry count is *not* charged to the agent's stage retry budget — parse-failure re-prompting is a provider-layer concern, distinct from agent-quality concerns. This matches the `architecture.md §1.7` retry-vs-refinement distinction.
+
+**Layer B — agent-stage structural retry (the call surface).** A `ProviderError.MalformedOutput` from Layer A surfaces to the agent call surface (`cyberlab_gen.agents.call_surface`) as **one** stage-level structural failure. The call surface may itself re-invoke the whole stage up to its own structural-retry budget (this is the budget `pipeline.md §3.7` means by "counted against the retry budget"). Only when *that* budget is exhausted does it raise the agent-failure path (`errors.AgentFailure`), which the orchestrator routes to refinement-or-abandon per `pipeline.md §3.2.12`. This is still structural retry, never refinement.
 
 ### 6.3 Hard failures
 
@@ -733,7 +737,7 @@ cost:
 
 retries:
   transient_max_attempts: 3         # tunable per pipeline.md §3.7
-  malformed_output_max_attempts: 3
+  malformed_output_max_attempts: 2  # provider-internal; default 2 (initial + 1 retry) per §6.2 / ADR 0018
   base_delay_seconds: 1
   exponential_factor: 2
 ```
