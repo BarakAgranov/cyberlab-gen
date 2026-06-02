@@ -805,3 +805,93 @@ extracted spec will contain no NVD-enriched CVE metadata.
 exit 0; was 512 + 3 new multi-tool-call tests).
 
 ---
+
+## Post-Task-8: tool-loop 400 (third attempt) — instrument first, + eval spend guards
+
+**Date:** 2026-06-02
+**Implementer:** Phase-1 follow-up agent (provider-backed eval, tool path, third pass)
+**Time taken:** ~1 session
+**Commits:** two — (1) instrumentation; (2) spend guards. No tag.
+**ADR:** 0030 (spend guards). Instrumentation is temporary (no ADR).
+
+### What happened
+
+The tool-loop 400 persisted after two fixes. Diagnostic from the user: N varies
+(`messages.7` five runs, `messages.5` once), one `toolu_` id unanswered each time
+— so the malformed turn moves with how many tool calls the model makes, and the
+two prior fixes were tested against a fake that didn't reproduce the real
+multi-tool-call turn shape. Per instruction: **stop fixing blind; instrument and
+get the real conversation first.**
+
+### Commit 1 — instrumentation (no loop-logic change)
+
+`anthropic_provider.py`: on a non-retryable Anthropic 4xx (where the tool-loop
+400 lands), `_create` now dumps the message array to stderr via
+`_debug_summarize_messages` — one line per message: index, role, `tool_use` ids,
+`tool_result` ids, text-block count. **Roles + ids only, never content** (no
+leak). Each assistant turn whose `tool_use` ids aren't all answered in the next
+message is flagged `<<< MALFORMED`, so the offending message is obvious without
+an API round-trip. One unit test for the MALFORMED flag. The loop logic is
+unchanged — the user runs `just eval` once (fails fast at ~$0) and pastes the
+dump, which then drives the actual fix + a test matching the real shape.
+
+### Commit 2 — eval spend guards (ADR 0030)
+
+Two protections so a doomed run stops instead of burning money:
+
+1. **Fail-fast.** `BlogRunRecord.failure_kind` ("retryable"/"non_retryable"/None);
+   `ProviderBackedEvalRunner.run_once` tags `TransientFailure` retryable and any
+   other `CyberlabGenError` non-retryable. `run_blog_set` aborts after
+   `abort_after_consecutive_failures` (default 2) consecutive non-retryable
+   failures with the same **normalized** signature (`_normalize_failure` strips
+   the varying `toolu_` id / `messages.N` index / digits, so the 400's per-run
+   variation still matches). Transient blips never abort.
+2. **Cost cap** (default `$5`). `run_blog_set`/`run_eval` stop once cumulative
+   spend reaches the cap. On either abort: remaining blogs recorded `skipped`,
+   partial report archived, `eval: aborting early — …` printed; the cap + running
+   total + headroom show in the per-run progress lines.
+
+**Made the cost REAL (it was hollow).** Found that the eval's `CostLedger` was
+never fed — `cli/extract.py::_drive` does `del ledger` and the adapter sums usage
+into a private accumulator — so `BlogRunRecord.cost_usd` was always `$0` and any
+cap on it would be dormant. Rather than ship that, added
+`eval/runner/cost_recording_provider.py::CostRecordingProvider`, a `Provider`
+wrapper that records each call's costed `usage` into the per-run ledger;
+`ProviderBackedEvalRunner` now builds the ledger and hands it to
+`extract_runner_factory(ledger)`, which wires the wrapper, then reads
+`ledger.total_usd` back as real spend. Full per-attempt ledger→pipeline wiring
+remains the broader deferred task.
+
+Tests (`tests/eval/test_spend_guards.py`): fail-fast aborts on
+normalized-identical non-retryable repeats; transient + distinct failures do NOT
+abort; cost cap aborts + archives the partial; `_normalize_failure` collapses
+varying ids; `CostRecordingProvider` records real cost.
+
+### external_lookup investigation — restated (asked again)
+
+- **`external_lookup` is effectively a STUB at runtime for both documented uses.**
+  CVE/NVD: the `NvdClient` is never wired into the Extractor (both eval and CLI
+  build `Extractor(...)` with `nvd_client=None`), so a CVE lookup returns
+  `"nvd lookup unavailable (no client wired)"`, `found=False` (`tools.py:211-220`).
+  The `HttpxNvdClient` (`enrichment.py:241-265`) is real but unwired. MITRE:
+  `external_lookup` never reads the catalog and `mitre_attack_techniques` is not
+  an `external_data_sources` entry, so a technique lookup returns
+  `"unknown external source id"` (`tools.py:185-190`).
+- **`propose_value_type` / `propose_facet` are REAL** — they validate + record
+  proposals (with the `target:*`/`lab_class_signal:*` authority gate on facets).
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (524 passed,
+exit 0; was 515 + 1 instrumentation test + 8 spend-guard tests).
+
+### Deferred / flagged to the user
+
+- The tool-loop 400 root cause is **not yet fixed** — waiting on the real dumped
+  conversation (Step 2/3). The spend guards bound the damage meanwhile.
+- Wiring `NvdClient` into the Extractor and making MITRE `external_lookup`-reachable
+  remain flagged (see the prior entry); not done here.
+- Full per-attempt ledger→pipeline cost wiring remains deferred; the wrapper
+  captures per-call totals, which is what the cap needs.
+
+---

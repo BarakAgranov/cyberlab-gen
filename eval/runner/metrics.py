@@ -86,6 +86,12 @@ class BlogRunRecord(InternalModel):
     verdict: Verdict
     low_jury_confidence: bool = False
     halt_reason: str | None = None
+    #: For a failed run, whether the failure is ``"retryable"`` (a persistent
+    #: ``TransientFailure`` — timeout/429/5xx) or ``"non_retryable"`` (a
+    #: ``HardFailure``/4xx/malformed/extraction halt). ``None`` on a clean run.
+    #: The harness's fail-fast uses this to abort only on *repeating non-retryable*
+    #: failures, never a transient blip (ADR 0030).
+    failure_kind: str | None = None
 
 
 def _mean(values: list[float]) -> float:

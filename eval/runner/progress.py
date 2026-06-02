@@ -29,7 +29,13 @@ class StderrEvalProgress:
         print(line, file=sys.stderr, flush=True)  # noqa: T201 -- progress goes to stderr
 
     def run_started(
-        self, *, ran_ids: list[str], skipped_ids: list[str], n: int, provider_backed: bool
+        self,
+        *,
+        ran_ids: list[str],
+        skipped_ids: list[str],
+        n: int,
+        provider_backed: bool,
+        cost_cap_usd: Decimal | None = None,
     ) -> None:
         mode = "provider-backed" if provider_backed else "offline"
         line = (
@@ -38,6 +44,7 @@ class StderrEvalProgress:
         )
         if skipped_ids:
             line += f"; {len(skipped_ids)} skipped: {', '.join(skipped_ids)}"
+        line += f"; cost cap {'$' + str(cost_cap_usd) if cost_cap_usd is not None else 'none'}"
         self._emit(line)
 
     def blog_run_started(
@@ -45,16 +52,32 @@ class StderrEvalProgress:
     ) -> None:
         self._emit(f"[{blog_pos}/{blog_total}] extracting {blog_id}, run {run_index + 1}/{n} ...")
 
-    def blog_run_finished(self, record: BlogRunRecord, *, n: int, cost_so_far: Decimal) -> None:
+    def blog_run_finished(
+        self,
+        record: BlogRunRecord,
+        *,
+        n: int,
+        cost_so_far: Decimal,
+        cost_cap_usd: Decimal | None = None,
+    ) -> None:
         layer1 = "pass" if record.layer1_passed else "FAIL"
+        if cost_cap_usd is not None:
+            spend = (
+                f"${cost_so_far:.4f}/${cost_cap_usd} (headroom ${cost_cap_usd - cost_so_far:.4f})"
+            )
+        else:
+            spend = f"${cost_so_far:.4f}"
         self._emit(
             f"      {record.blog_id} run {record.run_index + 1}/{n} done: "
             f"verdict={record.verdict}, layer1={layer1}, "
-            f"shipped={record.shipped}, cost so far ${cost_so_far:.4f}"
+            f"shipped={record.shipped}, cost so far {spend}"
         )
 
     def blog_skipped(self, blog_id: str, *, reason: str) -> None:
         self._emit(f"eval: SKIP {blog_id} — {reason}")
+
+    def run_aborted(self, reason: str) -> None:
+        self._emit(f"eval: aborting early — {reason}")
 
     def report_archived(self, path: Path) -> None:
         self._emit(f"eval: report archived → {path}")

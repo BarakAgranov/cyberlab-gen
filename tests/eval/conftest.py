@@ -145,6 +145,34 @@ def make_record(
     )
 
 
+def make_failure_record(
+    blog_id: str,
+    run_index: int,
+    *,
+    failure_kind: str,
+    halt_reason: str,
+    cost: str = "0",
+) -> BlogRunRecord:
+    """Build a non-shipped :class:`BlogRunRecord` for fail-fast/cost-cap tests."""
+    from eval.runner.metrics import BlogRunRecord
+
+    return BlogRunRecord(
+        blog_id=blog_id,
+        run_index=run_index,
+        shipped=False,
+        layer1_passed=False,
+        cost_usd=Decimal(cost),
+        completeness_score=0.0,
+        structural_completeness=0.0,
+        value_type_proposals=0,
+        facet_proposals=0,
+        extras_count=0,
+        verdict=Verdict.REJECT,
+        halt_reason=halt_reason,
+        failure_kind=failure_kind,
+    )
+
+
 class FakeEvalRunner(EvalPipelineRunner):
     """A scripted ``EvalPipelineRunner``: returns canned records per (blog, run).
 

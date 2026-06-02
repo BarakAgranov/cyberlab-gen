@@ -25,11 +25,13 @@ from typing import TYPE_CHECKING
 
 from eval.runner.manifest import load_manifest, walk_path
 from eval.runner.report import EvalReport, archive_report
-from eval.runner.runner import DEFAULT_N, run_blog_set
+from eval.runner.runner import DEFAULT_COST_CAP_USD, DEFAULT_N, run_blog_set
 
 if TYPE_CHECKING:
+    from decimal import Decimal
     from pathlib import Path
 
+    from cyberlab_gen.providers.cost_ledger import CostLedger
     from eval.runner.manifest import BlogSetManifest
     from eval.runner.runner import EvalPipelineRunner, EvalProgress
 
@@ -66,6 +68,7 @@ def run_eval(
     manifest_path: Path | None = None,
     reports_dir: Path | None = None,
     progress: EvalProgress | None = None,
+    cost_cap_usd: Decimal | None = DEFAULT_COST_CAP_USD,
 ) -> tuple[EvalReport, Path]:
     """Run the curated set through ``runner`` N times, archive the report, return both.
 
@@ -76,7 +79,9 @@ def run_eval(
 
     The report is archived **incrementally** — after each blog completes — so a
     crash on a later blog never loses the money already spent on the earlier ones
-    (ADR 0028). ``progress`` (when given) receives live events for stderr output.
+    (ADR 0028). The run also stops early on repeated non-retryable failures or once
+    cumulative spend reaches ``cost_cap_usd`` (ADR 0030). ``progress`` (when given)
+    receives live events for stderr output.
     """
     from eval.runner.report import REPORTS_RELDIR
 
@@ -93,6 +98,7 @@ def run_eval(
         provider_backed=provider_backed,
         on_partial=_archive_partial,
         progress=progress,
+        cost_cap_usd=cost_cap_usd,
     )
     path = archive_report(report, reports_dir=target_dir)
     if progress is not None:
@@ -136,9 +142,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from eval.runner.progress import StderrEvalProgress
 
-    runner = _build_provider_backed_runner(manifest)  # pragma: no cover - needs a live provider
+    # pragma: no cover - needs a live provider
+    runner = _build_provider_backed_runner(manifest, cost_cap_usd=DEFAULT_COST_CAP_USD)
     report, path = run_eval(  # pragma: no cover
-        runner=runner, provider_backed=True, progress=StderrEvalProgress()
+        runner=runner,
+        provider_backed=True,
+        progress=StderrEvalProgress(),
+        cost_cap_usd=DEFAULT_COST_CAP_USD,
     )
     # Final machine-readable summary stays on stdout (progress went to stderr).
     print(  # noqa: T201 # pragma: no cover
@@ -153,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _build_provider_backed_runner(
     manifest: BlogSetManifest,
+    *,
+    cost_cap_usd: Decimal | None = DEFAULT_COST_CAP_USD,
 ) -> EvalPipelineRunner:  # pragma: no cover - needs a live provider
     """Wire the production provider-backed runner (only reached with a live provider).
 
@@ -163,20 +175,21 @@ def _build_provider_backed_runner(
     the metric mapping it relies on is tested via :func:`record_from_run`.
 
     Each run gets a fresh ``ExtractRunner`` (so cached blog content from one blog
-    doesn't bleed into the next) and a fresh ``CostLedger`` (so ``cost_usd`` is
-    per-run). The URL comes from the manifest entry. A ``TBD`` URL (the synthetic
-    long-blog fixture) is skipped upstream by ``run_blog_set`` before any run, so
-    ``url_for`` never sees one; it still raises on a ``TBD`` URL as a defensive
-    backstop should it ever be called directly (ADR 0028).
+    doesn't bleed into the next). The provider is wrapped in a
+    :class:`~eval.runner.cost_recording_provider.CostRecordingProvider` so each
+    call's cost lands in the per-run ``CostLedger`` (built by the runner with the
+    cap) — giving the cost cap real spend to act on (ADR 0030). The URL comes from
+    the manifest entry; a ``TBD`` URL is skipped upstream by ``run_blog_set`` before
+    any run, so ``url_for`` never sees one (it still raises as a backstop, ADR 0028).
     """
     from cyberlab_gen.agents.extractor.extractor import Extractor
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
     from cyberlab_gen.cli.extract import PipelineExtractRunner
     from cyberlab_gen.providers.anthropic_provider import AnthropicProvider
-    from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.providers.ranking import build_provider_registry
     from cyberlab_gen.registries.merge import load_merged_registries
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
+    from eval.runner.cost_recording_provider import CostRecordingProvider
     from eval.runner.runner import ProviderBackedEvalRunner
 
     registry = build_provider_registry()
@@ -192,22 +205,21 @@ def _build_provider_backed_runner(
             )
         return entry.url
 
-    def extract_runner_factory() -> PipelineExtractRunner:
-        provider = AnthropicProvider()
+    def extract_runner_factory(ledger: CostLedger) -> PipelineExtractRunner:
+        # One wrapped provider per run, recording every call's cost into this run's
+        # ledger so ``ledger.total_usd`` (read back by the runner) is real spend.
+        provider = CostRecordingProvider(AnthropicProvider(), ledger)
         return PipelineExtractRunner(
             extractor=Extractor(provider=provider, registry=registry, registries=registries),
             validator=validator,
             jury=ExtractorJury(provider=provider, registry=registry, registries=registries),
         )
 
-    def cost_ledger_factory() -> CostLedger:
-        return CostLedger(run_id="eval", cap_usd=None)
-
     return ProviderBackedEvalRunner(
         extract_runner_factory=extract_runner_factory,
         validator=validator,
         url_for=url_for,
-        cost_ledger_factory=cost_ledger_factory,
+        cost_cap_usd=cost_cap_usd,
     )
 
 
