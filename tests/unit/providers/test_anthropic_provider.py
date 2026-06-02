@@ -656,6 +656,74 @@ async def test_complete_with_tools_errored_tool_still_yields_is_error_result() -
     assert results["c1"]["is_error"] is False
 
 
+async def test_complete_with_tools_invalid_emit_args_never_sends_dangling_emit() -> None:
+    # THE real bug (ADR 0031): the model finishes by calling emit, but its args fail
+    # schema validation. The adapter must ANSWER that emit tool_use with a
+    # tool_result before the forced-retry's next API call — never submit the dangling
+    # emit turn. The old loop appended the emit turn and handed it to the forced
+    # extract UNANSWERED, so its first request carried a trailing unanswered tool_use
+    # (the dumped "[7] assistant tool_use=[id_B]" with no [8]) → the 400.
+    executor = _Executor(content="unused")
+    provider = _contract_provider(
+        [
+            # finish-turn: emit with MISSING 'audience' → fails Greeting validation.
+            _Response([_tool_use("e1", _EMIT_NAME, {"greeting": "hi"})], _Usage(100, 20)),
+            # forced-retry turn: emit with corrected args.
+            _Response(
+                [_tool_use("e2", _EMIT_NAME, {"greeting": "done", "audience": "world"})],
+                _Usage(40, 10),
+            ),
+        ]
+    )
+    resp = await provider.complete_with_tools(
+        _messages(),
+        output_schema=Greeting,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        tools=[_lookup_tool()],
+        tool_executor=executor,
+        agent_label=AgentLabel.EXTRACTOR,
+        max_iterations=5,
+    )
+    assert resp.output == Greeting(greeting="done", audience="world")
+    # the forced-retry request ANSWERED the invalid emit's tool_use before re-asking.
+    fake: _FakeMessages = provider._client.messages  # type: ignore[union-attr]
+    result_ids = [b["tool_use_id"] for b in _result_blocks(fake.calls[1]["messages"])]
+    assert result_ids == ["e1"]
+
+
+async def test_complete_with_tools_max_iterations_raises_without_a_malformed_call() -> None:
+    # max_iterations is hit with the model still emitting tool calls. The adapter
+    # must raise ToolLoopError WITHOUT sending one more request carrying a dangling
+    # tool_use. With the contract-checking fake a dangling request surfaces as
+    # HardFailure, so getting ToolLoopError (not HardFailure) proves no malformed
+    # API call was attempted.
+    executor = _Executor(content="r")
+    provider = _contract_provider(
+        [
+            _Response(
+                [_tool_use("c1", "external_lookup", {"q": "a"})],
+                _Usage(10, 5),
+                stop_reason="tool_use",
+            ),
+            _Response(
+                [_tool_use("c2", "external_lookup", {"q": "b"})],
+                _Usage(10, 5),
+                stop_reason="tool_use",
+            ),
+        ]
+    )
+    with pytest.raises(ToolLoopError):
+        await provider.complete_with_tools(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            tools=[_lookup_tool()],
+            tool_executor=executor,
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=2,
+        )
+
+
 def test_debug_summarize_messages_flags_the_unanswered_tool_use() -> None:
     # The instrumentation must point at the malformed message: an assistant turn
     # whose tool_use id is not answered in the next message is flagged MALFORMED,

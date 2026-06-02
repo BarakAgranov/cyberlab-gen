@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import sys
 from dataclasses import dataclass
@@ -82,6 +83,11 @@ DEFAULT_MAX_TOKENS = 4096
 
 #: Anthropic tool names must match ``^[a-zA-Z0-9_-]{1,64}$``.
 _EMIT_TOOL_PREFIX = "emit_"
+
+#: Set this env var (to any non-empty value) to dump the message array to stderr
+#: on a non-retryable 4xx — the tool-loop-400 diagnostic. Off by default so normal
+#: runs are quiet (ADR 0031); the structural fix means it should no longer fire.
+_DEBUG_TOOL_LOOP_ENV = "CYBERLAB_GEN_DEBUG_TOOL_LOOP"
 
 
 @dataclass
@@ -273,12 +279,33 @@ class AnthropicProvider(Provider):
             )
 
             if emit_use is not None and not real_uses:
-                # Model chose to finish. Parse its emit call; fall back to a forced
-                # extract (with malformed-retry) if the arguments don't validate.
+                # Model chose to finish. Parse its emit call; on invalid arguments,
+                # fall back to a forced extract (with malformed-retry). CRITICAL
+                # (ADR 0031): the emit block is a ``tool_use`` too — we must ANSWER it
+                # with a ``tool_result`` before the forced extract's next API call.
+                # The old code appended the emit turn and handed it to
+                # ``_extract_structured`` *unanswered*, so its first request carried a
+                # dangling trailing ``tool_use`` → the 400 that killed every run.
                 try:
                     output = output_schema.model_validate(_block_input(emit_use))
-                except PydanticValidationError:
+                except PydanticValidationError as exc:
                     convo.append({"role": "assistant", "content": content})
+                    convo.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": _block_id(emit_use),
+                                    "content": (
+                                        f"Schema validation failed: {_short_error(exc)}. "
+                                        f"Call {emit_name} again with corrected arguments."
+                                    ),
+                                    "is_error": True,
+                                }
+                            ],
+                        }
+                    )
                     output = await self._extract_structured(
                         base_messages=convo,
                         system=system,
@@ -518,11 +545,10 @@ class AnthropicProvider(Provider):
                 if exc.status_code == 429 or exc.status_code >= 500:
                     last_exc = exc
                 else:
-                    # TEMPORARY INSTRUMENTATION (no loop-logic change): a non-retryable
-                    # 4xx (the tool-loop 400) is where the malformed message array bit
-                    # us. Dump roles + tool_use/tool_result ids per message to stderr so
-                    # the real failing conversation shape is visible. Remove once the
-                    # loop fix is verified against the dumped shape.
+                    # Opt-in diagnostic (off unless CYBERLAB_GEN_DEBUG_TOOL_LOOP is
+                    # set): on a non-retryable 4xx, dump roles + tool ids per message
+                    # so a malformed message array is visible without an API round-trip
+                    # (ADR 0031). The structural fix means it should no longer fire.
                     _dump_message_array_on_error(messages, model=model, exc=exc)
                     raise HardFailure(
                         f"Anthropic call failed ({exc.status_code}): {exc}", cause=exc
@@ -764,7 +790,14 @@ def _debug_summarize_messages(messages: list[dict[str, Any]]) -> str:
 def _dump_message_array_on_error(
     messages: list[dict[str, Any]], *, model: str, exc: object
 ) -> None:
-    """Print the message-array summary + the vendor error to stderr (instrumentation)."""
+    """Dump the message-array summary to stderr on a 4xx — only when debug is enabled.
+
+    Gated behind the :data:`_DEBUG_TOOL_LOOP_ENV` env var so normal runs are quiet
+    (ADR 0031). Left in (off by default) as a one-flag diagnostic should a future
+    malformed-array regression appear; the structural fix means it should not fire.
+    """
+    if not os.environ.get(_DEBUG_TOOL_LOOP_ENV):
+        return
     status = getattr(exc, "status_code", "?")
     summary = _debug_summarize_messages(messages)
     banner = (
@@ -774,7 +807,7 @@ def _dump_message_array_on_error(
         f"{summary}\n"
         f"=== end tool-loop debug ===\n"
     )
-    print(banner, file=sys.stderr, flush=True)  # noqa: T201 -- temporary stderr instrumentation
+    print(banner, file=sys.stderr, flush=True)  # noqa: T201 -- opt-in stderr diagnostic
     logger.error("anthropic %s tool-loop failure; message array:\n%s", status, summary)
 
 

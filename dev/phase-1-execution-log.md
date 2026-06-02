@@ -895,3 +895,69 @@ exit 0; was 515 + 1 instrumentation test + 8 spend-guard tests).
   captures per-call totals, which is what the cap needs.
 
 ---
+
+## Post-Task-8: tool-loop 400 ROOT CAUSE fixed (from the instrumentation dump)
+
+**Date:** 2026-06-02
+**Implementer:** Phase-1 follow-up agent (provider-backed eval, tool path, fix from evidence)
+**Time taken:** ~1 session
+**Commit:** ships in the same commit as this entry. No tag.
+**ADR:** 0031
+
+### The exact branch (from the real dump)
+
+The instrumentation captured the failing array: every failure's final assistant
+turn was a single `emit` `tool_use` with **no following `tool_result`**, while all
+earlier turns were paired correctly. So result-assembly was fine; the defect was
+loop control in the **finish/coercion branch** of `complete_with_tools`
+(`anthropic_provider.py`), the `emit_use is not None and not real_uses` path:
+
+```python
+except PydanticValidationError:
+    convo.append({"role": "assistant", "content": content})   # content = [emit tool_use]
+    output = await self._extract_structured(base_messages=convo, ...)  # sends the dangling emit
+```
+
+When the model finishes by calling `emit` but its arguments fail `AttackSpec`
+validation (very common for that large schema), the code appended the assistant
+turn carrying the emit `tool_use` and handed `convo` to `_extract_structured`,
+whose **first** API request then carried a trailing unanswered `tool_use` → the
+400. That is the dumped `[7] assistant tool_use=[id_B]` with no `[8]`.
+
+### The fix
+
+In that `except`, **answer the emit `tool_use` with a `tool_result`** (carrying
+the validation error) before calling `_extract_structured`, so the seed array is
+balanced and the forced retry re-asks cleanly. Invariant now held on every path:
+no request is sent whose final assistant turn has an unanswered `tool_use`.
+
+The `max_iterations` path was checked and already complies (it `raise`s
+`ToolLoopError` after the loop with no further call) — unchanged, but now locked
+by a test.
+
+### Tests (contract-checking fake that raises the real 400 on an unbalanced array)
+
+- `test_complete_with_tools_invalid_emit_args_never_sends_dangling_emit` — model
+  emits invalid args then valid; asserts the forced-retry request **answered** the
+  invalid emit's `tool_use` first. **Confirmed it fails on the old loop** (stashed
+  the fix, ran it: `HardFailure: …400… messages.N: tool_use ids were found without
+  tool_result blocks immediately after`, and the dump showed
+  `[1] assistant tool_use=['e1'] <<< MALFORMED`) and passes on the fix.
+- `test_complete_with_tools_max_iterations_raises_without_a_malformed_call` —
+  `ToolLoopError`, no malformed call. **Passes on old and new** (that path was
+  already correct; the defect was solely the emit branch). Reported honestly
+  rather than contrived to fail.
+
+### Instrumentation — gated, not removed
+
+The loud stderr message-array dump is now gated behind the
+`CYBERLAB_GEN_DEBUG_TOOL_LOOP` env var (off by default) so normal runs are quiet;
+kept as a one-flag diagnostic. The `_debug_summarize_messages` MALFORMED-flag unit
+test stays.
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (526 passed,
+exit 0; was 524 + 2 new tool-loop tests).
+
+---
