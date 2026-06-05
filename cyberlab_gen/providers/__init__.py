@@ -27,6 +27,7 @@ from cyberlab_gen.providers.base import (
     ToolResult,
 )
 from cyberlab_gen.providers.cost_ledger import (
+    DEFAULT_CATASTROPHE_CEILING_USD,
     CallOutcome,
     CostLedger,
     CostLedgerEntry,
@@ -36,6 +37,7 @@ from cyberlab_gen.providers.cost_ledger import (
     compute_cost,
     load_pricing_table,
 )
+from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
 from cyberlab_gen.providers.mock_provider import MockProvider, UnmatchedMockCall
 from cyberlab_gen.providers.ranking import (
     ModelRankings,
@@ -52,6 +54,7 @@ from cyberlab_gen.providers.retries import (
 )
 
 __all__ = [
+    "DEFAULT_CATASTROPHE_CEILING_USD",
     "MALFORMED_OUTPUT_RETRIES",
     "TRANSIENT_RETRIES",
     "AgentLabel",
@@ -60,6 +63,7 @@ __all__ = [
     "CapabilityHint",
     "CostLedger",
     "CostLedgerEntry",
+    "CostRecordingProvider",
     "CostReportBlock",
     "Message",
     "MessageRole",

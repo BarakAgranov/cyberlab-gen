@@ -27,6 +27,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
 
 from cyberlab_gen.agents.extractor_jury.schema import Verdict
+from cyberlab_gen.providers.cost_ledger import DEFAULT_CATASTROPHE_CEILING_USD
 from eval.runner.metrics import BlogAggregate, BlogRunRecord, structural_completeness
 from eval.runner.report import EvalReport, SkippedBlog
 
@@ -47,9 +48,13 @@ DEFAULT_N = 3
 #: Reason recorded for a blog skipped because it has no live URL (ADR 0028).
 _UNRESOLVED_URL_REASON = "synthetic fixture, no live URL"
 
-#: Default cumulative spend ceiling for a provider-backed eval (ADR 0030). A real
-#: run stops (and archives what it has) once cumulative spend reaches this.
-DEFAULT_COST_CAP_USD = Decimal("5")
+#: Default cumulative spend ceiling for a provider-backed eval. Reframed by ADR 0038
+#: from the earlier $5 *everyday* cap (ADR 0030) to the high *catastrophe* backstop:
+#: its only job is to stop a pathological runaway, not to be an everyday brake. Now
+#: that per-call cost is visible in the run log, the user sets an informed value once
+#: real costs are observed. Enforced mid-run (after each billed call) by
+#: ``CostRecordingProvider`` and across runs by ``run_blog_set``.
+DEFAULT_COST_CAP_USD = DEFAULT_CATASTROPHE_CEILING_USD
 
 #: Stop a *single blog* after this many *consecutive* runs fail with the same
 #: blog-specific error (ADR 0030, scope split ADR 0034). A transient blip never

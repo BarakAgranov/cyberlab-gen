@@ -231,7 +231,7 @@ def _build_provider_backed_runner(
 
     Each run gets a fresh ``ExtractRunner`` (so cached blog content from one blog
     doesn't bleed into the next). The provider is wrapped in a
-    :class:`~eval.runner.cost_recording_provider.CostRecordingProvider` so each
+    :class:`~cyberlab_gen.providers.cost_recording_provider.CostRecordingProvider` so each
     call's cost lands in the per-run ``CostLedger`` (built by the runner with the
     cap) — giving the cost cap real spend to act on (ADR 0030). The URL comes from
     the manifest entry; a ``TBD`` URL is skipped upstream by ``run_blog_set`` before
@@ -241,10 +241,10 @@ def _build_provider_backed_runner(
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
     from cyberlab_gen.cli.extract import PipelineExtractRunner
     from cyberlab_gen.providers.anthropic_provider import AnthropicProvider
+    from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
     from cyberlab_gen.providers.ranking import build_provider_registry
     from cyberlab_gen.registries.merge import load_merged_registries
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
-    from eval.runner.cost_recording_provider import CostRecordingProvider
     from eval.runner.runner import ProviderBackedEvalRunner
 
     registry = build_provider_registry()

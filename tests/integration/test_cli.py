@@ -95,12 +95,18 @@ def test_max_llm_cost_flag_sets_ledger_cap() -> None:
     assert cli_main.last_invocation_context.cost_ledger.cap_usd == Decimal("5.00")
 
 
-def test_max_llm_cost_flag_omitted_yields_no_cap() -> None:
-    """Omitting ``--max-llm-cost`` leaves the ledger cap at ``None``."""
+def test_max_llm_cost_flag_omitted_defaults_to_catastrophe_ceiling() -> None:
+    """Omitting ``--max-llm-cost`` defaults the cap to the catastrophe ceiling (ADR 0038).
+
+    Not ``None``: even without a user-set cap, a runaway must be bounded by the high
+    backstop. ``--max-llm-cost`` lets the user lower it to an informed value.
+    """
+    from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD
+
     result = runner.invoke(app, ["generate", "http://example.test"])
     assert result.exit_code == 1
     assert cli_main.last_invocation_context is not None
-    assert cli_main.last_invocation_context.cost_ledger.cap_usd is None
+    assert cli_main.last_invocation_context.cost_ledger.cap_usd == DEFAULT_CATASTROPHE_CEILING_USD
 
 
 def test_state_dir_flag_overrides_local_state_root(tmp_path: Path) -> None:

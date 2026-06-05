@@ -37,7 +37,7 @@ import typer
 from cyberlab_gen.cli import output
 from cyberlab_gen.cli.context import CliContext
 from cyberlab_gen.logging_setup import setup_logging
-from cyberlab_gen.providers import CostLedger
+from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD, CostLedger
 from cyberlab_gen.state import LocalState
 
 if TYPE_CHECKING:
@@ -143,7 +143,12 @@ def _main(  # pyright: ignore[reportUnusedFunction]
     output.set_debug(debug)
     setup_logging(debug=debug)
     state = LocalState(root=state_dir) if state_dir is not None else LocalState()
-    cap_usd: Decimal | None = Decimal(str(max_llm_cost)) if max_llm_cost is not None else None
+    # Default to the high catastrophe ceiling (ADR 0038), not "no cap": even without
+    # --max-llm-cost a runaway is bounded. --max-llm-cost lets the user set an
+    # informed lower limit once per-call costs are visible in the run log.
+    cap_usd: Decimal = (
+        Decimal(str(max_llm_cost)) if max_llm_cost is not None else DEFAULT_CATASTROPHE_CEILING_USD
+    )
     ledger = CostLedger(run_id="cli-session", cap_usd=cap_usd)
     cli_ctx = CliContext(state=state, cost_ledger=ledger)
     ctx.obj = cli_ctx
@@ -194,7 +199,7 @@ def generate(
     raise typer.Exit(code=1)
 
 
-def _build_extract_runner(state: LocalState) -> "ExtractRunner":
+def _build_extract_runner(state: LocalState, ledger: CostLedger) -> "ExtractRunner":
     """Build the production :class:`PipelineExtractRunner` (or the injected fake).
 
     The ``extract_runner_factory`` test seam (ADR 0024) lets the CLI tests supply
@@ -203,6 +208,11 @@ def _build_extract_runner(state: LocalState) -> "ExtractRunner":
     Validator Layer 1 onto the orchestrator; the agents resolve a configured
     provider and raise ``HardFailure`` (``provider-interface.md §6.3``) if none
     is configured.
+
+    The production provider is wrapped in a ``CostRecordingProvider`` bound to
+    ``ledger`` (ADR 0038) so every billed call is recorded + logged (cost visibility)
+    and the cumulative spend is capped mid-run by the catastrophe ceiling carried on
+    the ledger. The same ``ledger`` is the one the verb threads to ``run_extract``.
     """
     if extract_runner_factory is not None:
         return extract_runner_factory(state)
@@ -210,12 +220,13 @@ def _build_extract_runner(state: LocalState) -> "ExtractRunner":
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
     from cyberlab_gen.cli.extract import PipelineExtractRunner
     from cyberlab_gen.providers.anthropic_provider import AnthropicProvider
+    from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
     from cyberlab_gen.providers.ranking import build_provider_registry
     from cyberlab_gen.registries.merge import load_merged_registries
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
     registry = build_provider_registry()
-    provider = AnthropicProvider()
+    provider = CostRecordingProvider(AnthropicProvider(), ledger, purpose="cli")
     registries = load_merged_registries()
     return PipelineExtractRunner(
         extractor=Extractor(provider=provider, registry=registry, registries=registries),
@@ -259,7 +270,7 @@ def extract(
         )
     cli_ctx = ctx.obj
     assert isinstance(cli_ctx, CliContext)
-    runner = _build_extract_runner(cli_ctx.state)
+    runner = _build_extract_runner(cli_ctx.state, cli_ctx.cost_ledger)
     # ``stdin_tty_override`` is a test seam: CliRunner swaps ``sys.stdin`` for a
     # non-TTY stream during invoke, so the interactive menus can't be driven via
     # the real isatty() check. Tests set this to True to exercise them; None →

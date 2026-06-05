@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import BaseModel
 
-from eval.runner.cost_recording_provider import CostRecordingProvider
+from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
 from eval.runner.manifest import load_manifest
 from eval.runner.runner import (
     FAILURE_BLOG_FATAL,
@@ -570,6 +570,63 @@ async def test_cost_recording_provider_skips_failure_with_no_billed_usage() -> N
             max_iterations=3,
         )
     assert ledger.entries == []  # nothing billed -> nothing recorded
+
+
+async def test_cost_recording_provider_aborts_mid_run_at_catastrophe_ceiling() -> None:
+    # ADR 0038: the framework-side wrapper raises BudgetExceeded once cumulative spend
+    # crosses the ledger's cap (the high catastrophe ceiling) — the ledger never raises.
+    from cyberlab_gen.errors import BudgetExceeded
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("1.00"))
+    inner = _FakeInnerProvider(cost="0.60")
+    provider = CostRecordingProvider(inner, ledger)  # type: ignore[arg-type]
+
+    # First call: $0.60, under the $1.00 ceiling — proceeds.
+    await provider.complete(
+        [],
+        output_schema=_Out,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        agent_label=AgentLabel.EXTRACTOR,
+    )
+    # Second call: $1.20 cumulative crosses the ceiling — abort.
+    with pytest.raises(BudgetExceeded) as exc_info:
+        await provider.complete(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+    assert ledger.total_usd == Decimal("1.20")  # the crossing call is still recorded
+    assert len(ledger.entries) == 2
+    assert exc_info.value.spent_usd == Decimal("1.20")
+    assert exc_info.value.ceiling_usd == Decimal("1.00")
+    assert exc_info.value.usage is not None  # billed usage attached for honest accounting
+    assert exc_info.value.model == "m"
+
+
+async def test_cost_recording_provider_logs_each_call_with_cumulative(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # ADR 0038 cost visibility: every billed call logs cost + running cumulative.
+    import logging
+
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    provider = CostRecordingProvider(_FakeInnerProvider(cost="0.50"), ledger)  # type: ignore[arg-type]
+    with caplog.at_level(logging.INFO):
+        await provider.complete(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+    line = next((r.getMessage() for r in caplog.records if "LLM call #1" in r.getMessage()), "")
+    assert "cost=$0.50" in line
+    assert "cumulative=$0.50" in line
 
 
 def _unused_executor() -> ToolExecutor:

@@ -47,6 +47,14 @@ from cyberlab_gen.schemas.base import ArtifactModel
 
 _PER_MILLION = Decimal(1_000_000)
 
+#: The default **catastrophe ceiling** — a high, configurable backstop whose only
+#: job is to stop a pathological runaway, NOT an everyday brake (ADR 0038). It is
+#: deliberately high: a normal-but-failing run must not trip it. Once a user has
+#: observed real per-run costs (now visible per-call), they should replace this with
+#: an informed value via ``--max-llm-cost``. Enforced mid-run by the framework-side
+#: ``CostRecordingProvider`` (the ledger itself never raises, ``§5.3``).
+DEFAULT_CATASTROPHE_CEILING_USD = Decimal("25")
+
 
 class ModelPricing(ArtifactModel):
     """Per-million-token rates for one (provider, model) pair.
@@ -247,6 +255,7 @@ class CostLedger:
 
 
 __all__ = [
+    "DEFAULT_CATASTROPHE_CEILING_USD",
     "CallOutcome",
     "CostLedger",
     "CostLedgerEntry",

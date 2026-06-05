@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from decimal import Decimal
     from pathlib import Path
 
     from cyberlab_gen.providers.base import TokenUsage
@@ -186,6 +187,37 @@ class HardFailure(ProviderError):  # noqa: N818 -- name locked by provider-inter
     ``provider-interface.md`` §6.3: no retry; the framework surfaces a
     clear actionable error to the user.
     """
+
+
+class BudgetExceeded(HardFailure):
+    """The cumulative LLM spend crossed the run's cost ceiling mid-run (ADR 0038).
+
+    A non-retryable halt raised by the framework-side ``CostRecordingProvider`` after
+    a billed call pushes cumulative spend past ``CostLedger.cap_usd`` — the high
+    catastrophe ceiling whose only job is to stop a pathological runaway, not to be an
+    everyday brake. Subclasses ``HardFailure`` so the eval classifies it as
+    global-fatal (abort the whole run) and the CLI surfaces it clearly. The billed
+    ``usage``/``model`` of the call that crossed the line are attached so the spend is
+    still accounted (ADR 0033). Carries ``spent_usd``/``ceiling_usd`` for the report.
+
+    Budget-overrun decisions belong to the framework, not the ledger
+    (``provider-interface.md §5.3``): the ledger never raises; this wrapper does.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        spent_usd: Decimal | None = None,
+        ceiling_usd: Decimal | None = None,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+        usage: TokenUsage | None = None,
+        model: str | None = None,
+    ) -> None:
+        super().__init__(message, run_id=run_id, cause=cause, usage=usage, model=model)
+        self.spent_usd = spent_usd
+        self.ceiling_usd = ceiling_usd
 
 
 class CapabilityUnreachable(ProviderError):  # noqa: N818 -- name locked by provider-interface.md §6.4
