@@ -22,6 +22,7 @@ a coherent ``(provider="anthropic", model)`` pricing lookup match the
 response's reported model.
 """
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -46,6 +47,8 @@ from cyberlab_gen.providers.cost_ledger import (
     compute_cost,
     load_pricing_table,
 )
+
+logger = logging.getLogger(__name__)
 
 _PRICING_PROVIDER = "anthropic"
 _DEFAULT_MOCK_MODEL = "mock-canned"
@@ -270,7 +273,11 @@ class MockProvider(Provider):
                 model=model,
                 usage=usage,
             )
-        except KeyError:
+        except KeyError as exc:
+            # Documented mock behavior: an unpriced model returns usage unchanged
+            # (cost stays zero). Logged at DEBUG so a missing mock pricing entry is
+            # traceable rather than silently zero-costing a call.
+            logger.debug("mock: no pricing entry for model %r (%s); leaving cost at 0", model, exc)
             return usage
         return usage.model_copy(update={"cost_usd": cost})
 

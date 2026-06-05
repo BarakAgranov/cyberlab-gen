@@ -8,15 +8,22 @@ source ids and unknown tools return error results without raising.
 
 from __future__ import annotations
 
+import logging
+from typing import TYPE_CHECKING
+
 from cyberlab_gen.agents.extractor.tools import (
     TOOL_EXTERNAL_LOOKUP,
     TOOL_PROPOSE_FACET,
     TOOL_PROPOSE_VALUE_TYPE,
     ExtractorToolExecutor,
 )
+from cyberlab_gen.errors import ExternalApiRateLimitError
 from cyberlab_gen.framework.enrichment import NvdCveData
 from cyberlab_gen.providers.base import ToolCall
 from cyberlab_gen.registries.merge import load_merged_registries
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class _FakeNvd:
@@ -58,6 +65,29 @@ async def test_external_lookup_records_nvd_miss() -> None:
     )
     assert not result.is_error
     assert ex.lookups[0].found is False
+
+
+class _RateLimitedNvd:
+    def lookup_cve(self, cve_id: str) -> NvdCveData | None:
+        raise ExternalApiRateLimitError(f"nvd rate-limited for {cve_id}")
+
+
+async def test_external_lookup_rate_limit_is_recorded_and_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Graceful degradation (pipeline.md §3.2.4): a rate-limit is recorded as a
+    # skipped lookup and the run continues — but it must NOT be silently swallowed.
+    ex = _executor(_RateLimitedNvd())  # type: ignore[arg-type]
+    with caplog.at_level(logging.WARNING):
+        result = await ex.execute(
+            _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "nvd", "params": {"cve_id": "CVE-2024-0001"}})
+        )
+    assert not result.is_error  # recorded as not-found, not a hard tool error
+    assert ex.lookups[0].found is False
+    assert any(
+        "rate-limited" in r.getMessage().lower() and "CVE-2024-0001" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 async def test_external_lookup_unknown_source_is_error() -> None:

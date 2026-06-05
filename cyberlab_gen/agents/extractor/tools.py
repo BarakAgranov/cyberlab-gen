@@ -220,8 +220,13 @@ class ExtractorToolExecutor:
             return ToolResult(call_id=call.call_id, content=detail, is_error=False)
         try:
             data = self._nvd_client.lookup_cve(cve_id)
-        except ExternalApiRateLimitError:
+        except ExternalApiRateLimitError as exc:
+            # Intentional graceful degradation (pipeline.md §3.2.4): a rate-limit is
+            # recorded as a skipped lookup and the run continues, it does not fail.
+            # But it is NOT silent — log it so repeated rate-limiting is visible (and
+            # consistent with framework/enrichment.py's handler for the same error).
             detail = "external API rate-limited at enrichment time"
+            logger.warning("NVD rate-limited looking up %s: %s", cve_id, exc)
             self.lookups.append(
                 ExternalLookupRecord(
                     source_id=_NVD_SOURCE_ID, params=params, found=False, detail=detail

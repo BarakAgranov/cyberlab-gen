@@ -160,7 +160,11 @@ def main(argv: list[str] | None = None) -> int:
     that no provider is configured, and exit 0 (the manifest/walk validation still
     ran — a useful offline smoke check). An unknown ``--blog`` id exits 2.
     """
+    from cyberlab_gen.logging_setup import setup_logging
+
     args = _parse_args(argv)
+    log_path = setup_logging(run_id="eval")
+    print(f"eval: run log -> {log_path}", file=sys.stderr)  # noqa: T201
     manifest = load_manifest()
     missing = check_walks_resolve(manifest)
     if missing:

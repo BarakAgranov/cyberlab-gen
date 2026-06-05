@@ -36,6 +36,7 @@ import typer
 
 from cyberlab_gen.cli import output
 from cyberlab_gen.cli.context import CliContext
+from cyberlab_gen.logging_setup import setup_logging
 from cyberlab_gen.providers import CostLedger
 from cyberlab_gen.state import LocalState
 
@@ -140,6 +141,7 @@ def _main(  # pyright: ignore[reportUnusedFunction]
     """
     global last_invocation_context
     output.set_debug(debug)
+    setup_logging(debug=debug)
     state = LocalState(root=state_dir) if state_dir is not None else LocalState()
     cap_usd: Decimal | None = Decimal(str(max_llm_cost)) if max_llm_cost is not None else None
     ledger = CostLedger(run_id="cli-session", cap_usd=cap_usd)

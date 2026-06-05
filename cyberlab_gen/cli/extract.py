@@ -364,7 +364,13 @@ def _edit_spec_with_revalidation(spec: AttackSpec, *, editor: EditorFn) -> Attac
         try:
             return _load_spec_from_yaml(edited)
         except Exception as exc:
-            logger.info("edited AttackSpec failed structural revalidation: %s", exc)
+            # Broad by design: the user can paste arbitrary YAML into the editor, so
+            # any parse/validation failure re-prompts with the errors inlined below.
+            # Logged at WARNING with the traceback so a genuine bug surfaces in the
+            # run log rather than being silently mistaken for a user typo.
+            logger.warning(
+                "edited AttackSpec failed structural revalidation: %s", exc, exc_info=True
+            )
             comment = _errors_as_comments(exc)
             # Reopen with the errors as leading comments + the user's text below.
             text = f"{comment}\n{edited}"
@@ -435,7 +441,9 @@ def _review_one_proposal[T: (ProposedValueType, ProposedFacet)](
             data = _yaml().load(StringIO(edited))
             return parse(data)
         except Exception as exc:
-            logger.info("edited proposal failed structural revalidation: %s", exc)
+            # Broad by design (see _edit_spec): arbitrary user edits re-prompt with
+            # the errors inlined; logged with the traceback so a real bug is visible.
+            logger.warning("edited proposal failed structural revalidation: %s", exc, exc_info=True)
             text = f"{_errors_as_comments(exc)}\n{edited}"
 
 
