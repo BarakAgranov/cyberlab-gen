@@ -21,7 +21,13 @@ import pytest
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
-from cyberlab_gen.errors import HardFailure, MalformedOutput, ToolLoopError, TransientFailure
+from cyberlab_gen.errors import (
+    EmitTruncated,
+    HardFailure,
+    MalformedOutput,
+    ToolLoopError,
+    TransientFailure,
+)
 from cyberlab_gen.providers.anthropic_provider import (
     AnthropicProvider,
     _UsageAccumulator,  # pyright: ignore[reportPrivateUsage] -- the one test with no public path
@@ -896,8 +902,9 @@ async def test_complete_with_tools_surfaces_truncation_verdict_from_stop_reason(
 ) -> None:
     # Wiring: a finish-turn emit that fails validation AND carries
     # stop_reason="max_tokens" must surface the TRUNCATED verdict through the real
-    # call path (the response's stop_reason flows into the diagnostic). The forced
-    # extract then recovers so the call still completes.
+    # call path (the response's stop_reason flows into the diagnostic) AND now HALT
+    # with EmitTruncated rather than fall back to a doomed forced-extract regeneration
+    # (ADR 0033). The diagnostic verdict still logs (the dump runs before the halt).
     import logging
 
     executor = _Executor(content="unused")
@@ -908,14 +915,13 @@ async def test_complete_with_tools_surfaces_truncation_verdict_from_stop_reason(
                 _Usage(100, 4096),
                 stop_reason="max_tokens",
             ),
-            _Response(
-                [_tool_use("e2", _EMIT_NAME, {"greeting": "hi", "audience": "world"})],
-                _Usage(40, 10),
-            ),
         ]
     )
-    with caplog.at_level(logging.WARNING, logger="cyberlab_gen.providers.anthropic_provider"):
-        resp = await provider.complete_with_tools(
+    with (
+        caplog.at_level(logging.WARNING, logger="cyberlab_gen.providers.anthropic_provider"),
+        pytest.raises(EmitTruncated),
+    ):
+        await provider.complete_with_tools(
             _messages(),
             output_schema=Greeting,
             capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
@@ -924,8 +930,165 @@ async def test_complete_with_tools_surfaces_truncation_verdict_from_stop_reason(
             agent_label=AgentLabel.EXTRACTOR,
             max_iterations=5,
         )
-    assert resp.output == Greeting(greeting="hi", audience="world")
     assert "TRUNCATED" in caplog.text  # the verdict reached the log, no env var
+
+
+async def test_complete_with_tools_truncated_finish_emit_halts_without_retry() -> None:
+    # P1 (ADR 0033): the finish-turn emit fails validation AND stopped at max_tokens
+    # -> it was truncated mid-emit, not deliberately malformed. The provider must
+    # HALT with EmitTruncated immediately instead of falling back to the forced-extract
+    # regeneration (which would truncate again at the same budget and burn ~16K output
+    # tokens). A second, *valid* outcome is canned: if the provider wrongly retried it
+    # would be consumed and the call would succeed; the EmitTruncated + single-call
+    # assertion proves the doomed regeneration never happens.
+    executor = _Executor(content="unused")
+    provider = _provider(
+        [
+            _Response(
+                [_tool_use("e1", _EMIT_NAME, {"greeting": "hi"})],  # missing audience
+                _Usage(1000, 4096),
+                stop_reason="max_tokens",
+            ),
+            _Response(
+                [_tool_use("e2", _EMIT_NAME, {"greeting": "hi", "audience": "world"})],
+                _Usage(40, 10),
+            ),
+        ]
+    )
+    with pytest.raises(EmitTruncated) as exc_info:
+        await provider.complete_with_tools(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            tools=[_lookup_tool()],
+            tool_executor=executor,
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=5,
+        )
+    fake: _FakeMessages = provider._client.messages  # type: ignore[union-attr]
+    assert len(fake.calls) == 1  # halted on the first truncated emit; no regeneration
+    # The halt names the remedy so a run's halt_reason is actionable.
+    msg = str(exc_info.value)
+    assert "truncated" in msg
+    assert "raise max_tokens" in msg
+    # EmitTruncated is a MalformedOutput subtype (it IS a malformed parse) but a
+    # distinct, non-retryable kind.
+    assert isinstance(exc_info.value, MalformedOutput)
+
+
+async def test_forced_extract_truncated_emit_halts_without_spending_budget() -> None:
+    # The same halt via the no-tools forced-extract path: the first forced emit
+    # truncates (stop_reason=max_tokens), so the malformed-retry loop must bail
+    # immediately rather than spend its second attempt on a doomed regeneration.
+    provider = _provider(
+        [
+            _Response(
+                [_tool_use("t1", _EMIT_NAME, {"greeting": "hi"})],
+                _Usage(500, 4096),
+                stop_reason="max_tokens",
+            ),
+            _Response(
+                [_tool_use("t2", _EMIT_NAME, {"greeting": "hi", "audience": "world"})],
+                _Usage(40, 10),
+            ),
+        ]
+    )
+    with pytest.raises(EmitTruncated):
+        await provider.complete(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+    fake: _FakeMessages = provider._client.messages  # type: ignore[union-attr]
+    assert len(fake.calls) == 1  # bailed on the first truncated attempt
+
+
+async def test_truncation_halt_attaches_billed_usage_for_the_ledger() -> None:
+    # Accounting fix (ADR 0033): the truncated attempt WAS billed; the raised
+    # EmitTruncated carries the accumulated, costed usage + resolved model so the
+    # cost-recording layer bills it even though no ProviderResponse comes back.
+    provider = _provider(
+        [
+            _Response(
+                [_tool_use("t1", _EMIT_NAME, {"greeting": "hi"})],
+                _Usage(1000, 4096),
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    with pytest.raises(EmitTruncated) as exc_info:
+        await provider.complete(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+    exc = exc_info.value
+    assert exc.usage is not None
+    assert exc.usage.input_tokens == 1000
+    assert exc.usage.output_tokens == 4096
+    assert exc.usage.cost_usd > Decimal("0")  # real billed cost, not a placeholder zero
+    assert exc.model == _HAIKU
+
+
+async def test_malformed_exhaustion_attaches_billed_usage_for_the_ledger() -> None:
+    # A complete-but-invalid emit (NOT truncated) that exhausts the malformed budget
+    # was billed on every attempt. The raised MalformedOutput must carry that summed
+    # usage so the billed-but-raised spend is recorded (the accounting bug ADR 0033
+    # fixes), not silently dropped.
+    provider = _provider(
+        [
+            _Response([_tool_use("t1", _EMIT_NAME, {"greeting": "hi"})], _Usage(10, 5)),
+            _Response([_tool_use("t2", _EMIT_NAME, {"nope": "bad"})], _Usage(10, 5)),
+        ]
+    )
+    with pytest.raises(MalformedOutput) as exc_info:
+        await provider.complete(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+    exc = exc_info.value
+    assert not isinstance(exc, EmitTruncated)  # a content problem, not truncation
+    assert exc.usage is not None
+    assert exc.usage.input_tokens == 20  # summed across BOTH billed attempts
+    assert exc.model == _HAIKU
+
+
+async def test_tool_loop_error_attaches_billed_usage_for_the_ledger() -> None:
+    # A tool loop that never converges was billed for every iteration; the raised
+    # ToolLoopError carries that summed usage so the wasted spend is recorded.
+    executor = _Executor(content="result")
+    provider = _provider(
+        [
+            _Response(
+                [_tool_use("c1", "external_lookup", {"q": "a"})],
+                _Usage(100, 20),
+                stop_reason="tool_use",
+            ),
+            _Response(
+                [_tool_use("c2", "external_lookup", {"q": "b"})],
+                _Usage(100, 20),
+                stop_reason="tool_use",
+            ),
+        ]
+    )
+    with pytest.raises(ToolLoopError) as exc_info:
+        await provider.complete_with_tools(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            tools=[_lookup_tool()],
+            tool_executor=executor,
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=2,
+        )
+    exc = exc_info.value
+    assert exc.usage is not None
+    assert exc.usage.input_tokens == 200  # both billed iterations
+    assert exc.model == _HAIKU
 
 
 async def test_complete_with_tools_coerces_final_output_when_model_ends_with_text() -> None:

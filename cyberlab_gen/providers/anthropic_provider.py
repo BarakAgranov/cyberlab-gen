@@ -48,8 +48,10 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from cyberlab_gen.errors import (
+    EmitTruncated,
     HardFailure,
     MalformedOutput,
+    ProviderError,
     ToolLoopError,
     TransientFailure,
 )
@@ -299,14 +301,30 @@ class AnthropicProvider(Provider):
                     output = output_schema.model_validate(_block_input(emit_use))
                 except PydanticValidationError as exc:
                     triggering_error = _short_error(exc)
+                    out_tokens = _int_attr(getattr(response, "usage", None), "output_tokens")
                     _dump_emit_on_validation_error(
                         _block_input(emit_use),
                         schema_name=output_schema.__name__,
                         exc=exc,
                         stop_reason=_stop_reason(response),
-                        output_tokens=_int_attr(getattr(response, "usage", None), "output_tokens"),
+                        output_tokens=out_tokens,
                         max_tokens=tokens,
                     )
+                    # Truncation halt (ADR 0033): the emit failed validation because it
+                    # stopped at max_tokens, not because the model chose to malform it.
+                    # The forced-extract fallback below would just regenerate the same
+                    # ~max_tokens-token output and truncate again — so halt immediately
+                    # with the billed usage attached, rather than burn the retry budget.
+                    if _is_truncated(response):
+                        raise self._with_usage(
+                            _emit_truncated(
+                                schema_name=output_schema.__name__,
+                                max_tokens=tokens,
+                                output_tokens=out_tokens,
+                            ),
+                            model=model,
+                            acc=acc,
+                        ) from exc
                     convo.append({"role": "assistant", "content": content})
                     convo.append(
                         {
@@ -417,9 +435,13 @@ class AnthropicProvider(Provider):
             calls_made.extend(turn_calls)
             convo.append({"role": "user", "content": result_blocks})
 
-        raise ToolLoopError(
-            f"model still requesting tools after max_iterations={max_iterations} "
-            f"(capability={capability.value!r}, model={model!r})"
+        raise self._with_usage(
+            ToolLoopError(
+                f"model still requesting tools after max_iterations={max_iterations} "
+                f"(capability={capability.value!r}, model={model!r})"
+            ),
+            model=model,
+            acc=acc,
         )
 
     # --- structured-output extraction (forced tool use + malformed retry) --
@@ -477,14 +499,31 @@ class AnthropicProvider(Provider):
                     return output_schema.model_validate(_block_input(emit_use))
                 except PydanticValidationError as exc:
                     parse_error = _short_error(exc)
+                    out_tokens = _int_attr(getattr(response, "usage", None), "output_tokens")
                     _dump_emit_on_validation_error(
                         _block_input(emit_use),
                         schema_name=output_schema.__name__,
                         exc=exc,
                         stop_reason=_stop_reason(response),
-                        output_tokens=_int_attr(getattr(response, "usage", None), "output_tokens"),
+                        output_tokens=out_tokens,
                         max_tokens=max_tokens,
                     )
+                    # Truncation halt (ADR 0033): a forced-extract emit cut off at
+                    # max_tokens will truncate again on the next attempt — bail out of
+                    # the malformed-retry loop immediately instead of paying for a
+                    # doomed regeneration. Raised past the no-progress bail below (which
+                    # needs two attempts to see a repeat); truncation is known on the
+                    # first. Billed usage attached for the cost ledger.
+                    if _is_truncated(response):
+                        raise self._with_usage(
+                            _emit_truncated(
+                                schema_name=output_schema.__name__,
+                                max_tokens=max_tokens,
+                                output_tokens=out_tokens,
+                            ),
+                            model=model,
+                            acc=acc,
+                        ) from exc
             # No-progress early-bail (ADR 0032): the model reproduced the identical
             # error (including the one that triggered this forced extract) — paying
             # for more retries cannot help. A *different* error may signal
@@ -521,9 +560,13 @@ class AnthropicProvider(Provider):
                         ],
                     },
                 ]
-        raise MalformedOutput(
-            f"structured output did not validate against {output_schema.__name__}; "
-            f"last error: {parse_error}"
+        raise self._with_usage(
+            MalformedOutput(
+                f"structured output did not validate against {output_schema.__name__}; "
+                f"last error: {parse_error}"
+            ),
+            model=model,
+            acc=acc,
         )
 
     def _finish[T_Output: BaseModel](
@@ -598,11 +641,17 @@ class AnthropicProvider(Provider):
                     # so a malformed message array is visible without an API round-trip
                     # (ADR 0031). The structural fix means it should no longer fire.
                     _dump_message_array_on_error(messages, model=model, exc=exc)
-                    raise HardFailure(
-                        f"Anthropic call failed ({exc.status_code}): {exc}", cause=exc
+                    raise self._with_usage(
+                        HardFailure(f"Anthropic call failed ({exc.status_code}): {exc}", cause=exc),
+                        model=model,
+                        acc=acc,
                     ) from exc
             except anthropic.AnthropicError as exc:
-                raise HardFailure(f"Anthropic call failed: {exc}", cause=exc) from exc
+                raise self._with_usage(
+                    HardFailure(f"Anthropic call failed: {exc}", cause=exc),
+                    model=model,
+                    acc=acc,
+                ) from exc
             else:
                 acc.add(getattr(response, "usage", None))
                 return response
@@ -616,9 +665,14 @@ class AnthropicProvider(Provider):
                     model,
                     last_exc,
                 )
-        raise TransientFailure(
-            f"Anthropic call failed after {self._transient.max_attempts} attempts (model={model!r})",
-            cause=last_exc,
+        raise self._with_usage(
+            TransientFailure(
+                f"Anthropic call failed after {self._transient.max_attempts} attempts "
+                f"(model={model!r})",
+                cause=last_exc,
+            ),
+            model=model,
+            acc=acc,
         ) from last_exc
 
     async def _call_once(
@@ -670,6 +724,32 @@ class AnthropicProvider(Provider):
         if self._pricing is None:
             self._pricing = load_pricing_table()
         return self._pricing
+
+    def _with_usage[E: ProviderError](self, exc: E, *, model: str, acc: _UsageAccumulator) -> E:
+        """Attach the accumulated vendor-billed usage to a failing ``ProviderError``.
+
+        A structured-output call that ultimately raises (a truncated/malformed emit
+        that exhausted its retries, a tool loop that never converged, a transient
+        condition that gave up mid-loop) was still billed for every vendor call in
+        ``acc``. Finalizing that onto the exception lets the cost-recording layer
+        record the spend even though no ``ProviderResponse`` is returned, keeping the
+        ledger and the cost cap honest (ADR 0033; the accounting bug where billed-
+        but-raised calls were invisible). Best-effort: skips when nothing was billed
+        or usage is already attached, and swallows a finalize failure (missing
+        pricing) so accounting never masks the original error. Returns ``exc`` so
+        callers can ``raise self._with_usage(SomeError(...), ...)``.
+        """
+        if exc.usage is None and acc.calls > 0:
+            try:
+                exc.usage = acc.finalize(model=model, pricing=self._pricing_table())
+                exc.model = model
+            except HardFailure:
+                logger.warning(
+                    "could not finalize billed usage for a failed call (model=%s); "
+                    "the ledger will under-report this spend",
+                    model,
+                )
+        return exc
 
     def _resolve_model(self, capability: CapabilityHint) -> str:
         entries = self._rankings.by_capability.get(capability, [])
@@ -931,6 +1011,36 @@ def _stop_reason(response: object) -> str | None:
     """The vendor response's ``stop_reason`` (``"max_tokens"`` ⇒ truncated)."""
     value = getattr(response, "stop_reason", None)
     return str(value) if value is not None else None
+
+
+def _is_truncated(response: object) -> bool:
+    """``True`` when the vendor stopped at the output-token limit (ADR 0033).
+
+    ``stop_reason == "max_tokens"`` is the authoritative truncation signal: an emit
+    that failed schema validation *and* stopped here was cut off mid-emit, not
+    deliberately malformed. The caller halts on it (non-retryable) rather than
+    regenerating — a regeneration produces the same oversized output and truncates
+    again at the same budget. Deliberately keyed only on ``stop_reason`` (not the
+    ``output_tokens >= max_tokens`` heuristic the diagnostic uses) so a complete-but-
+    invalid emit that merely happens to be near the limit is never mis-halted.
+    """
+    return _stop_reason(response) == "max_tokens"
+
+
+def _emit_truncated(*, schema_name: str, max_tokens: int, output_tokens: int) -> EmitTruncated:
+    """Build the :class:`EmitTruncated` halt for a cut-off emit (ADR 0033).
+
+    The message is the run's ``halt_reason`` (the eval/CLI surface ``str(exc)``): it
+    must name the condition (truncated at the token limit) and the only remedies that
+    help (raise ``max_tokens`` or shorten the input), since retrying cannot.
+    """
+    return EmitTruncated(
+        f"the {schema_name} emit was truncated at the {max_tokens}-token output limit "
+        f"(stop_reason=max_tokens, output_tokens={output_tokens}): the structured output was "
+        f"cut off mid-emit and cannot validate against the schema. Retrying regenerates the same "
+        f"oversized output and truncates again at the same budget — raise max_tokens (up to the "
+        f"non-streaming ceiling) or shorten the input."
+    )
 
 
 def _text_of(response: object) -> str:

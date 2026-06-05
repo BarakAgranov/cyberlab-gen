@@ -23,7 +23,14 @@ doc-improvement note (recorded in the Phase 0 execution log) and the
 authoritative location is here.
 """
 
-from pathlib import Path
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from cyberlab_gen.providers.base import TokenUsage
 
 
 class CyberlabGenError(Exception):
@@ -109,6 +116,15 @@ class ProviderError(CyberlabGenError):
     Note: the brief audit found ``CapabilityUnreachable`` omitted from the
     Task 5a brief's enumeration; the canonical six-class set in §6.4 is
     what ships.
+
+    ``usage``/``model`` carry the vendor-billed token usage accumulated *before*
+    the call raised, plus the resolved model id. A failed structured-output call
+    (a truncated or malformed emit that exhausted its retries, a tool loop that
+    never converged) was still billed for every attempt; the provider attaches
+    that billed usage to the raised error so the cost-recording layer can record
+    the spend even when no ``ProviderResponse`` is returned — otherwise the real
+    cost exceeds the reported cost and the cost cap goes blind (ADR 0033). Both
+    default ``None`` (no billing happened, or the layer below does not attach).
     """
 
     def __init__(
@@ -117,8 +133,12 @@ class ProviderError(CyberlabGenError):
         *,
         run_id: str | None = None,
         cause: BaseException | None = None,
+        usage: TokenUsage | None = None,
+        model: str | None = None,
     ) -> None:
         super().__init__(message, stage="provider", run_id=run_id, cause=cause)
+        self.usage = usage
+        self.model = model
 
 
 class TransientFailure(ProviderError):  # noqa: N818 -- name locked by provider-interface.md §6.4
@@ -137,6 +157,26 @@ class MalformedOutput(ProviderError):  # noqa: N818 -- name locked by provider-i
     ``provider-interface.md`` §6.2: 3 attempts including a system-side
     note carrying the previous parse error. Final failure raises this.
     Counted distinctly from agent-quality refinement retries.
+    """
+
+
+class EmitTruncated(MalformedOutput):
+    """A structured-output emit was cut off at the output-token limit (ADR 0033).
+
+    A special case of :class:`MalformedOutput`: the emit failed schema validation
+    *because* the vendor stopped at ``max_tokens`` (``stop_reason == "max_tokens"``,
+    the authoritative truncation signal) mid-emit, not because the model produced
+    deliberately invalid content. The two are distinguished because their remedies
+    are opposite: a malformed-but-complete emit is worth one re-prompt, but a
+    truncated emit will regenerate the same oversized output and truncate again at
+    the same budget — retrying only burns money.
+
+    It therefore subclasses ``MalformedOutput`` (it *is* a malformed parse) but is
+    **never retried**: the provider raises it immediately instead of spending its
+    malformed-output budget, and the agent call surface re-raises it instead of
+    counting it against the structural-retry budget (ADR 0018/0032 contract,
+    amended by ADR 0033). The message names the remedy (raise ``max_tokens`` or
+    shorten the input) so a halted run's ``halt_reason`` is actionable.
     """
 
 

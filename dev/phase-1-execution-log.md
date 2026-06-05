@@ -1039,3 +1039,69 @@ emit exists (`implementation-plan.md §4.6` flags this as a risk only). Recorded
 ADR 0032.
 
 ---
+
+### Task: Truncation halt (P1) + billed-on-raise accounting (ADR 0033)
+
+**What was built.** Stopped the worst cost driver: an emit that exceeds
+`max_tokens` truncates (`stop_reason == "max_tokens"`), comes back schema-invalid,
+and the old code *regenerated* it — up to 2 malformed × 3 structural × the
+Extractor's hallucination loop, each a full ~16K-token Opus output that truncates
+again. ADR 0032's no-progress bail never caught it because truncation varies the
+parse error each regeneration (`extraction_metadata`, then `chain`), so the bail
+saw "different errors" and never fired.
+
+- **`errors.EmitTruncated(MalformedOutput)`** — a malformed parse that is *never*
+  retried. The exception type encodes retryability.
+- **Halt at both emit-parse sites** in `anthropic_provider`: `complete_with_tools`
+  finish-turn emit and `_extract_structured` forced-emit. When the emit fails
+  validation AND `_is_truncated(response)` (keyed only on `stop_reason ==
+  "max_tokens"`, the authoritative signal), raise `EmitTruncated` immediately
+  instead of falling back / retrying. Raised *before* the no-progress bail
+  (truncation is known on the first attempt; the bail needs two).
+- **Call surface** `_with_structural_retry` catches `EmitTruncated` *before* the
+  `MalformedOutput` handler and re-raises it — past the structural-retry budget,
+  not wrapped in `AgentFailure`. Because it isn't a re-promptable `MalformedOutput`
+  it also short-circuits the Extractor's hallucination loop. So **one** halt
+  short-circuits all three loops.
+- **Honest `halt_reason`.** `str(EmitTruncated)` names the limit and the only
+  remedies that help — *raise `max_tokens` or shorten the input* — since the eval
+  runner / CLI use `str(exc)` as the halt reason. Tagged `non_retryable`;
+  fail-fast aborts a systemically-truncating blog after 2 runs.
+
+**Accounting fix.** `CostRecordingProvider._record` recorded cost only on
+*success*, so a call that raised (billed by Anthropic, no `ProviderResponse`) was
+invisible — real spend exceeded the report and the cost cap went blind.
+`ProviderError` now carries optional `usage`/`model`; a new adapter helper
+`_with_usage(exc, …)` finalizes the accumulated `_UsageAccumulator` onto the error
+at every post-billing raise site (`MalformedOutput`, `EmitTruncated`,
+`ToolLoopError`, `TransientFailure`, `HardFailure`), best-effort (swallows a
+finalize failure so accounting never masks the original error). The wrapper records
+the attached usage as a `CallOutcome.FAILED` entry before re-raising, so
+`ledger.total_usd` and the cap count billed-but-raised spend.
+
+**Why no method-signature change.** Both fixes are additive: a new error subclass
++ two optional `ProviderError` attributes. No `Provider` ABC or call-surface
+signature changed, so old `except ProviderError` sites are unaffected. Recorded in
+ADR 0033 (amends ADR 0018 structural-retry contract + ADR 0030 cost recording).
+
+**Surprises / decisions.** (1) Made `EmitTruncated` a *subclass* of
+`MalformedOutput` (it is a malformed parse) rather than a sibling, then handled it
+explicitly in the call surface — the explicit re-raise documents the non-retryable
+contract better than relying on a reader noticing it isn't a `MalformedOutput`.
+(2) One existing adapter test asserted the old fall-back-and-recover behaviour on a
+truncated finish-turn emit; updated to assert the verdict still logs **and** the
+call now halts. (3) `from __future__ import annotations` added to `errors.py` for
+the TYPE_CHECKING `TokenUsage` import pushed `pathlib.Path` into the
+type-checking block (annotation-only now).
+
+**Not done (deferred, separate tasks per the brief):** prompt caching (P2),
+mid-run cap enforcement beyond accounting (P3), streaming/chunked emit (P4 — still
+the only real fix for an unbounded `chain_steps` that exceeds any fixed cap).
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (547 passed,
+exit 0; was 533 + 14 new tests across provider, call-surface, and spend-guard
+suites). Eval NOT run (user runs it).
+
+---

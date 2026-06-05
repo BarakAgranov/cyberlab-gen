@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from cyberlab_gen.errors import ProviderError
 from cyberlab_gen.providers.base import Provider
 from cyberlab_gen.providers.cost_ledger import CallOutcome, CostLedgerEntry
 
@@ -44,6 +45,14 @@ class CostRecordingProvider(Provider):
     appends a :class:`CostLedgerEntry` carrying the response's costed ``usage`` so
     ``ledger.total_usd`` tracks real spend (ADR 0030). Attribution (``agent_label``)
     is the call surface's job, which this wrapper is.
+
+    A call that ultimately *raises* a :class:`ProviderError` (a truncated/malformed
+    emit that exhausted its retries, a tool loop that never converged) was still
+    billed by the vendor for every attempt. The provider attaches that billed usage
+    to the raised error (ADR 0033); this wrapper records it as a ``FAILED`` entry
+    before re-raising, so the ledger — and the cost cap built on it — reflect real
+    spend even when no response comes back. Without this, billed-but-raised calls
+    were invisible and the reported cost under-counted the true spend.
     """
 
     def __init__(self, inner: Provider, ledger: CostLedger, *, purpose: str = "eval") -> None:
@@ -64,13 +73,17 @@ class CostRecordingProvider(Provider):
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
-        response = await self._inner.complete(
-            messages,
-            output_schema=output_schema,
-            capability=capability,
-            agent_label=agent_label,
-            max_tokens=max_tokens,
-        )
+        try:
+            response = await self._inner.complete(
+                messages,
+                output_schema=output_schema,
+                capability=capability,
+                agent_label=agent_label,
+                max_tokens=max_tokens,
+            )
+        except ProviderError as exc:
+            self._record_billed_failure(exc, agent_label=agent_label, capability=capability)
+            raise
         self._record(response, agent_label=agent_label, capability=capability)
         return response
 
@@ -86,16 +99,20 @@ class CostRecordingProvider(Provider):
         max_iterations: int,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
-        response = await self._inner.complete_with_tools(
-            messages,
-            output_schema=output_schema,
-            capability=capability,
-            tools=tools,
-            tool_executor=tool_executor,
-            agent_label=agent_label,
-            max_iterations=max_iterations,
-            max_tokens=max_tokens,
-        )
+        try:
+            response = await self._inner.complete_with_tools(
+                messages,
+                output_schema=output_schema,
+                capability=capability,
+                tools=tools,
+                tool_executor=tool_executor,
+                agent_label=agent_label,
+                max_iterations=max_iterations,
+                max_tokens=max_tokens,
+            )
+        except ProviderError as exc:
+            self._record_billed_failure(exc, agent_label=agent_label, capability=capability)
+            raise
         self._record(response, agent_label=agent_label, capability=capability)
         return response
 
@@ -115,6 +132,36 @@ class CostRecordingProvider(Provider):
                 capability=capability,
                 usage=response.usage,
                 outcome=CallOutcome.SUCCESS,
+                purpose=self._purpose,
+            )
+        )
+
+    def _record_billed_failure(
+        self,
+        exc: ProviderError,
+        *,
+        agent_label: AgentLabel,
+        capability: CapabilityHint,
+    ) -> None:
+        """Record the vendor-billed usage of a call that raised (ADR 0033).
+
+        The provider attaches accumulated billed ``usage`` + the resolved ``model``
+        to a raised :class:`ProviderError`; a call with neither (it failed before any
+        vendor call, or the layer below did not attach) records nothing. Recorded as
+        ``FAILED`` so the ledger distinguishes wasted spend from healthy spend, while
+        ``total_usd`` (and therefore the cost cap) still counts it.
+        """
+        if exc.usage is None or exc.model is None:
+            return
+        self._ledger.record(
+            CostLedgerEntry(
+                timestamp=datetime.now(UTC),
+                agent_label=agent_label,
+                provider=self._inner.name,
+                model=exc.model,
+                capability=capability,
+                usage=exc.usage,
+                outcome=CallOutcome.FAILED,
                 purpose=self._purpose,
             )
         )

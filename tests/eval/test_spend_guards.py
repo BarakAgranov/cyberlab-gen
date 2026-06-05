@@ -15,6 +15,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+import pytest
 from pydantic import BaseModel
 
 from eval.runner.cost_recording_provider import CostRecordingProvider
@@ -337,6 +338,120 @@ async def test_cost_recording_provider_records_each_call_into_the_ledger() -> No
     )
     assert ledger.total_usd == Decimal("1.00")  # accumulates across calls
     assert len(ledger.entries) == 2
+
+
+class _RaisingInnerProvider:
+    """A ``Provider`` whose ``complete_with_tools`` raises a billed ``ProviderError``.
+
+    Models the accounting bug ADR 0033 fixes: a truncated/malformed emit that was
+    billed by the vendor but ultimately raises. The provider attaches the billed
+    usage + model to the error; the wrapper must record it even though no response
+    comes back.
+    """
+
+    def __init__(self, *, billed_cost: str, attach_usage: bool = True) -> None:
+        from cyberlab_gen.providers.base import TokenUsage
+
+        self._usage = (
+            TokenUsage(
+                input_tokens=1000,
+                output_tokens=4096,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                cost_usd=Decimal(billed_cost),
+            )
+            if attach_usage
+            else None
+        )
+
+    @property
+    def name(self) -> str:
+        return "raising"
+
+    async def complete(
+        self,
+        messages: list[Message],
+        *,
+        output_schema: type[_Out],
+        capability: CapabilityHint,
+        agent_label: AgentLabel,
+        max_tokens: int | None = None,
+    ) -> object:  # pragma: no cover - not exercised here
+        raise AssertionError("unused")
+
+    async def complete_with_tools(
+        self,
+        messages: list[Message],
+        *,
+        output_schema: type[_Out],
+        capability: CapabilityHint,
+        tools: list[ToolDefinition],
+        tool_executor: ToolExecutor,
+        agent_label: AgentLabel,
+        max_iterations: int,
+        max_tokens: int | None = None,
+    ) -> object:
+        from cyberlab_gen.errors import EmitTruncated
+
+        raise EmitTruncated(
+            "the AttackSpec emit was truncated at the 16384-token output limit",
+            usage=self._usage,
+            model="claude-opus-4-8",
+        )
+
+
+async def test_cost_recording_provider_records_billed_usage_when_the_call_raises() -> None:
+    # ADR 0033 accounting fix: a call that RAISES a ProviderError carrying billed
+    # usage must still be recorded — otherwise the real cost exceeds the reported
+    # cost and the cost cap goes blind. Recorded as a FAILED entry; total_usd counts it.
+    from cyberlab_gen.errors import EmitTruncated
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CallOutcome, CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    inner = _RaisingInnerProvider(billed_cost="2.50")
+    provider = CostRecordingProvider(inner, ledger)  # type: ignore[arg-type]
+
+    with pytest.raises(EmitTruncated):
+        await provider.complete_with_tools(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            tools=[],
+            tool_executor=_unused_executor(),
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=3,
+        )
+    assert ledger.total_usd == Decimal("2.50")  # billed-but-raised spend was recorded
+    assert len(ledger.entries) == 1
+    entry = ledger.entries[0]
+    assert entry.outcome is CallOutcome.FAILED
+    assert entry.model == "claude-opus-4-8"
+    assert entry.provider == "raising"
+
+
+async def test_cost_recording_provider_skips_failure_with_no_billed_usage() -> None:
+    # A ProviderError that carries no usage (failed before any vendor call billed)
+    # records nothing — there is no honest cost to attribute.
+    from cyberlab_gen.errors import EmitTruncated
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    inner = _RaisingInnerProvider(billed_cost="0", attach_usage=False)
+    provider = CostRecordingProvider(inner, ledger)  # type: ignore[arg-type]
+
+    with pytest.raises(EmitTruncated):
+        await provider.complete_with_tools(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            tools=[],
+            tool_executor=_unused_executor(),
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=3,
+        )
+    assert ledger.entries == []  # nothing billed -> nothing recorded
 
 
 def _unused_executor() -> ToolExecutor:

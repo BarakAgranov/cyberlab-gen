@@ -18,7 +18,12 @@ import pytest
 from pydantic import BaseModel
 
 from cyberlab_gen.agents import DEFAULT_STRUCTURAL_RETRY_ATTEMPTS, AgentRunner
-from cyberlab_gen.errors import AgentFailure, CapabilityUnreachable, MalformedOutput
+from cyberlab_gen.errors import (
+    AgentFailure,
+    CapabilityUnreachable,
+    EmitTruncated,
+    MalformedOutput,
+)
 from cyberlab_gen.providers import (
     AgentLabel,
     CallOutcome,
@@ -305,6 +310,68 @@ async def test_distinct_structural_failures_still_use_full_budget() -> None:
             capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
         )
     assert provider.calls == 3  # distinct messages ("on call N") -> full budget
+
+
+class _TruncatingProvider(Provider):
+    """Always raises ``EmitTruncated`` (the emit was cut off at max_tokens).
+
+    Models the truncation halt (ADR 0033): retrying regenerates the same oversized
+    output and truncates again, so the call surface must re-raise it past the
+    structural-retry budget rather than spend attempts on it.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def name(self) -> str:
+        return "truncating"
+
+    async def _attempt(self) -> ProviderResponse[_Out]:
+        self.calls += 1
+        raise EmitTruncated("the _Out emit was truncated at the 16384-token output limit")
+
+    async def complete[T: BaseModel](
+        self,
+        messages: list[Message],
+        *,
+        output_schema: type[T],
+        capability: CapabilityHint,
+        agent_label: AgentLabel,
+        max_tokens: int | None = None,
+    ) -> ProviderResponse[T]:
+        return await self._attempt()  # type: ignore[return-value]
+
+    async def complete_with_tools[T: BaseModel](
+        self,
+        messages: list[Message],
+        *,
+        output_schema: type[T],
+        capability: CapabilityHint,
+        tools: list[ToolDefinition],
+        tool_executor: ToolExecutor,
+        agent_label: AgentLabel,
+        max_iterations: int,
+        max_tokens: int | None = None,
+    ) -> ProviderResponse[T]:
+        return await self._attempt()  # type: ignore[return-value]
+
+
+async def test_truncation_halts_immediately_without_structural_retry() -> None:
+    # A truncated emit (ADR 0033) is non-retryable: the call surface re-raises
+    # EmitTruncated past the structural-retry budget on the FIRST attempt rather than
+    # spending the budget (which would just truncate again). It surfaces as
+    # EmitTruncated, NOT the generic AgentFailure — so the halt_reason names the real
+    # remedy (raise max_tokens / shorten input), and a single call is made.
+    provider = _TruncatingProvider()
+    runner = _runner(provider, configured=frozenset({"anthropic"}), structural_retry_attempts=2)
+    with pytest.raises(EmitTruncated):
+        await runner.run(
+            [Message(role=MessageRole.USER, content="x")],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        )
+    assert provider.calls == 1  # no structural retry; halted on the first truncation
 
 
 async def test_zero_retry_budget_fails_on_first_malformation() -> None:

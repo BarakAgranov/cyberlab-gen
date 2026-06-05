@@ -22,7 +22,7 @@ import logging
 from typing import TYPE_CHECKING, Protocol
 
 from cyberlab_gen.agents.prompts import load_prompt
-from cyberlab_gen.errors import AgentFailure, MalformedOutput
+from cyberlab_gen.errors import AgentFailure, EmitTruncated, MalformedOutput
 from cyberlab_gen.providers.base import (
     AgentLabel,
     CapabilityHint,
@@ -194,6 +194,15 @@ class AgentRunner:
         for attempt in range(1, max_attempts + 1):
             try:
                 return await call()
+            except EmitTruncated:
+                # A truncated emit (ADR 0033) is a non-retryable halt, NOT a
+                # structural-retry: re-running regenerates the same oversized output
+                # and truncates again at the same token budget, so retrying only
+                # burns money. Re-raise past the structural-retry budget entirely so
+                # the run fails fast with the truncation halt_reason (raise max_tokens
+                # or shorten the input) instead of the generic "exhausted budget" one.
+                # Caught before the MalformedOutput handler because it subclasses it.
+                raise
             except MalformedOutput as exc:
                 last_error = exc
                 logger.warning(
