@@ -642,10 +642,22 @@ Each vendor adapter follows the same shape:
 
 ### 8.1 `AnthropicProvider`
 
-- Wraps the official `anthropic` SDK.
-- Translates `output_schema` (Pydantic model) → Anthropic's structured-output mechanism. The current convention is tool-call-as-structured-output: the provider declares a single tool whose input_schema is the Pydantic model's JSON Schema, sets the model to call that tool, and parses the tool call's arguments as the structured output.
-- Translates `ToolDefinition` → Anthropic's tool format.
-- Uses prompt caching where the SDK exposes it (system prompts and large stable contexts), with cache token usage recorded separately in `TokenUsage`.
+- Wraps a **pydantic-ai `Agent`** over an `AnthropicModel` (which wraps the official
+  `anthropic` SDK) — per ADR 0036. The agent runtime supplies the structured-output
+  path, the tool-use loop, and the within-call malformed-output retry; the adapter
+  resolves the capability hint to the ranked anthropic model, builds the agent, and
+  drives it via `agent.iter` so token usage is captured on success *and* on a raise.
+- Translates `output_schema` (Pydantic model) → the agent's `output_type`. The
+  underlying convention is still tool-call-as-structured-output (pydantic-ai's default
+  forced-tool output mode): a single output tool whose schema is the model's JSON
+  Schema, whose call arguments are parsed as the structured output.
+- Translates each `ToolDefinition` → a pydantic-ai tool (`Tool.from_schema`) whose
+  implementation calls back into the `ToolExecutor`.
+- Token usage (including the cache-read/cache-write split) comes from pydantic-ai's
+  `RunUsage`; the USD figure is computed by `cost_ledger.compute_cost` (Decimal, the
+  bundled `pricing.yaml`) and recorded in `TokenUsage`.
+- A truncated emit (`finish_reason == 'length'`, or pydantic-ai's `IncompleteToolCall`)
+  raises `EmitTruncated` with the billed usage attached (ADR 0033/0036).
 
 ### 8.2 `OpenAIProvider`
 
@@ -657,7 +669,7 @@ Each vendor adapter follows the same shape:
 
 Each adapter has:
 
-- Unit tests for the translation logic, using mocked SDK responses (the SDK's own mock or `respx` for HTTP-level mocking).
+- Unit tests for the translation logic. For `AnthropicProvider` (pydantic-ai-backed, ADR 0036) this uses pydantic-ai's offline `FunctionModel`/`TestModel` to drive the agent without network or API key; a raw-SDK adapter would instead mock SDK responses (the SDK's own mock or `respx`).
 - Integration tests gated by an env var (`CYBERLAB_GEN_INTEGRATION_TESTS=1`) that hit the real vendor with a free-tier-friendly minimal call. Skipped in normal CI; run before each release.
 
 ### 8.4 Adding a new vendor

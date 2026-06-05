@@ -1206,3 +1206,59 @@ then read `eval/reports/specs/AttackSpec-truncated.json`.
 exit 0; was 553 + 4 new tests). Eval NOT run (user runs it with the dump enabled).
 
 ---
+
+## ADR 0036 — Migrate the agent layer to pydantic-ai (2026-06-05)
+
+**Why.** The docs commit the agent layer to pydantic-ai (`architecture.md §1.5`,
+`pipeline.md §3.1`, `implementation-plan §4`, `coding-conventions §10.2`) but the
+dep was never imported — the adapter hand-rolled an agent runtime on the raw SDK.
+An investigation confirmed: provider-on-raw-SDK was a documented decision (ADR 0027),
+but the *agent layer* bypassing pydantic-ai was an undocumented deviation. The
+adapter was ~1,146 lines, ~900 of them reimplementing what pydantic-ai does natively
+(tool loop, forced-tool output, malformed retry, usage). User chose to migrate (Way B).
+
+**Spike (offline, no spend).** Proved the one regression risk — billed-on-failure
+usage (ADR 0033) — is preservable: a truncated emit raises `IncompleteToolCall` and
+`run.usage` still carries the tokens when driving `agent.iter` (the exception does not
+carry usage, so `agent.run` is unusable here). A `finish_reason=='length'` that parses
+validly returns silently, so an explicit guard re-raises `EmitTruncated`. The finding
+is now locked in by `test_anthropic_provider.py`, not a standalone script.
+
+**What changed.** Rewrote only the inside of `AnthropicProvider`: it now builds a
+pydantic-ai `Agent` over `AnthropicModel(resolved_id, provider=AnthropicProvider(
+anthropic_client=<injected>))`, `output_type=<schema>`, `retries={'output': N}`,
+`model_settings={'max_tokens': …}`, tools via `Tool.from_schema` → `ToolExecutor`,
+driven by `agent.iter` with `UsageLimits(request_limit=max_iterations+1)`. Usage read
+from `run.usage` on success and failure; costed via `cost_ledger.compute_cost`
+(Decimal, our `pricing.yaml`). Exceptions mapped to the project hierarchy
+(`IncompleteToolCall`/length → `EmitTruncated`; `UsageLimitExceeded` → `ToolLoopError`;
+`ModelHTTPError` 429/5xx → `TransientFailure`, other 4xx → `HardFailure`;
+`UnexpectedModelBehavior` → `MalformedOutput`).
+
+**Preserved (no ripple):** the `Provider` ABC, `Message`/`ToolCall`/`ToolResult`,
+the error hierarchy, `MockProvider`, `CostRecordingProvider`, `ranking`, `cost_ledger`,
+and `AgentRunner._with_structural_retry` (the ADR-0018 stage-level budget with the
+ADR-0032 bail and ADR-0033 `EmitTruncated` passthrough — pydantic-ai's `retries` is
+only the provider-internal malformed budget). 13 test files stayed green untouched.
+
+**Deleted:** the forced-emit builder, the hand-rolled tool loop, `_extract_structured`,
+`_create` transient retry + backoff, `_translate_messages` (old), `_UsageAccumulator`,
+and the env-gated emit/tool-loop dumps (Phoenix traces replace the ADR-0035 dump).
+Net ≈ 700 fewer lines. `retries.py` kept (still used by ingestion).
+
+**Tests/docs.** Rewrote `tests/unit/providers/test_anthropic_provider.py` (20 tests)
+on pydantic-ai `FunctionModel` offline — covers success, cost, capability→model,
+cache tokens, max_tokens plumbing, malformed retry+exhaustion, truncation (both
+length-guard and `IncompleteToolCall`), billed-on-raise usage, tool loop, tool-loop
+cap, transient/hard HTTP mapping, missing-pricing `HardFailure`. Deleted the stale
+live cassette (wire format changed) — the live test now skips pending re-record with
+a real key. Updated `provider-interface.md §8.1/§8.3`. The architecture-level
+"Pydantic AI for typed agents" statements are now *accurate* (code aligned to them).
+
+**Honest limit.** Truncation is still not *cured* — streaming/chunked emit (P4) is
+independent of this migration; it now fails as a clean `IncompleteToolCall`/guard.
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (539 passed,
+1 skipped [live cassette test, pending re-record], exit 0).
