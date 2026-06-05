@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from eval.runner.cli import main, run_eval
+from eval.runner.manifest import load_manifest
 from eval.runner.report import load_report
 from tests.eval.conftest import FakeEvalRunner
 
@@ -53,6 +54,46 @@ def test_main_offline_reports_no_provider_and_exits_zero(
     assert "no live provider configured" in out
     assert "manifest OK" in out
     assert "nothing run" in out
+
+
+def test_run_eval_blog_ids_restricts_to_one_blog(tmp_path: Path) -> None:
+    # The --blog path: run_eval(blog_ids=[id]) runs ONLY that blog, N times.
+    blog_id = load_manifest().curated[0].id
+    runner = FakeEvalRunner()
+    report, _ = run_eval(
+        runner=runner,
+        provider_backed=False,
+        n=3,
+        reports_dir=tmp_path,
+        blog_ids=[blog_id],
+    )
+    assert report.blog_ids == [blog_id]  # only the one blog
+    assert {bid for bid, _ in runner.calls} == {blog_id}
+    assert len(runner.calls) == 3  # N=3 runs of the single blog
+
+
+def test_main_blog_flag_accepts_a_valid_curated_id(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # --blog with a valid curated id is accepted; offline it reaches the no-provider
+    # notice (exit 0) naming the selected blog.
+    monkeypatch.setattr("eval.runner.cli._provider_configured", lambda: False)
+    blog_id = load_manifest().curated[0].id
+    rc = main(["--blog", blog_id])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"only blog {blog_id!r}" in out
+
+
+def test_main_blog_flag_rejects_an_unknown_id(capsys: pytest.CaptureFixture[str]) -> None:
+    # An unknown --blog id fails fast (exit 2) and lists the valid curated ids, so
+    # the user can correct it without hand-reading the manifest.
+    rc = main(["--blog", "does-not-exist"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "unknown blog id" in err
+    for entry in load_manifest().curated:
+        assert entry.id in err  # every valid id is listed
 
 
 def test_main_offline_fails_when_a_walk_is_missing(

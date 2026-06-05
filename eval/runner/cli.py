@@ -20,6 +20,7 @@ runner so the full archive path is exercised deterministically.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from typing import TYPE_CHECKING
 
@@ -69,6 +70,7 @@ def run_eval(
     reports_dir: Path | None = None,
     progress: EvalProgress | None = None,
     cost_cap_usd: Decimal | None = DEFAULT_COST_CAP_USD,
+    blog_ids: list[str] | None = None,
 ) -> tuple[EvalReport, Path]:
     """Run the curated set through ``runner`` N times, archive the report, return both.
 
@@ -76,6 +78,10 @@ def run_eval(
     dir). ``provider_backed`` is recorded on the report so offline runs are
     distinguishable in the archive. Returns the report and the path it was
     archived to.
+
+    ``blog_ids`` (default ``None`` = the whole curated set) restricts the run to a
+    subset — the ``--blog <id>`` single-blog path. Ids must exist in the manifest;
+    the CLI validates that before calling here.
 
     The report is archived **incrementally** — after each blog completes — so a
     crash on a later blog never loses the money already spent on the earlier ones
@@ -94,6 +100,7 @@ def run_eval(
         runner=runner,
         n=n,
         provider_backed=provider_backed,
+        blog_ids=blog_ids,
         on_partial=_archive_partial,
         progress=progress,
         cost_cap_usd=cost_cap_usd,
@@ -110,15 +117,50 @@ def _default_reports_dir(reldir: str) -> Path:
     return repo_root() / reldir
 
 
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Parse the ``just eval`` flags. ``--blog <id>`` restricts the run to one blog."""
+    parser = argparse.ArgumentParser(
+        prog="eval",
+        description="Run the cyberlab-gen Phase-1 eval over the curated blog set.",
+    )
+    parser.add_argument(
+        "--blog",
+        metavar="ID",
+        default=None,
+        help="run only the curated blog with this id (default: all curated blogs)",
+    )
+    return parser.parse_args(argv)
+
+
+def _resolve_selected_blogs(
+    manifest: BlogSetManifest, blog: str | None
+) -> tuple[list[str] | None, str | None]:
+    """Map a ``--blog`` value to a ``blog_ids`` override (or an error message).
+
+    Returns ``(blog_ids, error)``: ``blog_ids`` is ``None`` for the whole curated
+    set (no ``--blog``) or a one-element list for the selected blog; ``error`` is a
+    user-facing message (with the valid ids) when the id is unknown, else ``None``.
+    """
+    if blog is None:
+        return None, None
+    curated_ids = [e.id for e in manifest.curated]
+    if blog not in curated_ids:
+        return None, (
+            f"eval: unknown blog id {blog!r}; valid curated ids: {', '.join(curated_ids)}"
+        )
+    return [blog], None
+
+
 def main(argv: list[str] | None = None) -> int:
     """``just eval`` body. Returns a process exit code.
 
     With a provider configured: build the provider-backed runner, run N=3 over the
-    curated set, archive the report, print the headline numbers. Without one: load
-    + validate the manifest, report that no provider is configured, and exit 0
-    (the manifest/walk validation still ran — a useful offline smoke check).
+    selected blogs (all curated, or the one ``--blog <id>``), archive the report,
+    print the headline numbers. Without one: load + validate the manifest, report
+    that no provider is configured, and exit 0 (the manifest/walk validation still
+    ran — a useful offline smoke check). An unknown ``--blog`` id exits 2.
     """
-    del argv  # no flags in Phase 1; N and paths are defaults
+    args = _parse_args(argv)
     manifest = load_manifest()
     missing = check_walks_resolve(manifest)
     if missing:
@@ -128,11 +170,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    blog_ids, blog_error = _resolve_selected_blogs(manifest, args.blog)
+    if blog_error is not None:
+        print(blog_error, file=sys.stderr)  # noqa: T201
+        return 2
+
     if not _provider_configured():
+        scope = (
+            f"only blog {args.blog!r}"
+            if args.blog is not None
+            else f"{len(manifest.curated)} curated blog(s)"
+        )
         print(  # noqa: T201
             "eval: no live provider configured "
             f"(set ANTHROPIC_API_KEY to run the provider-backed harness).\n"
-            f"eval: manifest OK — {len(manifest.curated)} curated blog(s), "
+            f"eval: manifest OK — would run {scope}, "
             f"rotation generation {manifest.rotation_generation}; all walk paths resolve.\n"
             "eval: nothing run (the harness never fabricates results without a model)."
         )
@@ -147,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         provider_backed=True,
         progress=StderrEvalProgress(),
         cost_cap_usd=DEFAULT_COST_CAP_USD,
+        blog_ids=blog_ids,
     )
     # Final machine-readable summary stays on stdout (progress went to stderr).
     print(  # noqa: T201 # pragma: no cover

@@ -27,8 +27,9 @@ type:
 test:
     uv run pytest
 
-eval:
-    uv run python -m eval.runner.cli
+# Run the eval. Pass through flags, e.g. `just eval --blog <id>` for one blog.
+eval *ARGS:
+    uv run python -m eval.runner.cli {{ARGS}}
 
 docs:
     @echo "Doc preview not yet implemented."

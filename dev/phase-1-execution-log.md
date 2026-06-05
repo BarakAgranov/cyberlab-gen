@@ -1105,3 +1105,64 @@ exit 0; was 533 + 14 new tests across provider, call-surface, and spend-guard
 suites). Eval NOT run (user runs it).
 
 ---
+
+### Task: Eval failure scope (skip-blog vs abort-run) + `--blog` flag (ADR 0034)
+
+**What was built.** Two eval-runner changes about *which blogs run*.
+
+**1. `--blog <id>`.** `eval/runner/cli.py` now parses a single `--blog` flag
+(argparse — it parsed nothing before). It restricts the run to the one curated
+blog with that id (N times, archived as normal); unknown id → exit 2 listing the
+valid curated ids; no flag → all curated (unchanged). `run_eval`/`run_blog_set`
+already had a `blog_ids` override; the flag threads through it. The `justfile`
+`eval` recipe gained `*ARGS` so **`just eval --blog <id>`** forwards (verified).
+
+**2. Skip-this-blog vs abort-the-whole-run.** ADR 0030's fail-fast aborted the
+whole run on any repeated non-retryable failure — so a blog-size truncation
+starved later blogs. Split `failure_kind` into three scopes:
+- `retryable` (TransientFailure) — blip; never aborts/skips; resets the counter.
+- `blog_fatal` (truncation, malformed, hallucination budget, tool loop,
+  jury/Layer-1 reject, bad URL, a content/size 4xx) — after 2 consecutive
+  identical, stop *this blog* and **continue to the next**.
+- `global_fatal` (no served model, auth/quota/config) — abort the whole run on the
+  first occurrence; remaining blogs `skipped`, partial archived.
+
+Classification is `runner._classify_pipeline_failure(exc)` (called from
+`run_once`); the loop in `run_blog_set` routes on the recorded kind, with the
+within-blog counter reset per blog. Cost cap still aborts all.
+
+**The two confirmed-with-user mappings:**
+- Generic `HardFailure` is overloaded → classify by HTTP status off `exc.cause`:
+  401/402/403/404 or no-status (client-init/pricing/config) = global; 400/413/422
+  (content/size) = blog-specific.
+- Network "provider unreachable" stays `retryable` (TransientFailure), NOT global —
+  reclassifying it would override `pipeline.md §3.7`/ADR 0030 ("transient never
+  aborts"). A persistent outage fails every blog cheaply (no billed tokens). Flagged
+  as a deliberate future decision, not made here. (`CapabilityUnreachable` —
+  no model in the ranking — IS global; it's config, not a network blip.)
+
+**Eval-only (confirmed).** This skip-vs-abort logic is eval-runner-only: a real
+`extract <url>` run is one blog with no "next blog." The underlying *halt*
+(truncation etc.) is universal, already lives in the provider/orchestrator
+(ADR 0033), and is untouched. `_classify_pipeline_failure` only decides whether the
+*run* continues — never a single blog's fate. No provider/`extract`-verb/halt
+behavior changed.
+
+**Surprises / decisions.** `FAILURE_NON_RETRYABLE` removed in favor of the two
+fatal kinds; archived reports carrying the old `"non_retryable"` string still load
+(extra=ignore field, read for metrics only). The within-blog "2 consecutive
+identical → stop" mechanism is unchanged; only its consequence (stop blog, not
+run) changed.
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (553 passed,
+exit 0; was 547 + 6 net new eval tests). Eval NOT run (user runs it).
+
+### Exact command
+
+`just eval --blog <id>` — e.g. `just eval --blog ai-assisted-aws-intrusion`. The
+recipe forwards args (verified the flag reaches the CLI and an unknown id exits 2
+with the valid ids). `uv run python -m eval.runner.cli --blog <id>` works too.
+
+---

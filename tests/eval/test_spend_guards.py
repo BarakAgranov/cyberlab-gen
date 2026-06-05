@@ -21,6 +21,10 @@ from pydantic import BaseModel
 from eval.runner.cost_recording_provider import CostRecordingProvider
 from eval.runner.manifest import load_manifest
 from eval.runner.runner import (
+    FAILURE_BLOG_FATAL,
+    FAILURE_GLOBAL_FATAL,
+    FAILURE_RETRYABLE,
+    _classify_pipeline_failure,  # pyright: ignore[reportPrivateUsage]
     _failure_signature,  # pyright: ignore[reportPrivateUsage]
     _normalize_failure,  # pyright: ignore[reportPrivateUsage]
     run_blog_set,
@@ -61,19 +65,19 @@ def _curated_ids() -> list[str]:
     return [e.id for e in load_manifest().curated]
 
 
-def test_fail_fast_aborts_on_repeated_identical_nonretryable_failure() -> None:
-    # Every run fails with a 400 whose toolu id + message index VARY (like the real
-    # one) but normalize to the same signature. With abort_after=2 the eval stops
-    # after the 2nd consecutive failure; later blogs are skipped, not run.
+def test_blog_fatal_repeat_skips_blog_and_continues_to_next() -> None:
+    # ADR 0034: a blog-specific failure that repeats identically stops THAT blog
+    # (after abort_after=2 runs) but the run CONTINUES to the next blog — its
+    # size/content problem says nothing about the others. The toolu id + index VARY
+    # (like the real 400) but normalize to the same per-blog signature.
     manifest = load_manifest()
 
     def record_for(idx: int, blog_id: str, run_index: int) -> BlogRunRecord:
         reason = (
-            f"Anthropic call failed (400): messages.{idx + 5}: tool_use ids were found "
-            f"without tool_result blocks immediately after: toolu_{idx}abc"
+            f"Anthropic call failed (400): messages.{idx + 5}: request too large: toolu_{idx}abc"
         )
         return make_failure_record(
-            blog_id, run_index, failure_kind="non_retryable", halt_reason=reason
+            blog_id, run_index, failure_kind=FAILURE_BLOG_FATAL, halt_reason=reason
         )
 
     runner = _ScriptedRunner(record_for)
@@ -85,12 +89,11 @@ def test_fail_fast_aborts_on_repeated_identical_nonretryable_failure() -> None:
         abort_after_consecutive_failures=2,
     )
 
-    assert len(runner.calls) == 2  # stopped after 2 runs, not 3 blogs x 3
-    assert len(report.records) == 2
-    # the two not-yet-run curated blogs are recorded skipped with the abort reason.
-    skipped_ids = {s.blog_id for s in report.skipped}
-    assert skipped_ids == set(_curated_ids()[1:])
-    assert all("consecutive" in s.reason for s in report.skipped)
+    # Every curated blog is attempted; each stops after 2 identical runs (3rd skipped).
+    assert len(runner.calls) == 2 * len(_curated_ids())
+    # No blog is in `skipped` — each ran (partially) and has a record, not a skip.
+    assert report.skipped == []
+    assert {bid for bid, _ in runner.calls} == set(_curated_ids())
 
 
 def test_transient_failures_do_not_abort() -> None:
@@ -114,14 +117,15 @@ def test_transient_failures_do_not_abort() -> None:
     assert report.skipped == []
 
 
-def test_distinct_nonretryable_failures_do_not_abort() -> None:
-    # Two different non-retryable errors alternating never reach 2-in-a-row → no abort.
+def test_distinct_blog_fatal_failures_do_not_stop_a_blog_early() -> None:
+    # Two different blog-fatal errors alternating never reach 2-in-a-row within a
+    # blog → no early stop, every run of every blog executes, nothing skipped.
     manifest = load_manifest()
 
     def record_for(idx: int, blog_id: str, run_index: int) -> BlogRunRecord:
-        reason = "error alpha" if idx % 2 == 0 else "error beta"
+        reason = "error alpha" if run_index % 2 == 0 else "error beta"
         return make_failure_record(
-            blog_id, run_index, failure_kind="non_retryable", halt_reason=reason
+            blog_id, run_index, failure_kind=FAILURE_BLOG_FATAL, halt_reason=reason
         )
 
     runner = _ScriptedRunner(record_for)
@@ -134,6 +138,34 @@ def test_distinct_nonretryable_failures_do_not_abort() -> None:
     )
     assert len(runner.calls) == 3 * len(_curated_ids())
     assert report.skipped == []
+
+
+def test_global_failure_aborts_the_whole_run() -> None:
+    # ADR 0034: a global-fatal failure (auth/quota/no-served-model) aborts the whole
+    # run on sight — the next blog would fail identically. The remaining blogs are
+    # recorded `skipped`, not run.
+    manifest = load_manifest()
+
+    def record_for(idx: int, blog_id: str, run_index: int) -> BlogRunRecord:
+        return make_failure_record(
+            blog_id,
+            run_index,
+            failure_kind=FAILURE_GLOBAL_FATAL,
+            halt_reason="Anthropic call failed (401): authentication_error",
+        )
+
+    runner = _ScriptedRunner(record_for)
+    report = run_blog_set(
+        manifest=manifest,
+        runner=runner,
+        n=3,
+        provider_backed=False,
+        abort_after_consecutive_failures=2,
+    )
+    # Aborted on the FIRST global failure — one call, not even the rest of blog 1.
+    assert len(runner.calls) == 1
+    assert {s.blog_id for s in report.skipped} == set(_curated_ids()[1:])
+    assert all("global failure" in s.reason for s in report.skipped)
 
 
 # --- cost cap ---------------------------------------------------------------
@@ -210,10 +242,11 @@ def test_normalize_failure_collapses_varying_request_ids() -> None:
     assert _normalize_failure(a) == _normalize_failure(b)
 
 
-def test_fail_fast_aborts_on_repeated_400_differing_only_by_request_id() -> None:
-    # End-to-end regression for the gen0-20260602 archive: six non-retryable 400s
-    # that differed only by request_id ran in full because the signature never
-    # matched. With request_id normalization, fail-fast stops after the 2nd.
+def test_blog_stops_after_two_400s_differing_only_by_request_id() -> None:
+    # Regression for the gen0-20260602 archive: blog-fatal 400s that differed only
+    # by request_id ran in full because the signature never matched. With request_id
+    # normalization, the within-blog counter trips and each blog stops after the 2nd
+    # identical failure (skip-blog under ADR 0034, was abort-all under ADR 0032).
     manifest = load_manifest()
 
     def record_for(idx: int, blog_id: str, run_index: int) -> BlogRunRecord:
@@ -221,12 +254,11 @@ def test_fail_fast_aborts_on_repeated_400_differing_only_by_request_id() -> None
         # digit-only rule — exactly the real failure mode.
         rid_letter = chr(ord("A") + idx)
         reason = (
-            f"Anthropic call failed (400): messages.{idx + 5}: tool_use ids were found "
-            f"without tool_result blocks: toolu_{idx}abc, "
-            f"'request_id': 'req_011Cbdq{rid_letter}ZqaTxPif8SKGZSb'"
+            f"Anthropic call failed (400): messages.{idx + 5}: request too large: "
+            f"toolu_{idx}abc, 'request_id': 'req_011Cbdq{rid_letter}ZqaTxPif8SKGZSb'"
         )
         return make_failure_record(
-            blog_id, run_index, failure_kind="non_retryable", halt_reason=reason
+            blog_id, run_index, failure_kind=FAILURE_BLOG_FATAL, halt_reason=reason
         )
 
     runner = _ScriptedRunner(record_for)
@@ -237,16 +269,102 @@ def test_fail_fast_aborts_on_repeated_400_differing_only_by_request_id() -> None
         provider_backed=False,
         abort_after_consecutive_failures=2,
     )
-    assert len(runner.calls) == 2  # aborted after 2, not all 6
+    # Each blog stops after 2 (request_id normalized away); without it each would run
+    # all 3. 2 per blog proves the normalization tripped the within-blog counter.
+    assert len(runner.calls) == 2 * len(_curated_ids())
 
 
-def test_failure_signature_is_none_for_clean_and_retryable_runs() -> None:
+def test_failure_signature_only_fires_for_blog_fatal_runs() -> None:
     clean = make_record("b", 0)
     assert _failure_signature(clean) is None
-    transient = make_failure_record("b", 0, failure_kind="retryable", halt_reason="timeout")
+    transient = make_failure_record("b", 0, failure_kind=FAILURE_RETRYABLE, halt_reason="timeout")
     assert _failure_signature(transient) is None
-    hard = make_failure_record("b", 0, failure_kind="non_retryable", halt_reason="boom")
-    assert _failure_signature(hard) is not None
+    # Global-fatal aborts on sight (no counting), so it carries no signature.
+    glob = make_failure_record("b", 0, failure_kind=FAILURE_GLOBAL_FATAL, halt_reason="401 auth")
+    assert _failure_signature(glob) is None
+    blog = make_failure_record("b", 0, failure_kind=FAILURE_BLOG_FATAL, halt_reason="truncated")
+    assert _failure_signature(blog) is not None
+
+
+def test_first_blog_fails_but_later_blogs_still_run() -> None:
+    # The concrete scenario from the brief: the first blog truncates (blog-fatal) on
+    # every run, but the next blog extracts fine. The first blog must NOT abort the
+    # run — later blogs still get their turn (ADR 0034). Uses run_index for the
+    # first blog so its failures are identical (-> stops early), records for the rest.
+    manifest = load_manifest()
+    curated = _curated_ids()
+    first, rest = curated[0], curated[1:]
+
+    def record_for(idx: int, blog_id: str, run_index: int) -> BlogRunRecord:
+        if blog_id == first:
+            return make_failure_record(
+                blog_id,
+                run_index,
+                failure_kind=FAILURE_BLOG_FATAL,
+                halt_reason="the AttackSpec emit was truncated at the 16384-token output limit",
+            )
+        return make_record(blog_id, run_index)  # later blogs succeed
+
+    runner = _ScriptedRunner(record_for)
+    report = run_blog_set(
+        manifest=manifest,
+        runner=runner,
+        n=3,
+        provider_backed=False,
+        abort_after_consecutive_failures=2,
+    )
+    # First blog stopped after 2 identical truncations; every later blog ran all 3.
+    ran_by_blog = {bid: sum(1 for b, _ in runner.calls if b == bid) for bid in curated}
+    assert ran_by_blog[first] == 2
+    assert all(ran_by_blog[b] == 3 for b in rest)
+    assert report.skipped == []  # nothing aborted; later blogs were not skipped
+    assert set(report.blog_ids) == set(curated)  # all blogs have a (partial) aggregate
+
+
+# --- failure classification (eval-runner triage) ----------------------------
+
+
+def _status_error(code: int) -> Exception:
+    class _StatusError(Exception):
+        def __init__(self, status_code: int) -> None:
+            super().__init__(f"HTTP {status_code}")
+            self.status_code = status_code
+
+    return _StatusError(code)
+
+
+def test_classify_pipeline_failure_maps_each_error_to_its_scope() -> None:
+    from cyberlab_gen.errors import (
+        CapabilityUnreachable,
+        EmitTruncated,
+        HardFailure,
+        MalformedOutput,
+        TransientFailure,
+        ValidationError,
+    )
+
+    # Retryable blip — never aborts/skips.
+    assert _classify_pipeline_failure(TransientFailure("timeout")) == FAILURE_RETRYABLE
+    # Global — the next blog fails identically.
+    assert _classify_pipeline_failure(CapabilityUnreachable("no model")) == FAILURE_GLOBAL_FATAL
+    assert (
+        _classify_pipeline_failure(HardFailure("auth", cause=_status_error(401)))
+        == FAILURE_GLOBAL_FATAL
+    )
+    assert (
+        _classify_pipeline_failure(HardFailure("model gone", cause=_status_error(404)))
+        == FAILURE_GLOBAL_FATAL
+    )
+    # No HTTP status (no API key / pricing / config) -> systemic -> global.
+    assert _classify_pipeline_failure(HardFailure("no API key")) == FAILURE_GLOBAL_FATAL
+    # Blog-specific — content/size of THIS blog.
+    assert (
+        _classify_pipeline_failure(HardFailure("too large", cause=_status_error(400)))
+        == FAILURE_BLOG_FATAL
+    )
+    assert _classify_pipeline_failure(EmitTruncated("truncated")) == FAILURE_BLOG_FATAL
+    assert _classify_pipeline_failure(MalformedOutput("bad spec")) == FAILURE_BLOG_FATAL
+    assert _classify_pipeline_failure(ValidationError("layer 1 halt")) == FAILURE_BLOG_FATAL
 
 
 # --- CostRecordingProvider --------------------------------------------------

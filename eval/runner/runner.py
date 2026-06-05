@@ -51,13 +51,69 @@ _UNRESOLVED_URL_REASON = "synthetic fixture, no live URL"
 #: run stops (and archives what it has) once cumulative spend reaches this.
 DEFAULT_COST_CAP_USD = Decimal("5")
 
-#: Abort the whole eval after this many *consecutive* runs fail with the same
-#: non-retryable error (ADR 0030). A transient blip never counts.
+#: Stop a *single blog* after this many *consecutive* runs fail with the same
+#: blog-specific error (ADR 0030, scope split ADR 0034). A transient blip never
+#: counts; a global failure aborts the whole run on sight without counting.
 DEFAULT_ABORT_AFTER_CONSECUTIVE_FAILURES = 2
 
-#: Failure-kind tags recorded on a :class:`BlogRunRecord` (ADR 0030).
+#: Failure-kind tags recorded on a :class:`BlogRunRecord` (ADR 0030/0034). The run
+#: loop treats them differently:
+#: * ``FAILURE_RETRYABLE`` — a persistent ``TransientFailure`` (timeout/429/5xx/
+#:   connection after retries). A blip: never aborts or skips; resets the counter.
+#: * ``FAILURE_BLOG_FATAL`` — tied to *this* blog's content/size/URL (truncation,
+#:   malformed/won't-validate, hallucination budget, tool loop, jury/Layer-1
+#:   reject, unreachable/paywalled/bot-blocked URL, a content/size 4xx). Skips this
+#:   blog's remaining runs and moves to the next blog.
+#: * ``FAILURE_GLOBAL_FATAL`` — the next blog will fail identically (no served
+#:   model, auth/credential/quota/config ``HardFailure``). Aborts the whole run.
 FAILURE_RETRYABLE = "retryable"
-FAILURE_NON_RETRYABLE = "non_retryable"
+FAILURE_BLOG_FATAL = "blog_fatal"
+FAILURE_GLOBAL_FATAL = "global_fatal"
+
+#: HTTP statuses on a ``HardFailure`` cause that mean the whole run is doomed —
+#: authentication (401), payment/credit i.e. quota (402), permission (403), and
+#: model-not-found (404). Every blog would fail identically, so these are
+#: global-fatal; a content/size 4xx (400 'request too large', 413, 422) is
+#: blog-specific (ADR 0034, classification confirmed with the user).
+_GLOBAL_HTTP_STATUSES = frozenset({401, 402, 403, 404})
+
+
+def _classify_pipeline_failure(exc: BaseException) -> str:
+    """Map a caught pipeline exception to its failure kind / scope (ADR 0034).
+
+    Eval-runner-only triage: it decides whether the *next blog* should still get a
+    turn. The underlying *halt* already happened in the provider/orchestrator; this
+    never re-decides a single blog's fate, only whether the run continues.
+    """
+    from cyberlab_gen.errors import CapabilityUnreachable, HardFailure, TransientFailure
+
+    if isinstance(exc, TransientFailure):
+        return FAILURE_RETRYABLE
+    if isinstance(exc, CapabilityUnreachable):
+        # No served model for the capability -> every blog uses the same capability
+        # and fails the same way. Systemic.
+        return FAILURE_GLOBAL_FATAL
+    if isinstance(exc, HardFailure):
+        return FAILURE_GLOBAL_FATAL if _hard_failure_is_global(exc) else FAILURE_BLOG_FATAL
+    # Everything else (EmitTruncated, MalformedOutput, AgentFailure, ExtractionError,
+    # ToolLoopError, ValidationError/JuryRejectionError, ingestion URL errors) is
+    # specific to this blog's content/size/URL.
+    return FAILURE_BLOG_FATAL
+
+
+def _hard_failure_is_global(exc: BaseException) -> bool:
+    """A ``HardFailure`` is global unless it is a content/size-specific HTTP 4xx.
+
+    Auth/permission/payment/model-not-found (401/402/403/404) and any ``HardFailure``
+    with no HTTP status at all (client-init / missing API key / no-pricing config)
+    are systemic — every blog fails the same way. A request/content 4xx (400
+    'request too large', 413, 422) is specific to this blog, so it is blog-fatal.
+    The status code is read off the stored ``cause`` (the vendor ``APIStatusError``).
+    """
+    status = getattr(getattr(exc, "cause", None), "status_code", None)
+    if status is None:
+        return True
+    return int(status) in _GLOBAL_HTTP_STATUSES
 
 
 def _normalize_failure(reason: str) -> str:
@@ -79,13 +135,14 @@ def _normalize_failure(reason: str) -> str:
 
 
 def _failure_signature(record: BlogRunRecord) -> str | None:
-    """A normalized signature for a *non-retryable* failed run, else ``None``.
+    """A normalized signature for a *blog-fatal* failed run, else ``None`` (ADR 0034).
 
-    Only non-retryable failures (``HardFailure``/4xx/malformed/halt) get a
-    signature; a clean run or a retryable (transient) failure returns ``None`` so
-    the fail-fast counter resets and a transient blip never aborts the eval.
+    Only blog-specific failures get a signature — the within-blog fail-fast counts
+    consecutive identical ones to stop a blog early. A clean run, a retryable blip,
+    or a global-fatal failure (which aborts the whole run on sight, without
+    counting) returns ``None`` so the within-blog counter resets.
     """
-    if record.failure_kind != FAILURE_NON_RETRYABLE or not record.halt_reason:
+    if record.failure_kind != FAILURE_BLOG_FATAL or not record.halt_reason:
         return None
     return _normalize_failure(record.halt_reason)
 
@@ -184,7 +241,7 @@ class ProviderBackedEvalRunner:
         # The live path: build a fresh ledger + runner, resolve the URL, run, and
         # measure. Not exercised in CI (no provider); the metric mapping it shares
         # with the fake path is what :func:`record_from_run` tests cover.
-        from cyberlab_gen.errors import CyberlabGenError, TransientFailure
+        from cyberlab_gen.errors import CyberlabGenError
         from cyberlab_gen.providers.cost_ledger import CostLedger
 
         url = self._url_for(blog_id)
@@ -192,17 +249,13 @@ class ProviderBackedEvalRunner:
         runner = self._extract_runner_factory(ledger)
         try:
             result = runner.run(url, ledger=ledger)
-        except TransientFailure as exc:
-            # A persistent transient failure (timeout/429/5xx after retries) —
-            # record it, but tag it retryable so fail-fast never aborts on a blip.
-            return self._halt_record(
-                blog_id, run_index, ledger, exc, failure_kind=FAILURE_RETRYABLE
-            )
         except CyberlabGenError as exc:
-            # A non-retryable halt (HardFailure/4xx, malformed, Layer-1 exhaustion,
-            # jury reject) — record a non-shipped run that fail-fast can count.
+            # Classify the halt so the run loop knows whether to skip just this blog
+            # (blog-fatal: truncation, malformed, jury/Layer-1 reject, bad URL) or
+            # abort the whole run (global: no served model, auth/quota/config), or
+            # treat it as a transient blip (retryable). See _classify_pipeline_failure.
             return self._halt_record(
-                blog_id, run_index, ledger, exc, failure_kind=FAILURE_NON_RETRYABLE
+                blog_id, run_index, ledger, exc, failure_kind=_classify_pipeline_failure(exc)
             )
         layer1 = self._validator.validate(result.spec)
         self._write_spec(blog_id, run_index, result.spec)
@@ -336,14 +389,22 @@ def run_blog_set(
     the earlier blogs' results on disk (ADR 0028, Problem 2). ``progress`` receives
     one event per step for live stderr output.
 
-    Two spend guards stop a doomed run early (ADR 0030), each marking the
-    not-yet-run blogs ``skipped`` and archiving the partial report:
+    Failure handling distinguishes *which blog* from *the whole run* (ADR 0034):
 
-    * **fail-fast** — ``abort_after_consecutive_failures`` consecutive runs failing
-      with the *same non-retryable* error (normalized so a varying tool id/index
-      still matches) abort the eval; a transient blip never counts.
-    * **cost cap** — once cumulative spend reaches ``cost_cap_usd`` (``None`` =
-      uncapped) the eval stops before launching the next run.
+    * **blog-fatal → skip this blog** — a failure tied to one blog's content/size/
+      URL (truncation, malformed/won't-validate, hallucination budget, tool loop,
+      jury/Layer-1 reject, bad URL). ``abort_after_consecutive_failures`` consecutive
+      runs of *this blog* failing with the same (normalized) blog-fatal error stop
+      that blog's remaining runs; the run then **continues to the next blog** (its
+      size/content problem says nothing about other blogs).
+    * **global-fatal → abort the whole run** — a failure where the next blog would
+      fail identically (no served model, auth/credential/quota/config). Aborts on
+      sight, marking the not-yet-run blogs ``skipped`` and archiving the partial.
+    * **cost cap → abort the whole run** — once cumulative spend reaches
+      ``cost_cap_usd`` (``None`` = uncapped) the eval stops before the next run.
+
+    A transient blip (``retryable``) never aborts or skips and resets the
+    within-blog counter.
     """
     if n < 1:
         raise ValueError("n (runs per blog) must be >= 1")
@@ -376,8 +437,6 @@ def run_blog_set(
     done_ids: list[str] = []
     total_cost = Decimal("0")
     total = len(ran_ids)
-    consecutive_sig: str | None = None
-    consecutive_count = 0
 
     def _build() -> EvalReport:
         return EvalReport(
@@ -394,6 +453,11 @@ def run_blog_set(
     abort_reason: str | None = None
     for pos, blog_id in enumerate(ran_ids, start=1):
         blog_runs: list[BlogRunRecord] = []
+        # Within-blog fail-fast state, reset per blog: a blog-specific failure that
+        # repeats identically stops THIS blog, not the whole run.
+        blog_sig: str | None = None
+        blog_sig_count = 0
+        stop_blog_reason: str | None = None
         for i in range(n):
             if progress is not None:
                 progress.blog_run_started(blog_id, blog_pos=pos, blog_total=total, run_index=i, n=n)
@@ -406,25 +470,35 @@ def run_blog_set(
                     record, n=n, cost_so_far=total_cost, cost_cap_usd=cost_cap_usd
                 )
 
-            # fail-fast: count consecutive identical non-retryable failures.
-            sig = _failure_signature(record)
-            if sig is None:
-                consecutive_sig, consecutive_count = None, 0
+            if record.failure_kind == FAILURE_GLOBAL_FATAL:
+                # Systemic: the next blog would fail identically. Abort the whole run.
+                abort_reason = (
+                    f"global failure (every remaining blog would fail identically): "
+                    f"{record.halt_reason}"
+                )
             else:
-                consecutive_count = consecutive_count + 1 if sig == consecutive_sig else 1
-                consecutive_sig = sig
-                if consecutive_count >= abort_after_consecutive_failures:
-                    abort_reason = (
-                        f"{consecutive_count} consecutive runs failed with the same "
-                        f"non-retryable error; remaining runs skipped to avoid wasted spend"
-                    )
-            # cost cap: stop once cumulative spend reaches the ceiling.
+                # Blog-fatal: count consecutive identical failures *within this blog*;
+                # at the threshold, stop this blog and move on. A clean run, a
+                # retryable blip, or a global-fatal (handled above) yields no
+                # signature and resets the counter.
+                sig = _failure_signature(record)
+                if sig is None:
+                    blog_sig, blog_sig_count = None, 0
+                else:
+                    blog_sig_count = blog_sig_count + 1 if sig == blog_sig else 1
+                    blog_sig = sig
+                    if blog_sig_count >= abort_after_consecutive_failures:
+                        stop_blog_reason = (
+                            f"{blog_sig_count} consecutive runs of {blog_id!r} failed with the "
+                            f"same blog-specific error; skipping its remaining runs and moving on"
+                        )
+            # cost cap: stop the whole run once cumulative spend reaches the ceiling.
             if abort_reason is None and cost_cap_usd is not None and total_cost >= cost_cap_usd:
                 abort_reason = (
                     f"cost cap ${cost_cap_usd} reached (spent ${total_cost}); "
                     f"remaining runs skipped"
                 )
-            if abort_reason is not None:
+            if abort_reason is not None or stop_blog_reason is not None:
                 break
 
         # Record this blog's (possibly partial) aggregate from the runs that ran.
@@ -455,7 +529,8 @@ __all__ = [
     "DEFAULT_ABORT_AFTER_CONSECUTIVE_FAILURES",
     "DEFAULT_COST_CAP_USD",
     "DEFAULT_N",
-    "FAILURE_NON_RETRYABLE",
+    "FAILURE_BLOG_FATAL",
+    "FAILURE_GLOBAL_FATAL",
     "FAILURE_RETRYABLE",
     "EvalPipelineRunner",
     "EvalProgress",

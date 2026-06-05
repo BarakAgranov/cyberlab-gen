@@ -86,11 +86,13 @@ class BlogRunRecord(InternalModel):
     verdict: Verdict
     low_jury_confidence: bool = False
     halt_reason: str | None = None
-    #: For a failed run, whether the failure is ``"retryable"`` (a persistent
-    #: ``TransientFailure`` — timeout/429/5xx) or ``"non_retryable"`` (a
-    #: ``HardFailure``/4xx/malformed/extraction halt). ``None`` on a clean run.
-    #: The harness's fail-fast uses this to abort only on *repeating non-retryable*
-    #: failures, never a transient blip (ADR 0030).
+    #: For a failed run, the failure's scope (``None`` on a clean run):
+    #: ``"retryable"`` (a persistent ``TransientFailure`` — timeout/429/5xx — a
+    #: blip), ``"blog_fatal"`` (tied to this blog's content/size/URL: truncation,
+    #: malformed, jury/Layer-1 reject, bad URL — skips this blog, moves on), or
+    #: ``"global_fatal"`` (next blog fails identically: no served model, auth/quota/
+    #: config — aborts the whole run). The harness routes on this (ADR 0030/0034).
+    #: Archived reports may carry the older ``"non_retryable"`` value (loads fine).
     failure_kind: str | None = None
 
 
