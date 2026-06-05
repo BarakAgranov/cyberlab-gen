@@ -12,8 +12,9 @@ Architectural source: ``provider-interface.md`` §4/§6, ADR 0018, ADR 0027.
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import anthropic
 import httpx
@@ -43,6 +44,9 @@ from cyberlab_gen.providers.base import (
 )
 from cyberlab_gen.providers.cost_ledger import load_pricing_table
 from cyberlab_gen.providers.retries import RetryStrategy
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Zero-delay strategies so retry tests don't actually sleep.
 _NO_SLEEP_TRANSIENT = RetryStrategy(
@@ -895,6 +899,115 @@ def test_emit_diagnostic_content_dump_is_opt_in(
     err = capsys.readouterr().err
     assert banner in err
     assert "greeting" in err  # the emitted argument is shown verbatim
+
+
+def test_truncation_writes_raw_partial_dump_to_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ADR 0035: on a truncated emit, the RAW partial content is written to
+    # <dir>/<schema>-truncated.json so a maintainer can finally READ what the model
+    # produced (tight-but-large vs bloated). Gated on CYBERLAB_GEN_EMIT_DUMP_DIR.
+    from cyberlab_gen.providers.anthropic_provider import (
+        _EMIT_DUMP_DIR_ENV,  # pyright: ignore[reportPrivateUsage]
+        _dump_emit_on_validation_error,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    monkeypatch.setenv(_EMIT_DUMP_DIR_ENV, str(tmp_path))
+    exc = _greeting_validation_error()  # partial: {"greeting": "hi"} missing 'audience'
+    _dump_emit_on_validation_error(
+        {"greeting": "hi"},
+        schema_name="Greeting",
+        exc=exc,
+        stop_reason="max_tokens",
+        output_tokens=4096,
+        max_tokens=4096,
+    )
+    dump = tmp_path / "Greeting-truncated.json"
+    assert dump.is_file()
+    data = json.loads(dump.read_text(encoding="utf-8"))
+    # The raw partial content is preserved verbatim (the point of the dump).
+    assert data["emitted_arguments"] == {"greeting": "hi"}
+    # Header carries enough to interpret it: stop_reason, tokens, where it cut off.
+    meta = data["_truncation_dump"]
+    assert meta["stop_reason"] == "max_tokens"
+    assert meta["output_tokens"] == 4096
+    assert meta["max_tokens"] == 4096
+    assert "audience" in meta["parse_error"]  # the missing field ~ where it cut off
+
+
+def test_no_truncation_dump_for_complete_but_invalid_emit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A COMPLETE-but-schema-invalid emit (ended normally, not truncated) is a content
+    # problem, not the discarded-truncation gap — no file is written.
+    from cyberlab_gen.providers.anthropic_provider import (
+        _EMIT_DUMP_DIR_ENV,  # pyright: ignore[reportPrivateUsage]
+        _dump_emit_on_validation_error,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    monkeypatch.setenv(_EMIT_DUMP_DIR_ENV, str(tmp_path))
+    _dump_emit_on_validation_error(
+        {"greeting": "hi"},
+        schema_name="Greeting",
+        exc=_greeting_validation_error(),
+        stop_reason="end_turn",
+        output_tokens=10,
+        max_tokens=4096,
+    )
+    assert list(tmp_path.iterdir()) == []  # nothing written for a non-truncated emit
+
+
+def test_no_truncation_dump_when_dir_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With the dir env unset, a truncated emit writes nothing (normal runs stay quiet).
+    from cyberlab_gen.providers.anthropic_provider import (
+        _EMIT_DUMP_DIR_ENV,  # pyright: ignore[reportPrivateUsage]
+        _dump_emit_on_validation_error,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    monkeypatch.delenv(_EMIT_DUMP_DIR_ENV, raising=False)
+    _dump_emit_on_validation_error(
+        {"greeting": "hi"},
+        schema_name="Greeting",
+        exc=_greeting_validation_error(),
+        stop_reason="max_tokens",
+        output_tokens=4096,
+        max_tokens=4096,
+    )
+    assert list(tmp_path.iterdir()) == []  # gated off -> no dump
+
+
+async def test_truncated_emit_writes_dump_and_still_halts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # End-to-end: a truncated emit through the real call path BOTH writes the raw
+    # partial dump AND still raises EmitTruncated (the ADR-0033 halt is unchanged;
+    # the dump is purely additive).
+    from cyberlab_gen.providers.anthropic_provider import (
+        _EMIT_DUMP_DIR_ENV,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    monkeypatch.setenv(_EMIT_DUMP_DIR_ENV, str(tmp_path))
+    provider = _provider(
+        [
+            _Response(
+                [_tool_use("t1", _EMIT_NAME, {"greeting": "hi"})],  # missing audience
+                _Usage(1000, 4096),
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    with pytest.raises(EmitTruncated):
+        await provider.complete(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+    dump = tmp_path / "Greeting-truncated.json"
+    assert dump.is_file()  # the partial content was persisted before the halt
+    assert json.loads(dump.read_text(encoding="utf-8"))["emitted_arguments"] == {"greeting": "hi"}
 
 
 async def test_complete_with_tools_surfaces_truncation_verdict_from_stop_reason(

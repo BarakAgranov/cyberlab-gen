@@ -41,6 +41,7 @@ import secrets
 import sys
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 
 import anthropic
@@ -99,6 +100,17 @@ _DEBUG_TOOL_LOOP_ENV = "CYBERLAB_GEN_DEBUG_TOOL_LOOP"
 #: AttackSpec that omitted ``chain``) so a repeating validation failure can be
 #: diagnosed from real data without re-running at cost.
 _DEBUG_EMIT_ENV = "CYBERLAB_GEN_DEBUG_EMIT"
+
+#: Set this env var to a **directory** to capture the RAW partial emit whenever an
+#: emit is truncated at ``max_tokens`` (ADR 0035). A truncated emit never validates,
+#: so its content is normally discarded — a maintainer can never see *what* the model
+#: produced (tight-but-large, or bloated?). With this set, the raw partial arguments
+#: are written to ``<dir>/<schema>-truncated.json`` *before* ``EmitTruncated`` is
+#: raised. This is **additive** — it does not change the ADR-0033 halt (the run still
+#: fails fast, ships nothing); it only persists the content for reading. Unset (the
+#: default) ⇒ nothing is written. To capture one Extractor run, point it at the eval
+#: specs dir: ``CYBERLAB_GEN_EMIT_DUMP_DIR=eval/reports/specs``.
+_EMIT_DUMP_DIR_ENV = "CYBERLAB_GEN_EMIT_DUMP_DIR"
 
 
 @dataclass
@@ -976,6 +988,17 @@ def _dump_emit_on_validation_error(
             schema_name,
             _short_error(exc),
         )
+        # ADR 0035: persist the raw partial content (gated on _EMIT_DUMP_DIR_ENV) so a
+        # maintainer can finally READ a truncated emit. Best-effort; never changes the
+        # ADR-0033 halt that follows.
+        _write_truncation_dump(
+            emit_input,
+            schema_name=schema_name,
+            stop_reason=stop_reason,
+            output_tokens=output_tokens,
+            max_tokens=max_tokens,
+            parse_error=_short_error(exc),
+        )
     else:
         logger.warning(
             "emit FAILED validation and the response ended normally "
@@ -1005,6 +1028,71 @@ def _dump_emit_on_validation_error(
     )
     print(banner, file=sys.stderr, flush=True)  # noqa: T201 -- opt-in stderr diagnostic
     logger.error("emit validation failure (%s): %s", schema_name, _short_error(exc))
+
+
+def _write_truncation_dump(
+    emit_input: dict[str, Any],
+    *,
+    schema_name: str,
+    stop_reason: str | None,
+    output_tokens: int,
+    max_tokens: int,
+    parse_error: str,
+) -> None:
+    """Persist a truncated emit's RAW partial content for inspection (ADR 0035).
+
+    Gated behind :data:`_EMIT_DUMP_DIR_ENV` (a directory path) — a no-op when unset,
+    so normal runs write nothing. Writes ``<dir>/<schema>-truncated.json``: a
+    ``_truncation_dump`` header (schema, stop_reason, output/max tokens, and the parse
+    error that marks roughly where the emit cut off) plus ``emitted_arguments`` — the
+    raw, incomplete-and-schema-invalid tool-call arguments the model produced. The
+    point is to judge whether the spec is *tight-but-large* or *bloated* (verbose
+    descriptions, over-long excerpts), which decides whether the long-blog fix (P4)
+    needs prompt tightening or chunked-emit alone.
+
+    The provider does not know the blog id; identify the blog from the ``source``
+    block inside ``emitted_arguments``. Re-running overwrites the same-named file
+    (latest wins) — fine for the single-``--blog`` diagnostic this exists for.
+
+    **Additive and best-effort:** a write failure is logged and swallowed, so this
+    never masks or changes the ADR-0033 truncation halt that immediately follows.
+    """
+    dump_dir = os.environ.get(_EMIT_DUMP_DIR_ENV)
+    if not dump_dir:
+        return
+    payload = {
+        "_truncation_dump": {
+            "schema": schema_name,
+            "stop_reason": stop_reason,
+            "output_tokens": output_tokens,
+            "max_tokens": max_tokens,
+            "parse_error": parse_error,
+            "note": (
+                "RAW partial emit: the model's tool-call arguments, cut off at max_tokens "
+                "before it finished. Incomplete and schema-invalid BY DESIGN. Identify the "
+                "blog from the 'source' block in emitted_arguments below."
+            ),
+        },
+        "emitted_arguments": emit_input,
+    }
+    try:
+        target_dir = Path(dump_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        out = target_dir / f"{schema_name}-truncated.json"
+        out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    except OSError as os_exc:
+        logger.warning(
+            "could not write truncated-emit dump to %r (%s); the run still halts normally",
+            dump_dir,
+            os_exc,
+        )
+        return
+    logger.warning(
+        "wrote the RAW partial %s emit (%d output tokens, truncated) to %s",
+        schema_name,
+        output_tokens,
+        out,
+    )
 
 
 def _stop_reason(response: object) -> str | None:

@@ -1166,3 +1166,43 @@ recipe forwards args (verified the flag reaches the CLI and an unknown id exits 
 with the valid ids). `uv run python -m eval.runner.cli --blog <id>` works too.
 
 ---
+
+### Task: Capture a truncated emit's raw partial content (ADR 0035)
+
+**What was built.** Every real blog truncates the AttackSpec emit at max_tokens, and
+because it truncates before validating, the partial content was discarded — a
+maintainer could never READ what the model emits (tight-but-large, or bloated?).
+Now, on a truncated emit, the RAW partial tool-call arguments are written to disk
+*before* `EmitTruncated` is raised.
+
+- New env var **`CYBERLAB_GEN_EMIT_DUMP_DIR`** (a directory). Unset → nothing
+  written (normal runs quiet). Set → `<dir>/<schema>-truncated.json` (for the
+  Extractor: `AttackSpec-truncated.json`). A directory keeps the provider package
+  generic — it never hardcodes the eval's `eval/reports/specs/` layout.
+- The file is valid JSON: a `_truncation_dump` header (schema, stop_reason,
+  output_tokens, max_tokens, parse_error ≈ where it cut off) plus `emitted_arguments`
+  — the raw, incomplete-by-design partial dict. Full content, not ids-only.
+- Hooked into the existing `truncated` branch of `_dump_emit_on_validation_error`
+  (covers both emit-parse sites). Best-effort (`try/except OSError`, logged +
+  swallowed) so it never changes the ADR-0033 halt.
+
+**Halt unchanged (ADR 0033).** Purely additive: the write happens inside the same
+branch, before the `raise EmitTruncated`. Run still fails fast, ships nothing,
+aborts cheaply. No control-flow / retry / raising change.
+
+**Blog identity.** The provider doesn't know the blog id (not threaded through the
+call surface; threading it would cross the eval/provider boundary). The blog is
+identifiable from the `source` block inside the dumped content; the header note says
+so. Single-`--blog` diagnostic, so the fixed filename (overwrite-on-rerun) is fine;
+the written path is logged at WARNING.
+
+**Enable (the one-shot diagnostic), PowerShell:**
+`$env:CYBERLAB_GEN_EMIT_DUMP_DIR="eval/reports/specs"; just eval --blog aws-codebuild-actor-id-regex-bypass`
+then read `eval/reports/specs/AttackSpec-truncated.json`.
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (557 passed,
+exit 0; was 553 + 4 new tests). Eval NOT run (user runs it with the dump enabled).
+
+---
