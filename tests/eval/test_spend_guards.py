@@ -194,6 +194,51 @@ def test_normalize_failure_collapses_varying_tool_ids_and_indices() -> None:
     assert _normalize_failure(a) == _normalize_failure(b)
 
 
+def test_normalize_failure_collapses_varying_request_ids() -> None:
+    # The real 400s differed ONLY by the alphanumeric request_id (req_...), which
+    # the digit-only collapse left distinct, so fail-fast never tripped on six
+    # identical failures (ADR 0032). request_ids must normalize equal.
+    a = (
+        "Anthropic call failed (400): messages.7: tool_use ids were found without "
+        "tool_result blocks: toolu_01ABC, 'request_id': 'req_011Cbdq7ZqaTxP7if8SKGZSb'"
+    )
+    b = (
+        "Anthropic call failed (400): messages.7: tool_use ids were found without "
+        "tool_result blocks: toolu_99ZZZ, 'request_id': 'req_011CbdqF4oZFBM52LGdA1cvE'"
+    )
+    assert _normalize_failure(a) == _normalize_failure(b)
+
+
+def test_fail_fast_aborts_on_repeated_400_differing_only_by_request_id() -> None:
+    # End-to-end regression for the gen0-20260602 archive: six non-retryable 400s
+    # that differed only by request_id ran in full because the signature never
+    # matched. With request_id normalization, fail-fast stops after the 2nd.
+    manifest = load_manifest()
+
+    def record_for(idx: int, blog_id: str, run_index: int) -> BlogRunRecord:
+        # request_id varies by a LETTER (chr) so it is NOT collapsed by the
+        # digit-only rule — exactly the real failure mode.
+        rid_letter = chr(ord("A") + idx)
+        reason = (
+            f"Anthropic call failed (400): messages.{idx + 5}: tool_use ids were found "
+            f"without tool_result blocks: toolu_{idx}abc, "
+            f"'request_id': 'req_011Cbdq{rid_letter}ZqaTxPif8SKGZSb'"
+        )
+        return make_failure_record(
+            blog_id, run_index, failure_kind="non_retryable", halt_reason=reason
+        )
+
+    runner = _ScriptedRunner(record_for)
+    run_blog_set(
+        manifest=manifest,
+        runner=runner,
+        n=3,
+        provider_backed=False,
+        abort_after_consecutive_failures=2,
+    )
+    assert len(runner.calls) == 2  # aborted after 2, not all 6
+
+
 def test_failure_signature_is_none_for_clean_and_retryable_runs() -> None:
     clean = make_record("b", 0)
     assert _failure_signature(clean) is None

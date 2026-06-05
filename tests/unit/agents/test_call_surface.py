@@ -232,6 +232,81 @@ async def test_structural_retry_exhaustion_raises_agent_failure() -> None:
     assert isinstance(cause, MalformedOutput)
 
 
+class _IdenticalFailingProvider(Provider):
+    """Always raises MalformedOutput with the SAME message (no progress).
+
+    Models the production burn: the model reproduces the identical structural
+    failure (``chain is required when in_scope``) on every attempt. The call
+    surface must stop paying for retries the moment it sees the same failure
+    twice in a row, rather than exhausting the whole budget (ADR 0032).
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def name(self) -> str:
+        return "identical-failing"
+
+    async def _attempt(self) -> ProviderResponse[_Out]:
+        self.calls += 1
+        raise MalformedOutput("chain is required when in_scope")
+
+    async def complete[T: BaseModel](
+        self,
+        messages: list[Message],
+        *,
+        output_schema: type[T],
+        capability: CapabilityHint,
+        agent_label: AgentLabel,
+        max_tokens: int | None = None,
+    ) -> ProviderResponse[T]:
+        return await self._attempt()  # type: ignore[return-value]
+
+    async def complete_with_tools[T: BaseModel](
+        self,
+        messages: list[Message],
+        *,
+        output_schema: type[T],
+        capability: CapabilityHint,
+        tools: list[ToolDefinition],
+        tool_executor: ToolExecutor,
+        agent_label: AgentLabel,
+        max_iterations: int,
+        max_tokens: int | None = None,
+    ) -> ProviderResponse[T]:
+        return await self._attempt()  # type: ignore[return-value]
+
+
+async def test_identical_structural_failure_aborts_early_without_exhausting_budget() -> None:
+    # A repeating IDENTICAL structural failure is not worth paying to retry: the
+    # call surface bails after the second identical failure even though the budget
+    # (2 retries -> 3 attempts) would otherwise allow a third (ADR 0032).
+    provider = _IdenticalFailingProvider()
+    runner = _runner(provider, configured=frozenset({"anthropic"}), structural_retry_attempts=2)
+    with pytest.raises(AgentFailure):
+        await runner.run(
+            [Message(role=MessageRole.USER, content="x")],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        )
+    assert provider.calls == 2  # bailed early; did NOT do the 3rd attempt
+
+
+async def test_distinct_structural_failures_still_use_full_budget() -> None:
+    # Progress (a DIFFERENT error each attempt) must NOT trigger the early bail —
+    # the model may be converging, so the full budget is honoured (ADR 0032).
+    provider = _FailingProvider(fail_times=99, success=_Out(value="never"))
+    runner = _runner(provider, configured=frozenset({"anthropic"}), structural_retry_attempts=2)
+    with pytest.raises(AgentFailure):
+        await runner.run(
+            [Message(role=MessageRole.USER, content="x")],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        )
+    assert provider.calls == 3  # distinct messages ("on call N") -> full budget
+
+
 async def test_zero_retry_budget_fails_on_first_malformation() -> None:
     provider = _FailingProvider(fail_times=99, success=_Out(value="never"))
     runner = _runner(provider, configured=frozenset({"anthropic"}), structural_retry_attempts=0)

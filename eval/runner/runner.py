@@ -62,12 +62,16 @@ FAILURE_NON_RETRYABLE = "non_retryable"
 def _normalize_failure(reason: str) -> str:
     """Strip run-varying detail from a halt reason so repeats compare equal (ADR 0030).
 
-    The tool-loop 400 names a different ``toolu_`` id and ``messages.N`` index each
-    run; without normalizing, two instances of the *same* systemic failure would
-    look distinct and never trip the consecutive-failure abort. Collapse the
-    variable bits (tool ids, message indices, any digits) to placeholders.
+    The tool-loop 400 names a different ``toolu_`` id, ``request_id`` (``req_…``),
+    and ``messages.N`` index each run; without normalizing, two instances of the
+    *same* systemic failure would look distinct and never trip the
+    consecutive-failure abort. Collapse the variable bits (tool ids, request ids,
+    message indices, any digits) to placeholders. The ``req_…`` id is mixed
+    alphanumeric, so the digit-only collapse alone left it varying — the gap that
+    let six identical 400s run in full in the gen0-20260602 archive (ADR 0032).
     """
     s = re.sub(r"toolu_[A-Za-z0-9]+", "toolu_X", reason)
+    s = re.sub(r"req_[A-Za-z0-9]+", "req_X", s)
     s = re.sub(r"messages\.\d+", "messages.N", s)
     s = re.sub(r"\d+", "N", s)
     return s.strip()

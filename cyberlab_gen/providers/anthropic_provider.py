@@ -34,6 +34,7 @@ What this module does (and what it deliberately does not):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -88,6 +89,14 @@ _EMIT_TOOL_PREFIX = "emit_"
 #: on a non-retryable 4xx — the tool-loop-400 diagnostic. Off by default so normal
 #: runs are quiet (ADR 0031); the structural fix means it should no longer fire.
 _DEBUG_TOOL_LOOP_ENV = "CYBERLAB_GEN_DEBUG_TOOL_LOOP"
+
+#: Set this env var (to any non-empty value) to dump the model's actual emitted
+#: tool arguments to stderr whenever an emit fails schema validation — the
+#: content-failure diagnostic (ADR 0032). Off by default. Unlike the tool-loop
+#: dump (ids only), this prints the raw emitted *content* (e.g. an in-scope
+#: AttackSpec that omitted ``chain``) so a repeating validation failure can be
+#: diagnosed from real data without re-running at cost.
+_DEBUG_EMIT_ENV = "CYBERLAB_GEN_DEBUG_EMIT"
 
 
 @dataclass
@@ -289,6 +298,15 @@ class AnthropicProvider(Provider):
                 try:
                     output = output_schema.model_validate(_block_input(emit_use))
                 except PydanticValidationError as exc:
+                    triggering_error = _short_error(exc)
+                    _dump_emit_on_validation_error(
+                        _block_input(emit_use),
+                        schema_name=output_schema.__name__,
+                        exc=exc,
+                        stop_reason=_stop_reason(response),
+                        output_tokens=_int_attr(getattr(response, "usage", None), "output_tokens"),
+                        max_tokens=tokens,
+                    )
                     convo.append({"role": "assistant", "content": content})
                     convo.append(
                         {
@@ -298,7 +316,7 @@ class AnthropicProvider(Provider):
                                     "type": "tool_result",
                                     "tool_use_id": _block_id(emit_use),
                                     "content": (
-                                        f"Schema validation failed: {_short_error(exc)}. "
+                                        f"Schema validation failed: {triggering_error}. "
                                         f"Call {emit_name} again with corrected arguments."
                                     ),
                                     "is_error": True,
@@ -314,6 +332,7 @@ class AnthropicProvider(Provider):
                         emit_tool=emit_tool,
                         acc=acc,
                         max_tokens=tokens,
+                        prior_parse_error=triggering_error,
                     )
                 return self._finish(
                     output=output, model=model, trace=trace, calls_made=calls_made, acc=acc
@@ -415,6 +434,7 @@ class AnthropicProvider(Provider):
         emit_tool: dict[str, Any],
         acc: _UsageAccumulator,
         max_tokens: int,
+        prior_parse_error: str | None = None,
     ) -> T_Output:
         """Force the emit tool and parse its arguments, retrying on malformed output.
 
@@ -422,10 +442,20 @@ class AnthropicProvider(Provider):
         0018), re-prompting with the parse error as a ``tool_result`` error block
         each time. On exhaustion raises ``MalformedOutput``
         (``provider-interface.md`` §6.2).
+
+        ``prior_parse_error`` is the parse error (if any) that triggered this forced
+        extract — e.g. the finish-turn emit that failed validation in
+        ``complete_with_tools``. It seeds the no-progress check (ADR 0032): if the
+        model reproduces the *identical* error, this bails immediately rather than
+        spending the rest of the budget on a failure that is provably not
+        converging. The raised ``MalformedOutput`` message is kept deterministic
+        for a given error (no varying attempt count) so the call surface's own
+        no-progress bail can recognise the same failure across stage attempts.
         """
         emit_name = emit_tool["name"]
         working = list(base_messages)
         parse_error = "unknown"
+        prev_error = prior_parse_error
         for _attempt in range(self._malformed.max_attempts):
             response = await self._create(
                 model=model,
@@ -442,21 +472,39 @@ class AnthropicProvider(Provider):
             )
             if emit_use is None:
                 parse_error = "model did not return the forced emit tool call"
+            else:
+                try:
+                    return output_schema.model_validate(_block_input(emit_use))
+                except PydanticValidationError as exc:
+                    parse_error = _short_error(exc)
+                    _dump_emit_on_validation_error(
+                        _block_input(emit_use),
+                        schema_name=output_schema.__name__,
+                        exc=exc,
+                        stop_reason=_stop_reason(response),
+                        output_tokens=_int_attr(getattr(response, "usage", None), "output_tokens"),
+                        max_tokens=max_tokens,
+                    )
+            # No-progress early-bail (ADR 0032): the model reproduced the identical
+            # error (including the one that triggered this forced extract) — paying
+            # for more retries cannot help. A *different* error may signal
+            # convergence, so the budget is only abandoned on an exact repeat.
+            if parse_error == prev_error:
+                logger.warning(
+                    "anthropic structured output reproduced the identical error; aborting "
+                    "malformed-retry early (model=%s): %s",
+                    model,
+                    parse_error,
+                )
+                break
+            prev_error = parse_error
+            if emit_use is None:
                 working = [
                     *working,
                     {"role": "assistant", "content": content or _text_of(response)},
                     {"role": "user", "content": f"You must call {emit_name}. {parse_error}"},
                 ]
-                continue
-            try:
-                return output_schema.model_validate(_block_input(emit_use))
-            except PydanticValidationError as exc:
-                parse_error = _short_error(exc)
-                logger.warning(
-                    "anthropic structured output failed schema validation (model=%s): %s",
-                    model,
-                    parse_error,
-                )
+            else:
                 working = [
                     *working,
                     {"role": "assistant", "content": content},
@@ -474,8 +522,8 @@ class AnthropicProvider(Provider):
                     },
                 ]
         raise MalformedOutput(
-            f"structured output did not validate against {output_schema.__name__} after "
-            f"{self._malformed.max_attempts} attempt(s); last error: {parse_error}"
+            f"structured output did not validate against {output_schema.__name__}; "
+            f"last error: {parse_error}"
         )
 
     def _finish[T_Output: BaseModel](
@@ -809,6 +857,80 @@ def _dump_message_array_on_error(
     )
     print(banner, file=sys.stderr, flush=True)  # noqa: T201 -- opt-in stderr diagnostic
     logger.error("anthropic %s tool-loop failure; message array:\n%s", status, summary)
+
+
+def _dump_emit_on_validation_error(
+    emit_input: dict[str, Any],
+    *,
+    schema_name: str,
+    exc: PydanticValidationError,
+    stop_reason: str | None = None,
+    output_tokens: int = 0,
+    max_tokens: int = 0,
+) -> None:
+    """Diagnose an emit that failed schema validation (ADR 0032 Symptom-2 follow-up).
+
+    Two outputs, by audience:
+
+    * **Always** (no env var) — a concise, unmissable ``WARNING`` verdict on the
+      load-bearing question: was the emit *truncated* (the response stopped at
+      ``max_tokens`` mid-emit) or *complete-but-schema-invalid* (a genuine content
+      problem)? ``stop_reason == "max_tokens"`` is the authoritative truncation
+      signal; ``output_tokens`` vs ``max_tokens`` corroborates. This is the line a
+      maintainer needs and it costs nothing to show on every run.
+    * **Opt-in** (:data:`_DEBUG_EMIT_ENV`) — the model's raw emitted arguments dumped
+      to stderr. Unlike :func:`_dump_message_array_on_error` (ids only) this prints
+      *content* — the whole point is to see *what* the model produced (e.g. an
+      ``in_scope`` AttackSpec that omitted ``chain``). Large, so it is off by default.
+    """
+    truncated = stop_reason == "max_tokens" or (max_tokens > 0 and output_tokens >= max_tokens)
+    if truncated:
+        logger.warning(
+            "emit FAILED validation AND the response stopped at max_tokens "
+            "(stop_reason=%s, output_tokens=%s, max_tokens=%s): the emitted %s was "
+            "TRUNCATED mid-emit, not a deliberate omission -- raise the caller's "
+            "max_tokens. Parse error: %s",
+            stop_reason,
+            output_tokens,
+            max_tokens,
+            schema_name,
+            _short_error(exc),
+        )
+    else:
+        logger.warning(
+            "emit FAILED validation and the response ended normally "
+            "(stop_reason=%s, output_tokens=%s/%s): the emitted %s was COMPLETE but "
+            "schema-invalid (a content problem, not truncation). Parse error: %s",
+            stop_reason,
+            output_tokens,
+            max_tokens,
+            schema_name,
+            _short_error(exc),
+        )
+    if not os.environ.get(_DEBUG_EMIT_ENV):
+        return
+    try:
+        rendered = json.dumps(emit_input, indent=2, default=str)
+    except (TypeError, ValueError):  # pragma: no cover - defensive; emit_input is plain JSON
+        rendered = repr(emit_input)
+    if len(rendered) > 16000:
+        rendered = f"{rendered[:16000]}\n... (dump truncated for display; emit was longer)"
+    banner = (
+        f"\n=== EMIT VALIDATION FAILURE ({schema_name}) ===\n"
+        f"stop_reason={stop_reason} output_tokens={output_tokens} max_tokens={max_tokens}\n"
+        f"error: {_short_error(exc)}\n"
+        f"emitted arguments (raw, as the model produced them):\n"
+        f"{rendered}\n"
+        f"=== end emit dump ===\n"
+    )
+    print(banner, file=sys.stderr, flush=True)  # noqa: T201 -- opt-in stderr diagnostic
+    logger.error("emit validation failure (%s): %s", schema_name, _short_error(exc))
+
+
+def _stop_reason(response: object) -> str | None:
+    """The vendor response's ``stop_reason`` (``"max_tokens"`` ⇒ truncated)."""
+    value = getattr(response, "stop_reason", None)
+    return str(value) if value is not None else None
 
 
 def _text_of(response: object) -> str:

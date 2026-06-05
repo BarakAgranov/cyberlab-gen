@@ -19,6 +19,7 @@ import anthropic
 import httpx
 import pytest
 from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 
 from cyberlab_gen.errors import HardFailure, MalformedOutput, ToolLoopError, TransientFailure
 from cyberlab_gen.providers.anthropic_provider import (
@@ -754,6 +755,177 @@ def test_debug_summarize_messages_flags_the_unanswered_tool_use() -> None:
         {"type": "tool_result", "tool_use_id": "c2", "content": "r"},
     ]
     assert "MALFORMED" not in _debug_summarize_messages(messages)
+
+
+async def test_complete_with_tools_bails_early_on_repeated_identical_emit_error() -> None:
+    # The production burn (ADR 0032): the model finishes by emitting an AttackSpec
+    # that fails the SAME validation every time. After the finish-turn emit fails,
+    # the forced-extract reproduces the IDENTICAL error -> the provider must stop
+    # rather than spend the remaining malformed-retry attempt. With only TWO canned
+    # outcomes, a non-bailing loop would demand a third and the fake would raise
+    # "ran out of canned outcomes"; bailing raises MalformedOutput after 2 calls.
+    executor = _Executor(content="unused")
+    provider = _provider(
+        [
+            # finish-turn emit: missing 'audience' -> identical validation error.
+            _Response([_tool_use("e1", _EMIT_NAME, {"greeting": "hi"})], _Usage(100, 20)),
+            # forced-extract attempt 1: SAME invalid args -> SAME error -> bail.
+            _Response([_tool_use("e2", _EMIT_NAME, {"greeting": "hi"})], _Usage(40, 10)),
+        ]
+    )
+    with pytest.raises(MalformedOutput):
+        await provider.complete_with_tools(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            tools=[_lookup_tool()],
+            tool_executor=executor,
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=5,
+        )
+    fake: _FakeMessages = provider._client.messages  # type: ignore[union-attr]
+    assert len(fake.calls) == 2  # finish-turn emit + ONE forced attempt, then bail
+
+
+async def test_complete_with_tools_recovers_when_forced_extract_makes_progress() -> None:
+    # The bail must only fire on an IDENTICAL repeat: if the forced-extract returns
+    # corrected args, the call succeeds (no regression of the ADR 0031 fallback).
+    executor = _Executor(content="unused")
+    provider = _provider(
+        [
+            _Response([_tool_use("e1", _EMIT_NAME, {"greeting": "hi"})], _Usage(100, 20)),
+            _Response(
+                [_tool_use("e2", _EMIT_NAME, {"greeting": "hi", "audience": "world"})],
+                _Usage(40, 10),
+            ),
+        ]
+    )
+    resp = await provider.complete_with_tools(
+        _messages(),
+        output_schema=Greeting,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        tools=[_lookup_tool()],
+        tool_executor=executor,
+        agent_label=AgentLabel.EXTRACTOR,
+        max_iterations=5,
+    )
+    assert resp.output == Greeting(greeting="hi", audience="world")
+
+
+def _greeting_validation_error() -> PydanticValidationError:
+    try:
+        Greeting.model_validate({"greeting": "hi"})  # missing 'audience'
+    except PydanticValidationError as exc:
+        return exc
+    raise AssertionError("expected a validation error")  # pragma: no cover - defensive
+
+
+def test_emit_diagnostic_verdict_distinguishes_truncation_from_content(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Symptom-2 (ADR 0032): the ALWAYS-ON verdict must name the load-bearing
+    # distinction without any env var — was the emit TRUNCATED (stopped at
+    # max_tokens) or COMPLETE-but-schema-invalid (a content problem)?
+    import logging
+
+    from cyberlab_gen.providers.anthropic_provider import (
+        _DEBUG_EMIT_ENV,  # pyright: ignore[reportPrivateUsage]
+        _dump_emit_on_validation_error,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    monkeypatch.delenv(_DEBUG_EMIT_ENV, raising=False)  # verdict needs no env var
+    exc = _greeting_validation_error()
+
+    # stop_reason=max_tokens -> TRUNCATED verdict.
+    with caplog.at_level(logging.WARNING, logger="cyberlab_gen.providers.anthropic_provider"):
+        _dump_emit_on_validation_error(
+            {"greeting": "hi"},
+            schema_name="Greeting",
+            exc=exc,
+            stop_reason="max_tokens",
+            output_tokens=4096,
+            max_tokens=4096,
+        )
+    assert "TRUNCATED" in caplog.text
+
+    caplog.clear()
+    # stop_reason=end_turn, room to spare -> COMPLETE content-problem verdict.
+    with caplog.at_level(logging.WARNING, logger="cyberlab_gen.providers.anthropic_provider"):
+        _dump_emit_on_validation_error(
+            {"greeting": "hi"},
+            schema_name="Greeting",
+            exc=exc,
+            stop_reason="end_turn",
+            output_tokens=512,
+            max_tokens=4096,
+        )
+    assert "COMPLETE" in caplog.text
+    assert "TRUNCATED" not in caplog.text
+
+
+def test_emit_diagnostic_content_dump_is_opt_in(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The full emitted-content dump (large) is gated behind CYBERLAB_GEN_DEBUG_EMIT;
+    # the chainless AttackSpec only appears on stderr when the var is set.
+    from cyberlab_gen.providers.anthropic_provider import (
+        _DEBUG_EMIT_ENV,  # pyright: ignore[reportPrivateUsage]
+        _dump_emit_on_validation_error,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    exc = _greeting_validation_error()
+    banner = "=== EMIT VALIDATION FAILURE"
+
+    monkeypatch.delenv(_DEBUG_EMIT_ENV, raising=False)
+    _dump_emit_on_validation_error(
+        {"greeting": "hi"}, schema_name="Greeting", exc=exc, stop_reason="end_turn"
+    )
+    assert banner not in capsys.readouterr().err  # no content dump without the var
+
+    monkeypatch.setenv(_DEBUG_EMIT_ENV, "1")
+    _dump_emit_on_validation_error(
+        {"greeting": "hi"}, schema_name="Greeting", exc=exc, stop_reason="end_turn"
+    )
+    err = capsys.readouterr().err
+    assert banner in err
+    assert "greeting" in err  # the emitted argument is shown verbatim
+
+
+async def test_complete_with_tools_surfaces_truncation_verdict_from_stop_reason(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Wiring: a finish-turn emit that fails validation AND carries
+    # stop_reason="max_tokens" must surface the TRUNCATED verdict through the real
+    # call path (the response's stop_reason flows into the diagnostic). The forced
+    # extract then recovers so the call still completes.
+    import logging
+
+    executor = _Executor(content="unused")
+    provider = _provider(
+        [
+            _Response(
+                [_tool_use("e1", _EMIT_NAME, {"greeting": "hi"})],  # missing audience
+                _Usage(100, 4096),
+                stop_reason="max_tokens",
+            ),
+            _Response(
+                [_tool_use("e2", _EMIT_NAME, {"greeting": "hi", "audience": "world"})],
+                _Usage(40, 10),
+            ),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="cyberlab_gen.providers.anthropic_provider"):
+        resp = await provider.complete_with_tools(
+            _messages(),
+            output_schema=Greeting,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            tools=[_lookup_tool()],
+            tool_executor=executor,
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=5,
+        )
+    assert resp.output == Greeting(greeting="hi", audience="world")
+    assert "TRUNCATED" in caplog.text  # the verdict reached the log, no env var
 
 
 async def test_complete_with_tools_coerces_final_output_when_model_ends_with_text() -> None:

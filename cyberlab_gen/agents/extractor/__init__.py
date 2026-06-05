@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from cyberlab_gen.agents.extractor.extractor import (
+    DEFAULT_EXTRACTOR_MAX_TOKENS,
     DEFAULT_HALLUCINATION_RETRY_ATTEMPTS,
     DEFAULT_MAX_TOOL_ITERATIONS,
     ExtractionResult,
@@ -15,6 +16,7 @@ from cyberlab_gen.agents.extractor.tools import (
 )
 
 __all__ = [
+    "DEFAULT_EXTRACTOR_MAX_TOKENS",
     "DEFAULT_HALLUCINATION_RETRY_ATTEMPTS",
     "DEFAULT_MAX_TOOL_ITERATIONS",
     "ExternalLookupRecord",

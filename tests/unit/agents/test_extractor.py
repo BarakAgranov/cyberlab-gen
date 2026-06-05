@@ -223,6 +223,30 @@ async def test_produces_schema_valid_spec_with_provenance() -> None:
     assert result.reprompts == 0
 
 
+async def test_extractor_requests_a_generous_output_budget() -> None:
+    # Regression for the truncated-emit bug (ADR 0032): the Extractor must request a
+    # generous max_tokens, not fall back to the provider's 4096 default which truncates
+    # a full AttackSpec mid-emit (the alternating extraction_metadata/chain failures).
+    # The non-streaming SDK path raises above ~21,333 tokens, so the value sits below it.
+    from cyberlab_gen.agents.extractor import DEFAULT_EXTRACTOR_MAX_TOKENS
+
+    provider = MockProvider()
+    _register(provider, _spec())
+    await _extractor(provider).extract(blog_content="blog", source_summary="url=...")
+    assert provider.last_max_tokens == DEFAULT_EXTRACTOR_MAX_TOKENS
+    assert DEFAULT_EXTRACTOR_MAX_TOKENS == 16384  # generous (4x the 4096 default)
+    assert DEFAULT_EXTRACTOR_MAX_TOKENS <= 21333  # safe on the non-streaming call path
+
+
+async def test_extractor_output_budget_is_configurable() -> None:
+    provider = MockProvider()
+    _register(provider, _spec())
+    await _extractor(provider, max_output_tokens=12000).extract(
+        blog_content="blog", source_summary="url=..."
+    )
+    assert provider.last_max_tokens == 12000
+
+
 async def test_out_of_scope_sets_extraction_outcome() -> None:
     provider = MockProvider()
     _register(provider, _out_of_scope_spec())

@@ -961,3 +961,81 @@ test stays.
 exit 0; was 524 + 2 new tool-loop tests).
 
 ---
+
+## Eval-spend follow-up: no-progress early-bail on a repeating validation failure (ADR 0032)
+
+A provider-backed run had the Extractor judge a blog `in_scope` but emit an
+`AttackSpec` with no `chain` → `chain is required when in_scope`. The model
+reproduced the identical error on every re-prompt, and the retry machinery paid
+for it at two layers (provider malformed-retry × call-surface structural-retry =
+~6–9 full long-context calls/run, ~$4 across runs).
+
+### Diagnosis (two corrections to the reported hypothesis)
+
+- The failure is **not** mis-classified as retryable: `AgentFailure` subclasses
+  `CyberlabGenError` directly, so the eval runner tags it `non_retryable`. The
+  ADR-0030 fail-fast is just too **coarse** (run granularity) to stop a
+  within-run retry storm — that is where the money goes.
+- `chain is required when in_scope` is a `mode="after"` validator, which runs only
+  after every field validated → the emit was a **complete** spec with `chain`
+  omitted, **not** a truncation. (Truncation would drop fields declared after
+  `chain` and surface field-level errors instead.)
+- Separately found: `_normalize_failure` left the alphanumeric `request_id`
+  (`req_…`) un-collapsed, so the six identical 400s in `gen0-20260602` ran in full
+  (signatures all distinct). Confirmed against the archived report.
+
+### Changes (TDD; tests red → green)
+
+- **Provider `_extract_structured`** — `prior_parse_error` threaded from the
+  `complete_with_tools` emit fallback; bails on an identical repeat; deterministic
+  `MalformedOutput` message (dropped the varying attempt count) so the call
+  surface can match it across stage attempts.
+- **Call surface `_with_structural_retry`** — bails when a `MalformedOutput`
+  repeats identically; a *different* error still uses the full budget.
+- **`_normalize_failure`** — collapses `req_…` so request_id-only variation no
+  longer defeats fail-fast.
+- **Symptom-2 diagnostic** — `_dump_emit_on_validation_error` +
+  `CYBERLAB_GEN_DEBUG_EMIT` (off by default) prints the model's *actual emitted
+  arguments* on a validation fail, so the chainless `AttackSpec` can be captured
+  from real data before deciding the content fix.
+
+Worst-case stuck-content Extractor calls/run drop ~9 → ~4; combined with the
+now-effective fail-fast a doomed blog aborts after 2 runs and archives the partial.
+
+### Deferred (Symptom 2, by decision: "capture real output first")
+
+The *why* of the missing chain is a model-behaviour question that can't be
+confirmed without live spend. The diagnostic is in place; next step is to run once
+with `CYBERLAB_GEN_DEBUG_EMIT=1` and decide the prompt fix from the captured
+emit. **Latent bug flagged in ADR 0032:** the Extractor calls `run_with_tools`
+without `max_tokens`, so the AttackSpec emit is capped at the provider default
+(4096) despite the adapter docstring saying it should pass more — a real
+truncation risk, though not the cause of this specific error.
+
+### Verification
+
+`just verify` green — ruff, format, pyright strict, pytest all pass (533 passed,
+exit 0; was 526 + 7 new tests across call-surface, provider, and spend-guard
+suites).
+
+---
+
+### Resolution: emit was truncated; raised the Extractor's max_tokens
+
+Diagnostic verdict + the alternating missing-field evidence
+(`extraction_metadata` then `chain`) confirmed the emit was **truncated**, not a
+deliberate omission. Root cause: `Extractor.extract` called `run_with_tools`
+without `max_tokens`, falling to the provider default (4096) — too small for a
+full AttackSpec. Fixed: `DEFAULT_EXTRACTOR_MAX_TOKENS = 16384` (configurable),
+passed through to the emit call.
+
+Ceiling analysis (per the claude-api skill + SDK source): `claude-opus-4-8` allows
+128K output tokens, but the non-streaming provider path is capped at ~21,333
+(`_calculate_nonstreaming_timeout` raises above that). 16384 is 4x the old
+default, under the non-streaming wall with margin, and covers a realistic spec
+(~12K for a 9-step Sysdig blog). **Open gap:** `chain_steps` is unbounded, so a
+long-enough blog still exceeds any fixed cap and truncates — no chunked/streaming
+emit exists (`implementation-plan.md §4.6` flags this as a risk only). Recorded in
+ADR 0032.
+
+---

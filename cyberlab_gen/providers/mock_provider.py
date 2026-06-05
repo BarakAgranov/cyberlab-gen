@@ -101,6 +101,10 @@ class MockProvider(Provider):
         self._registrations: list[_MockRegistration] = []
         self._default_usage: TokenUsage | None = None
         self._pricing_table: PricingTable | None = None
+        #: ``max_tokens`` from the most recent ``complete`` / ``complete_with_tools``
+        #: call, so a test can assert an agent passes the output budget it intends
+        #: (the mock itself does not constrain output length).
+        self.last_max_tokens: int | None = None
 
     @property
     def name(self) -> str:
@@ -160,7 +164,7 @@ class MockProvider(Provider):
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
-        del max_tokens  # mock does not constrain output length
+        self.last_max_tokens = max_tokens  # recorded; mock does not constrain output length
         registration = self._find(messages, capability=capability, agent_label=agent_label)
         return self._build_response(
             messages=messages,
@@ -182,7 +186,8 @@ class MockProvider(Provider):
         max_iterations: int,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
-        del tools, tool_executor, max_iterations, max_tokens
+        del tools, tool_executor, max_iterations
+        self.last_max_tokens = max_tokens  # recorded; mock does not constrain output length
         registration = self._find(messages, capability=capability, agent_label=agent_label)
         return self._build_response(
             messages=messages,

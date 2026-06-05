@@ -190,6 +190,7 @@ class AgentRunner:
     ) -> ProviderResponse[T_Output]:
         max_attempts = 1 + self._structural_retry_attempts
         last_error: MalformedOutput | None = None
+        prev_signature: str | None = None
         for attempt in range(1, max_attempts + 1):
             try:
                 return await call()
@@ -203,6 +204,23 @@ class AgentRunner:
                     capability.value,
                     exc,
                 )
+                # No-progress early-bail (ADR 0032): a structural failure identical
+                # to the previous attempt's means the model is reproducing the same
+                # invalid output — more retries cannot make progress and only cost
+                # money. Stop now rather than exhausting the budget. A *different*
+                # failure may signal convergence, so the full budget is honoured then.
+                signature = str(exc)
+                if signature == prev_signature:
+                    logger.warning(
+                        "agent %s structural failure repeated identically; aborting retries "
+                        "early after %d/%d attempts (capability %s)",
+                        self._agent_label.value,
+                        attempt,
+                        max_attempts,
+                        capability.value,
+                    )
+                    break
+                prev_signature = signature
         raise AgentFailure(
             f"agent {self._agent_label.value} exhausted structural-retry budget "
             f"({max_attempts} attempts) for capability {capability.value}"
