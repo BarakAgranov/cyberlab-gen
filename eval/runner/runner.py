@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
     from cyberlab_gen.cli.extract import ExtractRunner
     from cyberlab_gen.providers.cost_ledger import CostLedger
+    from cyberlab_gen.schemas.attack_spec import AttackSpec
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
     from eval.runner.manifest import BlogSetManifest
 
@@ -162,6 +163,7 @@ class ProviderBackedEvalRunner:
         validator: StaticSchemaValidator,
         url_for: Callable[[str], str],
         cost_cap_usd: Decimal | None = DEFAULT_COST_CAP_USD,
+        specs_dir: Path | None = None,
     ) -> None:
         # The factory builds a fresh ``ExtractRunner`` per run from a per-run
         # ``CostLedger`` *this* class constructs (so the run can read real spend off
@@ -171,6 +173,12 @@ class ProviderBackedEvalRunner:
         self._validator = validator
         self._url_for = url_for
         self._cost_cap_usd = cost_cap_usd
+        # When set, each *shipped* run's AttackSpec is written here as
+        # ``<blog_id>-run<run_index>.yaml`` — the report records only metrics, so
+        # the spec is otherwise unreadable from disk (it's the thing a maintainer
+        # needs to judge quality, e.g. whether a `completeness=0.85` ship was
+        # actually a truncated emit). Halted runs ship no spec, so none is written.
+        self._specs_dir = specs_dir
 
     def run_once(self, blog_id: str, *, run_index: int) -> BlogRunRecord:  # pragma: no cover
         # The live path: build a fresh ledger + runner, resolve the URL, run, and
@@ -197,6 +205,7 @@ class ProviderBackedEvalRunner:
                 blog_id, run_index, ledger, exc, failure_kind=FAILURE_NON_RETRYABLE
             )
         layer1 = self._validator.validate(result.spec)
+        self._write_spec(blog_id, run_index, result.spec)
         return record_from_run(
             blog_id=blog_id,
             run_index=run_index,
@@ -209,6 +218,22 @@ class ProviderBackedEvalRunner:
             verdict=Verdict.APPROVE if not result.low_jury_confidence else Verdict.REVISE,
             low_jury_confidence=result.low_jury_confidence,
         )
+
+    def _write_spec(self, blog_id: str, run_index: int, spec: AttackSpec) -> None:
+        """Write a shipped run's AttackSpec to ``specs_dir`` (no-op when unset).
+
+        Keyed ``<blog_id>-run<run_index>.yaml`` and re-uses the ``extract`` verb's
+        serializer so the eval spec and a hand-run ``extract`` spec are byte-identical.
+        Re-running an eval overwrites the same-keyed file (the latest run wins); the
+        timestamped report remains the historical record of the metrics.
+        """
+        if self._specs_dir is None:
+            return
+        from cyberlab_gen.cli.extract import spec_to_yaml
+
+        self._specs_dir.mkdir(parents=True, exist_ok=True)
+        path = self._specs_dir / f"{blog_id}-run{run_index}.yaml"
+        path.write_text(spec_to_yaml(spec), encoding="utf-8")
 
     def _halt_record(  # pragma: no cover - live path
         self,

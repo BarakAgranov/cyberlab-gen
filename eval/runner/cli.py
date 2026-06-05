@@ -24,7 +24,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from eval.runner.manifest import load_manifest, walk_path
-from eval.runner.report import EvalReport, archive_report
+from eval.runner.report import REPORTS_RELDIR, EvalReport, archive_report
 from eval.runner.runner import DEFAULT_COST_CAP_USD, DEFAULT_N, run_blog_set
 
 if TYPE_CHECKING:
@@ -83,8 +83,6 @@ def run_eval(
     cumulative spend reaches ``cost_cap_usd`` (ADR 0030). ``progress`` (when given)
     receives live events for stderr output.
     """
-    from eval.runner.report import REPORTS_RELDIR
-
     manifest = load_manifest(manifest_path)
     target_dir = reports_dir if reports_dir is not None else _default_reports_dir(REPORTS_RELDIR)
 
@@ -220,6 +218,10 @@ def _build_provider_backed_runner(
         validator=validator,
         url_for=url_for,
         cost_cap_usd=cost_cap_usd,
+        # Shipped specs land alongside the reports, under eval/reports/specs/, so a
+        # maintainer can read the actual emitted AttackSpec (the report holds only
+        # metrics). Co-located with the default report dir (REPORTS_RELDIR).
+        specs_dir=_default_reports_dir(REPORTS_RELDIR) / "specs",
     )
 
 
