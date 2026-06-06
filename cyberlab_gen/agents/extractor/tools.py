@@ -7,8 +7,10 @@ authority), ADR 0021.
 The Extractor has exactly three tools (the brief's item 2):
 
 - ``external_lookup(source_id, params)`` — a read-only call against an
-  ``external_data_sources`` registry entry. Phase 1 wires NVD; other source ids
-  return an honest "not integrated" error. Every call is recorded as an
+  ``external_data_sources`` registry entry. Phase 1 wires NVD; every other source id
+  (registered-but-unwired, or unknown) is recorded as an *unavailable* (not-found)
+  lookup so the model proceeds — an unavailable enrichment source is never a fatal
+  tool error (ADR 0042). Every call is recorded as an
   ``ExternalLookupRecord`` so the framework can later enforce search-before-claim
   (``schema.md §4.15``): a ``source: external_api`` field with no matching record
   in the trace is rejected.
@@ -182,19 +184,25 @@ class ExtractorToolExecutor:
             else {}
         )
 
-        if self._registries.external_source(source_id) is None:
-            return ToolResult(
-                call_id=call.call_id,
-                content=f"unknown external source id {source_id!r}",
-                is_error=True,
-            )
-
         if source_id == _NVD_SOURCE_ID:
             return self._nvd_lookup(call, params)
 
-        # Registered source but not wired to a client in Phase 1 (honest skip,
-        # mirroring the enrichment pass's not-integrated reason).
-        detail = f"source {source_id} not integrated in Phase 1"
+        # Any non-NVD source — registered-but-unwired this phase, OR not a known source
+        # id at all — is simply UNAVAILABLE. Record it as a not-found lookup and tell the
+        # model to proceed (treat the value as requiring external research). This is
+        # deliberately NOT an error result (ADR 0042): the provider turns an is_error
+        # result into a pydantic-ai ``ModelRetry``, and retrying a lookup against a source
+        # that cannot be served is GUARANTEED to fail again — so it exhausts the (default 1)
+        # tool-retry budget and escalates to a fatal ``ToolRetryError`` that kills the whole
+        # extraction. An unavailable enrichment source must never be fatal; this mirrors the
+        # nvd-no-client and rate-limit graceful paths.
+        known = self._registries.external_source(source_id) is not None
+        availability = "registered but not integrated this phase" if known else "not a known source"
+        detail = (
+            f"external source {source_id!r} is unavailable ({availability}); treat the value as "
+            f"requiring external research (set the field to unknown_from_blog with a reason) "
+            f"and continue"
+        )
         self.lookups.append(
             ExternalLookupRecord(source_id=source_id, params=params, found=False, detail=detail)
         )

@@ -90,13 +90,20 @@ async def test_external_lookup_rate_limit_is_recorded_and_logged(
     )
 
 
-async def test_external_lookup_unknown_source_is_error() -> None:
+async def test_external_lookup_unavailable_source_is_graceful_not_fatal() -> None:
+    # An unavailable source (unknown id, or registered-but-unwired) must NOT be an
+    # error result: the provider turns is_error into a pydantic-ai ModelRetry, and
+    # retrying an unservable lookup exhausts the tool-retry budget and kills the whole
+    # extraction (ADR 0042). It is recorded as a not-found lookup so the run continues.
     ex = _executor()
     result = await ex.execute(
-        _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "not_a_source", "params": {}})
+        _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "mitre", "params": {"technique_id": "T1078"}})
     )
-    assert result.is_error
-    assert ex.lookups == []
+    assert not result.is_error
+    assert "unavailable" in result.content
+    assert len(ex.lookups) == 1
+    assert ex.lookups[0].source_id == "mitre"
+    assert ex.lookups[0].found is False
 
 
 async def test_propose_value_type_collected() -> None:
