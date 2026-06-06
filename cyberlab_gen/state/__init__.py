@@ -12,5 +12,22 @@ modules import from each sibling directly.
 """
 
 from cyberlab_gen.state.local_state import LocalState, UserConfig
+from cyberlab_gen.state.run_store import (
+    RunHandle,
+    RunKind,
+    RunLineage,
+    RunRecord,
+    RunStatus,
+    RunStore,
+)
 
-__all__ = ["LocalState", "UserConfig"]
+__all__ = [
+    "LocalState",
+    "RunHandle",
+    "RunKind",
+    "RunLineage",
+    "RunRecord",
+    "RunStatus",
+    "RunStore",
+    "UserConfig",
+]

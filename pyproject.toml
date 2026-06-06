@@ -51,6 +51,16 @@ target-version = "py313"
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "TCH", "PTH", "LOG", "T20", "ANN401"]
 ignore = ["E501"]
 
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic evaluates field annotations at runtime (get_type_hints), so the types
+# used in model fields must stay importable at runtime — they must not be moved into
+# a TYPE_CHECKING block. Declare the model base classes as runtime-evaluated.
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "cyberlab_gen.schemas.base.ArtifactModel",
+    "cyberlab_gen.schemas.base.InternalModel",
+]
+
 [tool.ruff.format]
 quote-style = "double"
 

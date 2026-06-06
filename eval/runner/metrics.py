@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from pydantic import ConfigDict, Field
 
 from cyberlab_gen.agents.extractor_jury.schema import (
-    Verdict,  # noqa: TC001 -- Pydantic field type, needed at runtime for model build
+    Verdict,
 )
 from cyberlab_gen.schemas.base import ArtifactModel, InternalModel
 from cyberlab_gen.schemas.enums import ExtractionOutcome

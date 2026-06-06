@@ -49,13 +49,13 @@ from pydantic import BaseModel, ConfigDict, Field
 # calls ``typing.get_type_hints`` on the state schema at graph-build time — under
 # ``from __future__ import annotations`` the hints must resolve at runtime. ruff's
 # TC001 wrongly wants them in a type-checking block; the noqa pins the requirement.
-from cyberlab_gen.agents.extractor.extractor import ExtractionResult  # noqa: TC001
+from cyberlab_gen.agents.extractor.extractor import ExtractionResult
 from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict, Verdict
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult, enrich
-from cyberlab_gen.schemas.attack_spec import AttackSpec  # noqa: TC001
+from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
-from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult  # noqa: TC001
+from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

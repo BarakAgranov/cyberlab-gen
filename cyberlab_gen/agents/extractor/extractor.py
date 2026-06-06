@@ -39,7 +39,7 @@ from cyberlab_gen.agents.extractor.tools import (
 # Runtime import (not TYPE_CHECKING): ExtractionResult is a Pydantic model whose
 # fields are typed with these, so Pydantic must resolve them at class-definition
 # time. ruff's TC001 false-fires under `from __future__ import annotations`.
-from cyberlab_gen.agents.proposals import ProposedFacet, ProposedValueType  # noqa: TC001
+from cyberlab_gen.agents.proposals import ProposedFacet, ProposedValueType
 from cyberlab_gen.errors import ExtractionError
 from cyberlab_gen.providers.base import (
     AgentLabel,
