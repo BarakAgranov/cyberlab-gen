@@ -270,6 +270,15 @@ class ProviderBackedEvalRunner:
         ledger = CostLedger(run_id="eval", cap_usd=self._cost_cap_usd)
         runner = self._extract_runner_factory(ledger)
         handle = self._start_run_dir(blog_id, run_index=run_index, url=url)
+        if handle is not None:
+            # Resume-survival: completed-node state to a sqlite checkpoint in the run
+            # dir (ADR 0040). Only the production runner supports it; fakes are skipped.
+            from cyberlab_gen.cli.extract import PipelineExtractRunner
+
+            if isinstance(runner, PipelineExtractRunner):
+                runner.enable_checkpointing(
+                    handle.directory / "checkpoint.sqlite", thread_id=handle.record.run_id
+                )
         try:
             try:
                 result = runner.run(url, ledger=ledger)

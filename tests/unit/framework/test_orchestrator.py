@@ -65,6 +65,8 @@ from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
 from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
 
 _HASH = "a" * 64
@@ -402,3 +404,68 @@ def test_build_rejects_negative_refinement_cap() -> None:
     jury = _FakeJury([_verdict(Verdict.APPROVE)])
     with pytest.raises(ValueError, match="refinement_cap"):
         build_pipeline(extractor=ext, validator=_validator(), jury=jury, refinement_cap=-1)
+
+
+# --- checkpointer / resume (ADR 0040) --------------------------------------
+
+
+class _CrashOnceJury:
+    """Raises on its first review (a mid-node crash), then returns scripted verdicts."""
+
+    def __init__(self, verdicts: list[JuryVerdict]) -> None:
+        self._verdicts = verdicts
+        self.calls = 0
+
+    async def review(
+        self,
+        *,
+        spec: AttackSpec,
+        blog_content: str,
+        lookups: list[ExternalLookupRecord] | None = None,
+    ) -> JuryVerdict:
+        del spec, blog_content, lookups
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("boom in jury")
+        return self._verdicts[min(self.calls - 2, len(self._verdicts) - 1)]
+
+
+async def test_checkpointer_survives_midnode_crash_and_resumes(tmp_path: Path) -> None:
+    # A persistent sqlite checkpointer must let a run that crashed mid-pipeline resume
+    # from the last completed node — extract + validate are NOT re-run. This run also
+    # proves PipelineState (with its Pydantic-model fields) round-trips through the
+    # checkpointer's serializer (it is persisted to sqlite, then restored).
+    from cyberlab_gen.framework.checkpointing import open_sqlite_checkpointer
+
+    db = tmp_path / "cp.sqlite"
+    ext = _FakeExtractor([_spec(facets=["target:aws"])])
+    jury = _CrashOnceJury([_verdict(Verdict.APPROVE)])
+    initial = PipelineState(blog_content="blog", source_summary="url=...")
+
+    # Run 1: the jury node raises after extract + validate have completed (checkpointed).
+    async with open_sqlite_checkpointer(db) as saver:
+        run = build_pipeline(extractor=ext, validator=_validator(), jury=jury, checkpointer=saver)
+        with pytest.raises(RuntimeError, match="boom"):
+            await run(initial, thread_id="run-A")
+    assert ext.calls == ["url=..."]  # extractor ran exactly once before the crash
+
+    # Run 2: same thread, fresh saver over the same db file (a new process would do
+    # this). Resume with input=None → LangGraph picks up from the last checkpoint;
+    # extract is NOT re-run, the jury retries.
+    async with open_sqlite_checkpointer(db) as saver:
+        run = build_pipeline(extractor=ext, validator=_validator(), jury=jury, checkpointer=saver)
+        state = await run(None, thread_id="run-A")
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert state.enrichment is not None  # the full state was restored + finished
+    assert len(ext.calls) == 1  # extractor was NOT re-run on resume — proof of resume
+    assert jury.calls == 2  # jury crashed once, then approved on the resumed super-step
+
+
+async def test_no_checkpointer_keeps_prior_behaviour() -> None:
+    # The default (no checkpointer) path is unchanged: run takes no thread and ships.
+    ext = _FakeExtractor([_spec(facets=["target:aws"])])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+    assert state.status is PipelineStatus.SHIPPED

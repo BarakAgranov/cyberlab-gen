@@ -162,6 +162,21 @@ class PipelineExtractRunner:
         self._ingestion: IngestionResult | None = None
         self._blog_content: str | None = None
         self._last_state: PipelineState | None = None
+        self._checkpoint_db: Path | None = None
+        self._checkpoint_thread_base: str | None = None
+        self._checkpoint_seq = 0
+
+    def enable_checkpointing(self, db_path: Path, *, thread_id: str) -> None:
+        """Persist completed-node state to ``db_path`` so a mid-node crash resumes (ADR 0040).
+
+        Each :meth:`_drive` call (the first run and every feedback re-run) gets a
+        *distinct* thread (``<thread_id>-<seq>``), so a re-run is always a fresh graph
+        run — it never accidentally resumes a previously-completed graph. The
+        checkpoints for a crashed run persist under ``db_path``, keyed by their thread,
+        for a future ``--resume`` to pick up (the flag itself is deferred).
+        """
+        self._checkpoint_db = db_path
+        self._checkpoint_thread_base = thread_id
 
     @property
     def last_state(self) -> PipelineState | None:
@@ -201,14 +216,32 @@ class PipelineExtractRunner:
         del ledger  # the agents record into the ledger via the provider; not read here
         assert self._ingestion is not None
         assert self._blog_content is not None
-        run = build_pipeline(extractor=self._extractor, validator=self._validator, jury=self._jury)
         summary = _ingestion_summary(self._ingestion)
         if extra_feedback is not None:
             summary = f"{summary}\n\nUSER FEEDBACK (re-extract addressing this):\n{extra_feedback}"
         initial = PipelineState(blog_content=self._blog_content, source_summary=summary)
 
         async def _go() -> PipelineState:
-            return await run(initial)
+            if self._checkpoint_db is None:
+                run = build_pipeline(
+                    extractor=self._extractor, validator=self._validator, jury=self._jury
+                )
+                return await run(initial)
+            # Checkpointed: a fresh thread per drive (so a feedback re-run never
+            # resumes a completed graph) under a sqlite saver held open across the run
+            # (ADR 0040). The saver requires an open async connection.
+            from cyberlab_gen.framework.checkpointing import open_sqlite_checkpointer
+
+            thread = f"{self._checkpoint_thread_base}-{self._checkpoint_seq}"
+            self._checkpoint_seq += 1
+            async with open_sqlite_checkpointer(self._checkpoint_db) as saver:
+                run = build_pipeline(
+                    extractor=self._extractor,
+                    validator=self._validator,
+                    jury=self._jury,
+                    checkpointer=saver,
+                )
+                return await run(initial, thread_id=thread)
 
         final = asyncio.run(_go())
         self._last_state = final  # captured before _state_to_run_result may raise (ADR 0039)
@@ -602,6 +635,12 @@ def run_extract(
         label=url,
         lineage=RunLineage(input_ref=url, code_version=_code_version()),
     )
+    # Persist completed-node state so a mid-node crash is resumable (ADR 0040). Only
+    # the production runner supports it; a fake test runner is left untouched.
+    if isinstance(runner, PipelineExtractRunner):
+        runner.enable_checkpointing(
+            handle.directory / "checkpoint.sqlite", thread_id=handle.record.run_id
+        )
     result: RunResult | None = None
     path: Path | None = None
     try:

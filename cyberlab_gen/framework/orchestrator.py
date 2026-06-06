@@ -58,7 +58,11 @@ from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable
+    from typing import Any
+
+    from langchain_core.runnables import RunnableConfig
+    from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from cyberlab_gen.agents.extractor.extractor import Extractor
     from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
@@ -245,6 +249,24 @@ class _Node(StrEnum):
 # --- the graph builder -----------------------------------------------------
 
 
+class PipelineRun(Protocol):
+    """The async callable :func:`build_pipeline` returns (ADR 0023 surface, ADR 0040).
+
+    ``thread_id`` is the optional LangGraph checkpoint thread: supplied only when a
+    ``checkpointer`` was passed to :func:`build_pipeline`, it keys this run's
+    checkpoints so a mid-node crash leaves resumable state under that id. Omitting it
+    (the default) reproduces the pre-checkpointer behaviour exactly.
+
+    ``state`` may be ``None`` to **resume** a checkpointed thread: LangGraph picks up
+    from the last completed node rather than re-running from the start. A normal run
+    passes the initial ``PipelineState``.
+    """
+
+    def __call__(
+        self, state: PipelineState | None, *, thread_id: str | None = None
+    ) -> Awaitable[PipelineState]: ...
+
+
 def build_pipeline(
     *,
     extractor: _ExtractorLike,
@@ -253,7 +275,10 @@ def build_pipeline(
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
-) -> Callable[[PipelineState], Awaitable[PipelineState]]:
+    # ``BaseCheckpointSaver`` is generic over its version type; we hold any concrete
+    # saver opaquely (we only pass it to ``graph.compile``), hence ``Any``.
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
+) -> PipelineRun:
     """Assemble the Phase-1 LangGraph pipeline and return its async ``run`` callable.
 
     The returned callable takes an initial ``PipelineState`` (with
@@ -266,6 +291,13 @@ def build_pipeline(
     ``structural_retry_attempts`` is the *total* Extractor attempts on Layer-1
     failure (>=1). ``refinement_cap`` is the per-agent refinement-iteration cap on
     ``revise`` (>=0; 0 ships the first ``revise`` immediately as low-confidence).
+
+    ``checkpointer`` (ADR 0040, an additive amendment to the ADR-0023-locked
+    surface) is an optional LangGraph ``BaseCheckpointSaver``. When given, the graph
+    is compiled with it and the returned callable's ``thread_id`` keys this run's
+    per-node checkpoints, so a mid-node crash survives and the run is resumable from
+    the last completed node. ``None`` (the default) compiles exactly as before — no
+    checkpointing, no behaviour change.
     """
     if structural_retry_attempts < 1:
         raise ValueError("structural_retry_attempts must be >= 1")
@@ -410,14 +442,22 @@ def build_pipeline(
         },
     )
     graph.add_edge(_Node.ENRICH.value, END)
-    compiled = graph.compile()
+    compiled = graph.compile(checkpointer=checkpointer)
 
-    async def run(state: PipelineState) -> PipelineState:
+    async def run(state: PipelineState | None, *, thread_id: str | None = None) -> PipelineState:
         # LangGraph threads its own reconstructed state through the nodes (mutations
         # inside routing functions are discarded — that is why every decision is
         # made in a node, ADR 0023). The *returned* channel is the source of truth,
         # not the input object; coerce it back to the typed model.
-        result = await compiled.ainvoke(state)
+        #
+        # When a checkpointer is configured, a thread_id namespaces this run's
+        # checkpoints (ADR 0040); LangGraph requires one, so we synthesize a default
+        # if the caller didn't supply one. With no checkpointer the config is unused.
+        # ``state is None`` resumes the thread from its last checkpoint.
+        config: RunnableConfig | None = None
+        if checkpointer is not None:
+            config = {"configurable": {"thread_id": thread_id or "default"}}
+        result = await compiled.ainvoke(state, config=config)
         if isinstance(result, PipelineState):
             return result
         return PipelineState.model_validate(result)
