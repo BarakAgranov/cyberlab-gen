@@ -1262,3 +1262,77 @@ independent of this migration; it now fails as a clean `IncompleteToolCall`/guar
 
 `just verify` green — ruff, format, pyright strict, pytest all pass (539 passed,
 1 skipped [live cassette test, pending re-record], exit 0).
+
+## Operational-foundation pass — outcomes #3/#4/#6 done; #5 + #1/#2 handoff (2026-06-06)
+
+The broad operational-foundation pass (observability, cost, persistence, no
+swallows, logging). Sequenced after the pydantic-ai migration (ADR 0036). Done and
+committed (all `just verify` green):
+
+- **#4 logging** (ADR 0037): `cyberlab_gen/logging_setup.py::setup_logging`, wired
+  at `cli/main._main` + `eval/runner/cli.main`. File handler always DEBUG to a
+  code-created dir (`$CYBERLAB_GEN_LOG_DIR` or platformdirs); console WARNING
+  (DEBUG with `--debug`). Autouse fixture in `tests/conftest.py` redirects logs to
+  tmp. Commit `3c0e328`.
+- **#3 no swallowed errors** (in `3c0e328`): the sweep's 1 HIGH (`_with_usage`) and
+  the ADR-0035 OSError dump were both deleted by the migration. Remaining fixed:
+  NVD rate-limit (`extractor/tools.py`, now WARNING+comment), the two
+  `cli/extract.py` editor-revalidation broad-excepts (WARNING+exc_info), the
+  `mock_provider` unpriced-model KeyError (DEBUG). No-swallow regression test added.
+- **#6a/#6b cost** (ADR 0038, commit `c054093`): per-call cost logging in
+  `CostRecordingProvider` (moved into the package); one high catastrophe ceiling
+  `DEFAULT_CATASTROPHE_CEILING_USD=$25` carried as `CostLedger.cap_usd`, enforced
+  mid-run by the wrapper via new `BudgetExceeded(HardFailure)`. Wired into eval AND
+  the CLI (which now feeds its ledger + defaults to $25 instead of no-cap).
+  Reframed ADR-0030's $5 everyday cap to the $25 backstop (judgment call, flagged).
+- **#6c**: already handled by ADR 0033 (truncation halts on the first call); the
+  deeper cure (streaming/chunked emit) stays the deferred P4 gap. Documented in ADR 0038.
+
+### Remaining — resume here (deferred to a fresh session by the user)
+
+**#5 Guaranteed persistence on every exit + checkpointer.** Approach already chosen
+(best-effort guard + LangGraph checkpointer; eval + CLI scope). To build:
+- A run-report writer: `PipelineState` summary + `CostLedger.to_report_block()` +
+  the run-log path, to a code-created dir. Surface the per-agent/per-model cost
+  breakdown that the eval report currently discards (`CostReportBlock`).
+- `eval/runner/runner.run_blog_set`: wrap the per-blog loop in try/finally that
+  calls `on_partial(_build())` before re-raising (covers any non-`CyberlabGenError`
+  escape — incl. `KeyboardInterrupt`); add a SIGINT/SIGTERM handler in
+  `eval/runner/cli.main` that persists before exit. Today `run_once` catches only
+  `CyberlabGenError`, so a crash in the FIRST blog leaves nothing in `eval/reports/`.
+- CLI `cli/extract.py::_drive`: persist a run report on every exit (it currently
+  `del`s the ledger and writes the spec only on ship); `cli/main.extract` does not
+  catch `KeyboardInterrupt`.
+- LangGraph checkpointer: pass `checkpointer=` to `graph.compile()` in
+  `framework/orchestrator.build_pipeline` so a mid-node crash survives — this TOUCHES
+  THE ADR-0023-LOCKED `build_pipeline`/`run_pipeline` surface, so write an ADR
+  (0039) recording the surface change. Halts (`HALTED_VALIDATION`/`HALTED_REJECT`)
+  currently RAISE before any report is built — persist in a finally around
+  `_finalize`/`_state_to_run_result`.
+- Tests: persistence-on-failure, persistence-on-interrupt, ceiling-abort persists
+  what was produced.
+- ADR 0039 (guaranteed-persistence + checkpointer).
+
+**#1/#2 Phoenix observability (pydantic-ai NATIVE OTel — settled by ADR 0036).**
+- Add dev deps: `opentelemetry-sdk`, `opentelemetry-exporter-otlp`,
+  `openinference-instrumentation-pydantic-ai`, `arize-phoenix-otel` (NOT the
+  anthropic-SDK instrumentor — pydantic-ai already emits the model span; running
+  both double-counts). `uv sync`.
+- `cyberlab_gen/tracing_setup.py::setup_tracing()`: configure a global
+  `TracerProvider` → OTLP to the local Phoenix endpoint (default
+  `http://localhost:6006`), apply the OpenInference pydantic-ai span processor, and
+  set `Agent.instrument_all(True)` (or `instrument=True` on the adapter's Agent).
+  Must AUTO-DETECT / no-op when Phoenix is down (never crash/block) — wrap exporter
+  setup so a missing endpoint is a logged no-op; OTel buffers/drops silently.
+- Nested spans for the LangGraph stages (extract/validate/jury/enrich nodes in
+  `orchestrator.build_pipeline`) + ingestion, so the pipeline structure shows in
+  Phoenix under the agent spans.
+- Start Phoenix (document in README/docs): `docker run -p 6006:6006 -p 4317:4317
+  arizephoenix/phoenix:latest`, view at `http://localhost:6006`. Make tracing
+  opt-in/auto-detected (e.g. enabled when the endpoint is reachable or an env flag
+  is set), off by default so normal runs are unaffected.
+- Tests: graceful-degradation when Phoenix is down (setup_tracing no-ops, a run
+  still completes).
+- ADR 0039/0040 (Phoenix-local observability).
+
+Next ADR number: **0039** (0038 is the highest used).
