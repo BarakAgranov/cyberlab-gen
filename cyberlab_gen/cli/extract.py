@@ -22,6 +22,7 @@ the interrupt is a *shipped* (clean or low-confidence) ``RunResult``.
 from __future__ import annotations
 
 import logging
+import sys
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -41,15 +42,25 @@ from cyberlab_gen.framework.orchestrator import (
 )
 from cyberlab_gen.schemas.attack_spec import AttackSpec, MaterialDiscrepancy
 from cyberlab_gen.schemas.base import InternalModel
+from cyberlab_gen.state.run_store import (
+    ENRICHMENT_FILENAME,
+    JURY_VERDICT_FILENAME,
+    SPEC_FILENAME,
+    RunKind,
+    RunLineage,
+    RunStatus,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from cyberlab_gen.agents.extractor.extractor import Extractor
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
+    from cyberlab_gen.framework.orchestrator import PipelineState
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.schemas.ingestion import IngestionResult
     from cyberlab_gen.state.local_state import LocalState
+    from cyberlab_gen.state.run_store import RunHandle, RunStore
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 logger = logging.getLogger(__name__)
@@ -150,6 +161,17 @@ class PipelineExtractRunner:
         self._state = state
         self._ingestion: IngestionResult | None = None
         self._blog_content: str | None = None
+        self._last_state: PipelineState | None = None
+
+    @property
+    def last_state(self) -> PipelineState | None:
+        """The most recent terminal/partial ``PipelineState`` (for persistence).
+
+        Set by :meth:`_drive` *before* the halt errors are raised, so the run-store
+        can persist the produced (possibly partial) per-stage artifacts — spec, jury
+        verdict, enrichment — on a halt as well as on a ship (ADR 0039).
+        """
+        return self._last_state
 
     def run(self, url: str, *, ledger: CostLedger) -> RunResult:
         from cyberlab_gen.framework.ingestion import ingest, read_cached_text
@@ -189,6 +211,7 @@ class PipelineExtractRunner:
             return await run(initial)
 
         final = asyncio.run(_go())
+        self._last_state = final  # captured before _state_to_run_result may raise (ADR 0039)
         return _state_to_run_result(final)
 
 
@@ -535,6 +558,7 @@ def run_extract(
     stdin_is_tty: bool,
     editor: EditorFn = click.edit,
     out_dir: Path | None = None,
+    run_store: RunStore | None = None,
 ) -> Path | None:
     """Run the ``extract`` pipeline and the post-Extractor interrupt.
 
@@ -543,17 +567,72 @@ def run_extract(
     by a budget-overrun abort). Raises ``typer.Exit`` / the orchestrator's
     halt errors to the caller for exit-code mapping.
 
+    When ``run_store`` is supplied (production), a complete run-record directory is
+    persisted on **every** exit path — ship, halt, budget abort, ``KeyboardInterrupt``,
+    or crash (ADR 0039): the spec, jury verdict and enrichment (complete or partial),
+    the cost breakdown, and a finalized ``run.json``. The cwd ``attack-spec.yaml``
+    deliverable is unchanged; the run dir mirrors it. When ``run_store`` is ``None``
+    (unit tests not exercising persistence) the behaviour is exactly as before.
+
     Mode resolution mirrors ADR 0013: neither flag set defaults to
     ``--interactive``; both set is a usage error (caught upstream in the verb).
     """
     del interactive  # mode is decided by ``auto``; default is interactive (ADR 0013)
     mode_interactive = not auto
-    # Headless guard: reject --interactive when stdin is not a TTY (§3.1).
+    # Headless guard: reject --interactive when stdin is not a TTY (§3.1). This is a
+    # usage error before any spend — fail before opening a run directory.
     reject_interactive_when_headless(interactive=mode_interactive, stdin_is_tty=stdin_is_tty)
 
-    result = runner.run(url, ledger=ledger)
     target_dir = out_dir if out_dir is not None else Path.cwd()
 
+    if run_store is None:
+        result = runner.run(url, ledger=ledger)
+        return _drive_result(
+            result=result,
+            runner=runner,
+            ledger=ledger,
+            editor=editor,
+            target_dir=target_dir,
+            mode_interactive=mode_interactive,
+            handle=None,
+        )
+
+    handle = run_store.start(
+        kind=RunKind.EXTRACT,
+        label=url,
+        lineage=RunLineage(input_ref=url, code_version=_code_version()),
+    )
+    result: RunResult | None = None
+    path: Path | None = None
+    try:
+        result = runner.run(url, ledger=ledger)
+        path = _drive_result(
+            result=result,
+            runner=runner,
+            ledger=ledger,
+            editor=editor,
+            target_dir=target_dir,
+            mode_interactive=mode_interactive,
+            handle=handle,
+        )
+        return path
+    finally:
+        # Runs on success, halt, budget abort, Ctrl-C and any crash: persist whatever
+        # the pipeline produced so a run never ends with nothing to read (ADR 0039).
+        _persist_run(handle, runner=runner, result=result, ledger=ledger, path=path)
+
+
+def _drive_result(
+    *,
+    result: RunResult,
+    runner: ExtractRunner,
+    ledger: CostLedger,
+    editor: EditorFn,
+    target_dir: Path,
+    mode_interactive: bool,
+    handle: RunHandle | None,
+) -> Path | None:
+    """Dispatch to the interactive or auto post-Extractor flow."""
     if mode_interactive:
         return _drive_interactive(
             result=result,
@@ -561,11 +640,14 @@ def run_extract(
             ledger=ledger,
             editor=editor,
             target_dir=target_dir,
+            handle=handle,
         )
-    return _drive_auto(result=result, ledger=ledger, target_dir=target_dir)
+    return _drive_auto(result=result, ledger=ledger, target_dir=target_dir, handle=handle)
 
 
-def _drive_auto(*, result: RunResult, ledger: CostLedger, target_dir: Path) -> Path | None:
+def _drive_auto(
+    *, result: RunResult, ledger: CostLedger, target_dir: Path, handle: RunHandle | None
+) -> Path | None:
     """``--auto``: no interrupts except budget-overrun; out-of-scope halts (§3.1.1)."""
     if result.is_out_of_scope():
         output.print_info(
@@ -581,6 +663,7 @@ def _drive_auto(*, result: RunResult, ledger: CostLedger, target_dir: Path) -> P
     _auto_accept_proposals(result)
     _emit_run_report(result)
     path = write_attack_spec(result.spec, directory=target_dir)
+    _mirror_spec(handle, result.spec)
     output.print_info(f"\nwrote {path}")
     return path
 
@@ -612,6 +695,7 @@ def _drive_interactive(
     ledger: CostLedger,
     editor: EditorFn,
     target_dir: Path,
+    handle: RunHandle | None,
 ) -> Path | None:
     """``--interactive``: the four-option menu + per-proposal review + budget check."""
     while True:
@@ -645,8 +729,96 @@ def _drive_interactive(
             return None
         _emit_run_report(result)
         path = write_attack_spec(result.spec, directory=target_dir)
+        _mirror_spec(handle, result.spec)
         output.print_info(f"\nwrote {path}")
         return path
+
+
+# --- run-store persistence (ADR 0039) --------------------------------------
+
+
+def _mirror_spec(handle: RunHandle | None, spec: AttackSpec) -> None:
+    """Mirror the shipped (post-edit) AttackSpec into the run directory."""
+    if handle is not None:
+        handle.write_artifact(SPEC_FILENAME, spec)
+
+
+def _persist_run(
+    handle: RunHandle,
+    *,
+    runner: ExtractRunner,
+    result: RunResult | None,
+    ledger: CostLedger,
+    path: Path | None,
+) -> None:
+    """Persist the run's artifacts + cost and finalize ``run.json`` (best-effort).
+
+    Called from a ``finally`` so it runs on every exit path. The per-stage artifacts
+    come from the runner's last ``PipelineState`` (available even on a halt, before the
+    halt errors are raised); a clean ship has already mirrored the post-edit spec.
+    """
+    _persist_from_state(handle, getattr(runner, "last_state", None))
+    handle.write_cost(ledger)
+    status, reason = _resolve_status(result=result, path=path, exc=sys.exc_info()[1])
+    handle.finalize(status, halt_reason=reason)
+
+
+def _persist_from_state(handle: RunHandle, state: PipelineState | None) -> None:
+    """Persist the per-stage artifacts the pipeline produced (complete or partial)."""
+    if state is None:
+        return
+    if state.spec is not None:
+        meta = state.spec.extraction_metadata
+        handle.update_lineage(model=str(meta.model), extractor_version=str(meta.extractor_version))
+        # A clean ship already mirrored the post-edit spec; only fill in the partial.
+        if SPEC_FILENAME not in handle.record.artifacts:
+            handle.write_artifact(SPEC_FILENAME, state.spec)
+    if state.verdict is not None:
+        handle.write_artifact(JURY_VERDICT_FILENAME, state.verdict)
+    if state.enrichment is not None:
+        handle.write_artifact(ENRICHMENT_FILENAME, state.enrichment)
+
+
+def _resolve_status(
+    *, result: RunResult | None, path: Path | None, exc: BaseException | None
+) -> tuple[RunStatus, str | None]:
+    """Classify how the run ended into a :class:`RunStatus` (+ optional reason)."""
+    if exc is not None:
+        return _exception_status(exc)
+    if path is not None:
+        if result is not None and result.low_jury_confidence:
+            return RunStatus.SHIPPED_LOW_CONFIDENCE, None
+        return RunStatus.SHIPPED, None
+    if result is not None and result.is_out_of_scope():
+        return RunStatus.OUT_OF_SCOPE, result.spec.extraction_outcome_reason
+    return RunStatus.ABORTED, None
+
+
+def _exception_status(exc: BaseException) -> tuple[RunStatus, str | None]:
+    """Map an in-flight exception to a terminal :class:`RunStatus`."""
+    from cyberlab_gen.errors import BudgetExceeded, ValidationError
+    from cyberlab_gen.framework.orchestrator import JuryRejectionError
+
+    if isinstance(exc, KeyboardInterrupt):
+        return RunStatus.INTERRUPTED, "interrupted"
+    # JuryRejectionError is a ValidationError subclass — check it first.
+    if isinstance(exc, JuryRejectionError):
+        return RunStatus.HALTED_REJECT, str(exc)
+    if isinstance(exc, ValidationError):
+        return RunStatus.HALTED_VALIDATION, str(exc)
+    if isinstance(exc, BudgetExceeded):
+        return RunStatus.BUDGET_EXCEEDED, str(exc)
+    return RunStatus.CRASHED, str(exc)
+
+
+def _code_version() -> str | None:
+    """Best-effort code-version lineage: the installed package version (ADR 0039)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("cyberlab-gen")
+    except PackageNotFoundError:
+        return None
 
 
 __all__ = [

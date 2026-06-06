@@ -58,6 +58,15 @@ from cyberlab_gen.schemas.enums import (
     ReproducibilityTier,
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
+from cyberlab_gen.state.run_store import (
+    COST_FILENAME,
+    ENRICHMENT_FILENAME,
+    JURY_VERDICT_FILENAME,
+    SPEC_FILENAME,
+    RunRecord,
+    RunStatus,
+    RunStore,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -484,3 +493,221 @@ def test_auto_accept_caps_proposals(tmp_path: Path) -> None:
     )
     assert written is not None
     assert written.exists()
+
+
+# --- run-store persistence on every exit path (ADR 0039) -------------------
+
+
+class _RaisingRunner:
+    """An ``ExtractRunner`` whose ``run`` raises, optionally exposing a state.
+
+    Models a pipeline that halted or was interrupted: ``last_state`` carries the
+    (possibly partial) ``PipelineState`` the orchestrator produced before the halt
+    error was raised, exactly as the production runner does.
+    """
+
+    def __init__(self, exc: BaseException, *, last_state: object | None = None) -> None:
+        self._exc = exc
+        self.last_state = last_state
+
+    def run(self, url: str, *, ledger: CostLedger) -> RunResult:
+        del url, ledger
+        raise self._exc
+
+    def re_run_with_feedback(self, feedback: str, *, ledger: CostLedger) -> RunResult:
+        del feedback, ledger
+        raise self._exc
+
+
+def _only_run_dir(root: Path) -> Path:
+    dirs = [p for p in root.iterdir() if p.is_dir()]
+    assert len(dirs) == 1, f"expected one run dir, found {dirs}"
+    return dirs[0]
+
+
+def _read_record(run_dir: Path) -> RunRecord:
+    return RunRecord.model_validate_json((run_dir / "run.json").read_text(encoding="utf-8"))
+
+
+def _partial_state(spec: AttackSpec) -> object:
+    from cyberlab_gen.framework.orchestrator import PipelineState
+
+    return PipelineState(blog_content="blog", source_summary="src", spec=spec)
+
+
+def test_run_store_persists_complete_run_on_ship(tmp_path: Path) -> None:
+    """A shipped run writes spec + cost + a finalized run.json, and keeps the cwd file."""
+    out_dir = tmp_path / "cwd"
+    out_dir.mkdir()
+    runs = tmp_path / "runs"
+    fake = _FakeRunner([RunResult(spec=_in_scope_spec(facets=["target:aws"]))])
+
+    written = run_extract(
+        url="https://blog.example.com/posts/aws-attack",
+        interactive=False,
+        auto=True,
+        runner=fake,
+        ledger=_ledger(None),
+        stdin_is_tty=False,
+        out_dir=out_dir,
+        run_store=RunStore(runs),
+    )
+
+    assert written == out_dir / ATTACK_SPEC_FILENAME  # cwd deliverable unchanged
+    run_dir = _only_run_dir(runs)
+    assert (run_dir / SPEC_FILENAME).is_file()
+    assert (run_dir / COST_FILENAME).is_file()
+    record = _read_record(run_dir)
+    assert record.status is RunStatus.SHIPPED
+    assert record.ended_at is not None
+    assert record.lineage.input_ref == "https://blog.example.com/posts/aws-attack"
+    assert "aws-attack" in run_dir.name  # readable, identifiable run id
+
+
+def test_run_store_persists_partial_spec_on_jury_reject(tmp_path: Path) -> None:
+    """A jury-reject halt still persists the produced (rejected) spec + a halt record."""
+    from cyberlab_gen.framework.orchestrator import JuryRejectionError
+
+    runs = tmp_path / "runs"
+    fake = _RaisingRunner(
+        JuryRejectionError("rejected for hallucination"),
+        last_state=_partial_state(_in_scope_spec()),
+    )
+
+    with pytest.raises(JuryRejectionError):
+        run_extract(
+            url="u",
+            interactive=False,
+            auto=True,
+            runner=fake,
+            ledger=_ledger(None),
+            stdin_is_tty=False,
+            out_dir=tmp_path,
+            run_store=RunStore(runs),
+        )
+
+    run_dir = _only_run_dir(runs)
+    assert (run_dir / SPEC_FILENAME).is_file()  # the partial/rejected artifact is readable
+    record = _read_record(run_dir)
+    assert record.status is RunStatus.HALTED_REJECT
+    assert record.halt_reason == "rejected for hallucination"
+
+
+def test_run_store_persists_on_keyboard_interrupt(tmp_path: Path) -> None:
+    """Ctrl-C mid-run finalizes the record as interrupted and re-raises."""
+    runs = tmp_path / "runs"
+    fake = _RaisingRunner(KeyboardInterrupt())
+
+    with pytest.raises(KeyboardInterrupt):
+        run_extract(
+            url="u",
+            interactive=False,
+            auto=True,
+            runner=fake,
+            ledger=_ledger(None),
+            stdin_is_tty=False,
+            out_dir=tmp_path,
+            run_store=RunStore(runs),
+        )
+
+    record = _read_record(_only_run_dir(runs))
+    assert record.status is RunStatus.INTERRUPTED
+
+
+def test_run_store_persists_on_budget_exceeded(tmp_path: Path) -> None:
+    """A mid-run catastrophe-ceiling abort persists a budget_exceeded record."""
+    from cyberlab_gen.errors import BudgetExceeded
+
+    runs = tmp_path / "runs"
+    fake = _RaisingRunner(BudgetExceeded("ceiling crossed"))
+
+    with pytest.raises(BudgetExceeded):
+        run_extract(
+            url="u",
+            interactive=False,
+            auto=True,
+            runner=fake,
+            ledger=_ledger("25"),
+            stdin_is_tty=False,
+            out_dir=tmp_path,
+            run_store=RunStore(runs),
+        )
+
+    assert _read_record(_only_run_dir(runs)).status is RunStatus.BUDGET_EXCEEDED
+
+
+def test_run_store_runs_do_not_overwrite(tmp_path: Path) -> None:
+    """Two runs of the same URL produce two distinct, complete run directories."""
+    runs = tmp_path / "runs"
+    store = RunStore(runs)
+    for _ in range(2):
+        run_extract(
+            url="https://blog.example.com/x",
+            interactive=False,
+            auto=True,
+            runner=_FakeRunner([RunResult(spec=_in_scope_spec())]),
+            ledger=_ledger(None),
+            stdin_is_tty=False,
+            out_dir=tmp_path,
+            run_store=store,
+        )
+    run_dirs = [p for p in runs.iterdir() if p.is_dir()]
+    assert len(run_dirs) == 2
+
+
+def test_persist_from_state_writes_all_stage_artifacts(tmp_path: Path) -> None:
+    """``_persist_from_state`` writes spec, jury verdict and enrichment when present."""
+    from cyberlab_gen.agents.extractor_jury.schema import (
+        JuryScores,
+        JuryVerdict,
+        Verdict,
+    )
+    from cyberlab_gen.cli.extract import _persist_from_state  # pyright: ignore[reportPrivateUsage]
+    from cyberlab_gen.framework.enrichment import EnrichmentResult
+    from cyberlab_gen.framework.orchestrator import PipelineState
+    from cyberlab_gen.state.run_store import RunKind
+
+    verdict = JuryVerdict(
+        verdict=Verdict.APPROVE,
+        scores=JuryScores(
+            fidelity=1.0, completeness=1.0, provenance_correctness=1.0, structural_validity=1.0
+        ),
+        retry_recommended=False,
+        rationale="looks good",
+    )
+    state = PipelineState(
+        blog_content="b",
+        source_summary="s",
+        spec=_in_scope_spec(),
+        verdict=verdict,
+        enrichment=EnrichmentResult(),
+    )
+    handle = RunStore(tmp_path).start(kind=RunKind.EXTRACT, label="u")
+
+    _persist_from_state(handle, state)
+
+    assert (handle.directory / SPEC_FILENAME).is_file()
+    assert (handle.directory / JURY_VERDICT_FILENAME).is_file()
+    assert (handle.directory / ENRICHMENT_FILENAME).is_file()
+    assert handle.record.lineage.model == "m"  # lineage pulled from the spec metadata
+
+
+def test_sigterm_guard_converts_to_keyboard_interrupt() -> None:
+    """The verb's SIGTERM guard makes a terminate signal raise ``KeyboardInterrupt``.
+
+    That conversion is what lets a SIGTERM unwind through the run-store ``finally``
+    (a partial run is saved) instead of killing the process without persisting.
+    """
+    import signal
+
+    from cyberlab_gen.cli.main import (
+        _persisting_signal_guard,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    before = signal.getsignal(signal.SIGTERM)
+    with _persisting_signal_guard():
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler)
+        with pytest.raises(KeyboardInterrupt):
+            handler(signal.SIGTERM, None)
+    assert signal.getsignal(signal.SIGTERM) == before  # restored on exit

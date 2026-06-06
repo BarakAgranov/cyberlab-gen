@@ -26,10 +26,14 @@ Global option surface (decided in ADR 0013):
 ``typer.BadParameter``. The stubs do not consume the mode.
 """
 
+import signal
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
 from decimal import Decimal
 from importlib import metadata
 from pathlib import Path
+from types import FrameType
 from typing import TYPE_CHECKING, Annotated
 
 import typer
@@ -38,7 +42,7 @@ from cyberlab_gen.cli import output
 from cyberlab_gen.cli.context import CliContext
 from cyberlab_gen.logging_setup import setup_logging
 from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD, CostLedger
-from cyberlab_gen.state import LocalState
+from cyberlab_gen.state import LocalState, RunStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -199,6 +203,40 @@ def generate(
     raise typer.Exit(code=1)
 
 
+@contextmanager
+def _persisting_signal_guard() -> Generator[None]:
+    """Convert SIGTERM into ``KeyboardInterrupt`` so persistence's ``finally`` fires.
+
+    SIGINT (Ctrl-C) already raises ``KeyboardInterrupt``, which unwinds through the
+    run-store ``finally`` (ADR 0039) so a partial run is saved. SIGTERM normally
+    terminates the process *without* unwinding — we install a handler that raises
+    ``KeyboardInterrupt`` instead, giving SIGTERM the same persist-then-exit path.
+
+    Best-effort: on a platform or non-main thread where the handler can't be installed
+    (e.g. ``signal`` raises ``ValueError``), this is a no-op and SIGINT still works.
+    The previous handler is restored on exit so repeated CLI invocations in one process
+    (the test runner) don't leak handler state.
+    """
+
+    def _raise_interrupt(_signum: int, _frame: FrameType | None) -> None:
+        raise KeyboardInterrupt
+
+    installed = False
+    previous = None
+    try:
+        previous = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, _raise_interrupt)
+        installed = True
+    except (ValueError, OSError, AttributeError):
+        installed = False
+    try:
+        yield
+    finally:
+        if installed and previous is not None:
+            with suppress(ValueError, OSError):
+                signal.signal(signal.SIGTERM, previous)
+
+
 def _build_extract_runner(state: LocalState, ledger: CostLedger) -> "ExtractRunner":
     """Build the production :class:`PipelineExtractRunner` (or the injected fake).
 
@@ -271,20 +309,29 @@ def extract(
     cli_ctx = ctx.obj
     assert isinstance(cli_ctx, CliContext)
     runner = _build_extract_runner(cli_ctx.state, cli_ctx.cost_ledger)
+    # The run store persists every run's artifacts on every exit path (ADR 0039);
+    # the directory is created by the code, never set up by the user by hand.
+    cli_ctx.state.ensure_runs_dir()
+    run_store = RunStore(cli_ctx.state.runs_dir)
     # ``stdin_tty_override`` is a test seam: CliRunner swaps ``sys.stdin`` for a
     # non-TTY stream during invoke, so the interactive menus can't be driven via
     # the real isatty() check. Tests set this to True to exercise them; None →
     # the real check (production).
     stdin_is_tty = sys.stdin.isatty() if stdin_tty_override is None else stdin_tty_override
     try:
-        written = run_extract(
-            url=url,
-            interactive=interactive,
-            auto=auto,
-            runner=runner,
-            ledger=cli_ctx.cost_ledger,
-            stdin_is_tty=stdin_is_tty,
-        )
+        with _persisting_signal_guard():
+            written = run_extract(
+                url=url,
+                interactive=interactive,
+                auto=auto,
+                runner=runner,
+                ledger=cli_ctx.cost_ledger,
+                stdin_is_tty=stdin_is_tty,
+                run_store=run_store,
+            )
+    except KeyboardInterrupt as exc:  # Ctrl-C / SIGINT / (converted) SIGTERM
+        output.print_error("interrupted; the partial run was saved to the run store", exc=exc)
+        raise typer.Exit(code=130) from exc
     except JuryRejectionError as exc:
         output.print_error(f"extraction halted: {exc}", exc=exc)
         raise typer.Exit(code=1) from exc
