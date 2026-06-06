@@ -104,8 +104,12 @@ def setup_tracing(*, endpoint: str | None = None, service_name: str = "cyberlab-
 def _configure_tracing(endpoint: str, service_name: str) -> None:
     """Wire pydantic-ai's native OTel spans to the local Phoenix collector."""
     global _tracer
+    # ``phoenix.otel`` is the optional [observability] extra. With it absent (a clean
+    # env / CI without ``--extra observability``) pyright can neither resolve the import
+    # nor type ``register`` — both expected; the blanket ``# pyright: ignore`` suppresses
+    # them so the strict gate is green with or without the extra installed.
     from opentelemetry import trace
-    from phoenix.otel import register  # pyright: ignore[reportMissingImports]  # optional extra
+    from phoenix.otel import register  # pyright: ignore
     from pydantic_ai import Agent
 
     register(
