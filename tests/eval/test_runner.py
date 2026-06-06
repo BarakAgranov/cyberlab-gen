@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from eval.runner.manifest import load_manifest
-from eval.runner.runner import ProviderBackedEvalRunner, run_blog_set
+from eval.runner.runner import EvalPipelineRunner, ProviderBackedEvalRunner, run_blog_set
 from tests.eval.conftest import FakeEvalRunner, make_record, make_spec
 
 if TYPE_CHECKING:
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.cli.extract import RunResult
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.schemas.attack_spec import AttackSpec
+    from eval.runner.metrics import BlogRunRecord
 
 
 def test_run_blog_set_invokes_each_curated_blog_n_times() -> None:
@@ -103,6 +104,127 @@ def test_provider_backed_runner_writes_no_spec_when_specs_dir_unset(tmp_path: Pa
     record = runner.run_once("b", run_index=0)
     assert record.shipped
     assert list(tmp_path.iterdir()) == []  # nothing written anywhere under tmp
+
+
+# --- run-store persistence + first-blog-crash archive (ADR 0039) -----------
+
+
+class _StatefulExtractRunner:
+    """A scripted ``ExtractRunner`` exposing a ``last_state`` like the real one."""
+
+    def __init__(self, spec: AttackSpec, *, exc: BaseException | None = None) -> None:
+        self._spec = spec
+        self._exc = exc
+        self.last_state: object | None = None
+
+    def run(self, url: str, *, ledger: CostLedger) -> RunResult:
+        from cyberlab_gen.agents.extractor_jury.schema import JuryScores, JuryVerdict, Verdict
+        from cyberlab_gen.cli.extract import RunResult
+        from cyberlab_gen.framework.enrichment import EnrichmentResult
+        from cyberlab_gen.framework.orchestrator import PipelineState
+
+        del url, ledger
+        verdict = JuryVerdict(
+            verdict=Verdict.APPROVE,
+            scores=JuryScores(
+                fidelity=1.0, completeness=1.0, provenance_correctness=1.0, structural_validity=1.0
+            ),
+            retry_recommended=False,
+            rationale="ok",
+        )
+        self.last_state = PipelineState(
+            blog_content="b",
+            source_summary="s",
+            spec=self._spec,
+            verdict=verdict,
+            enrichment=EnrichmentResult(),
+        )
+        if self._exc is not None:
+            raise self._exc
+        return RunResult(spec=self._spec)
+
+    def re_run_with_feedback(  # pragma: no cover
+        self, feedback: str, *, ledger: CostLedger
+    ) -> RunResult:
+        raise NotImplementedError
+
+
+def _read_status(run_dir: Path) -> str:
+    import json
+
+    return json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["status"]
+
+
+def test_run_once_persists_full_run_dir_on_ship(tmp_path: Path) -> None:
+    """A shipped eval run persists spec + verdict + enrichment + cost + run.json."""
+    from cyberlab_gen.state.run_store import RunStore
+
+    runs = tmp_path / "runs"
+    runner = ProviderBackedEvalRunner(
+        extract_runner_factory=lambda _ledger: _StatefulExtractRunner(make_spec()),
+        validator=_PassValidator(),  # type: ignore[arg-type]
+        url_for=lambda _blog_id: "https://example.com/blog",
+        run_store=RunStore(runs),
+    )
+
+    record = runner.run_once("ai-assisted-aws-intrusion", run_index=1)
+
+    assert record.shipped
+    run_dir = next(p for p in runs.iterdir() if p.is_dir())
+    assert (run_dir / "spec.yaml").is_file()
+    assert (run_dir / "jury-verdict.yaml").is_file()
+    assert (run_dir / "enrichment.yaml").is_file()
+    assert (run_dir / "cost.yaml").is_file()
+    assert _read_status(run_dir) == "shipped"
+    assert "ai-assisted-aws-intrusion-run1" in run_dir.name
+
+
+def test_run_once_persists_partial_on_halt(tmp_path: Path) -> None:
+    """A halted eval run still persists the produced partial spec + a halt record."""
+    from cyberlab_gen.errors import MalformedOutput
+    from cyberlab_gen.state.run_store import RunStore
+
+    runs = tmp_path / "runs"
+    runner = ProviderBackedEvalRunner(
+        extract_runner_factory=lambda _ledger: _StatefulExtractRunner(
+            make_spec(), exc=MalformedOutput("bad emit")
+        ),
+        validator=_PassValidator(),  # type: ignore[arg-type]
+        url_for=lambda _blog_id: "https://example.com/blog",
+        run_store=RunStore(runs),
+    )
+
+    record = runner.run_once("b", run_index=0)
+
+    assert not record.shipped
+    run_dir = next(p for p in runs.iterdir() if p.is_dir())
+    assert (run_dir / "spec.yaml").is_file()  # the partial artifact is readable
+    assert _read_status(run_dir) == "failed"
+
+
+class _CrashFirstRunner(EvalPipelineRunner):
+    """A runner whose ``run_once`` always raises an unexpected (non-pipeline) error."""
+
+    def run_once(self, blog_id: str, *, run_index: int) -> BlogRunRecord:
+        del blog_id, run_index
+        raise RuntimeError("boom in the very first blog")
+
+
+def test_first_blog_crash_still_archives_partial() -> None:
+    """A crash in the FIRST blog still invokes on_partial (ADR 0039 closes the gap)."""
+    manifest = load_manifest()
+    archived: list[object] = []
+
+    with pytest.raises(RuntimeError, match="boom"):
+        run_blog_set(
+            manifest=manifest,
+            runner=_CrashFirstRunner(),
+            n=1,
+            provider_backed=False,
+            on_partial=archived.append,
+        )
+
+    assert archived, "on_partial must fire so the run is not lost on a first-blog crash"
 
 
 def test_run_blog_set_rejects_zero_n() -> None:

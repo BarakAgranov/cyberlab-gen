@@ -796,7 +796,7 @@ def _resolve_status(
 
 def _exception_status(exc: BaseException) -> tuple[RunStatus, str | None]:
     """Map an in-flight exception to a terminal :class:`RunStatus`."""
-    from cyberlab_gen.errors import BudgetExceeded, ValidationError
+    from cyberlab_gen.errors import BudgetExceeded, CyberlabGenError, ValidationError
     from cyberlab_gen.framework.orchestrator import JuryRejectionError
 
     if isinstance(exc, KeyboardInterrupt):
@@ -808,7 +808,9 @@ def _exception_status(exc: BaseException) -> tuple[RunStatus, str | None]:
         return RunStatus.HALTED_VALIDATION, str(exc)
     if isinstance(exc, BudgetExceeded):
         return RunStatus.BUDGET_EXCEEDED, str(exc)
-    return RunStatus.CRASHED, str(exc)
+    if isinstance(exc, CyberlabGenError):
+        return RunStatus.FAILED, str(exc)  # a classified pipeline failure
+    return RunStatus.CRASHED, str(exc)  # genuinely unexpected
 
 
 def _code_version() -> str | None:

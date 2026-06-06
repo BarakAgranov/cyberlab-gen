@@ -26,14 +26,10 @@ Global option surface (decided in ADR 0013):
 ``typer.BadParameter``. The stubs do not consume the mode.
 """
 
-import signal
 import sys
-from collections.abc import Generator
-from contextlib import contextmanager, suppress
 from decimal import Decimal
 from importlib import metadata
 from pathlib import Path
-from types import FrameType
 from typing import TYPE_CHECKING, Annotated
 
 import typer
@@ -42,6 +38,7 @@ from cyberlab_gen.cli import output
 from cyberlab_gen.cli.context import CliContext
 from cyberlab_gen.logging_setup import setup_logging
 from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD, CostLedger
+from cyberlab_gen.runtime import persisting_signal_guard
 from cyberlab_gen.state import LocalState, RunStore
 
 if TYPE_CHECKING:
@@ -203,40 +200,6 @@ def generate(
     raise typer.Exit(code=1)
 
 
-@contextmanager
-def _persisting_signal_guard() -> Generator[None]:
-    """Convert SIGTERM into ``KeyboardInterrupt`` so persistence's ``finally`` fires.
-
-    SIGINT (Ctrl-C) already raises ``KeyboardInterrupt``, which unwinds through the
-    run-store ``finally`` (ADR 0039) so a partial run is saved. SIGTERM normally
-    terminates the process *without* unwinding — we install a handler that raises
-    ``KeyboardInterrupt`` instead, giving SIGTERM the same persist-then-exit path.
-
-    Best-effort: on a platform or non-main thread where the handler can't be installed
-    (e.g. ``signal`` raises ``ValueError``), this is a no-op and SIGINT still works.
-    The previous handler is restored on exit so repeated CLI invocations in one process
-    (the test runner) don't leak handler state.
-    """
-
-    def _raise_interrupt(_signum: int, _frame: FrameType | None) -> None:
-        raise KeyboardInterrupt
-
-    installed = False
-    previous = None
-    try:
-        previous = signal.getsignal(signal.SIGTERM)
-        signal.signal(signal.SIGTERM, _raise_interrupt)
-        installed = True
-    except (ValueError, OSError, AttributeError):
-        installed = False
-    try:
-        yield
-    finally:
-        if installed and previous is not None:
-            with suppress(ValueError, OSError):
-                signal.signal(signal.SIGTERM, previous)
-
-
 def _build_extract_runner(state: LocalState, ledger: CostLedger) -> "ExtractRunner":
     """Build the production :class:`PipelineExtractRunner` (or the injected fake).
 
@@ -319,7 +282,7 @@ def extract(
     # the real check (production).
     stdin_is_tty = sys.stdin.isatty() if stdin_tty_override is None else stdin_tty_override
     try:
-        with _persisting_signal_guard():
+        with persisting_signal_guard():
             written = run_extract(
                 url=url,
                 interactive=interactive,

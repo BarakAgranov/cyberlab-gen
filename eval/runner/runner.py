@@ -28,6 +28,14 @@ from typing import TYPE_CHECKING, Protocol
 
 from cyberlab_gen.agents.extractor_jury.schema import Verdict
 from cyberlab_gen.providers.cost_ledger import DEFAULT_CATASTROPHE_CEILING_USD
+from cyberlab_gen.state.run_store import (
+    ENRICHMENT_FILENAME,
+    JURY_VERDICT_FILENAME,
+    SPEC_FILENAME,
+    RunKind,
+    RunLineage,
+    RunStatus,
+)
 from eval.runner.metrics import BlogAggregate, BlogRunRecord, structural_completeness
 from eval.runner.report import EvalReport, SkippedBlog
 
@@ -38,6 +46,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.cli.extract import ExtractRunner
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.schemas.attack_spec import AttackSpec
+    from cyberlab_gen.state.run_store import RunHandle, RunStore
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
     from eval.runner.manifest import BlogSetManifest
 
@@ -226,6 +235,7 @@ class ProviderBackedEvalRunner:
         url_for: Callable[[str], str],
         cost_cap_usd: Decimal | None = DEFAULT_COST_CAP_USD,
         specs_dir: Path | None = None,
+        run_store: RunStore | None = None,
     ) -> None:
         # The factory builds a fresh ``ExtractRunner`` per run from a per-run
         # ``CostLedger`` *this* class constructs (so the run can read real spend off
@@ -241,41 +251,137 @@ class ProviderBackedEvalRunner:
         # needs to judge quality, e.g. whether a `completeness=0.85` ship was
         # actually a truncated emit). Halted runs ship no spec, so none is written.
         self._specs_dir = specs_dir
+        # When set, each run (shipped OR halted/interrupted) gets a complete run
+        # directory under this store — spec (partial on a halt), jury verdict,
+        # enrichment, the cost breakdown and a finalized run.json (ADR 0039). Unlike
+        # ``specs_dir`` (one flat, overwriting spec file), run dirs never overwrite
+        # and group every artifact of a run together for inspection/diffing.
+        self._run_store = run_store
 
-    def run_once(self, blog_id: str, *, run_index: int) -> BlogRunRecord:  # pragma: no cover
-        # The live path: build a fresh ledger + runner, resolve the URL, run, and
-        # measure. Not exercised in CI (no provider); the metric mapping it shares
-        # with the fake path is what :func:`record_from_run` tests cover.
+    def run_once(self, blog_id: str, *, run_index: int) -> BlogRunRecord:
+        # Build a fresh ledger + runner, resolve the URL, run, measure, and persist a
+        # complete run directory on every exit path (ship, halt, interrupt, crash).
+        # The metric mapping it shares with the fake path is what
+        # :func:`record_from_run` tests cover.
         from cyberlab_gen.errors import CyberlabGenError
         from cyberlab_gen.providers.cost_ledger import CostLedger
 
         url = self._url_for(blog_id)
         ledger = CostLedger(run_id="eval", cap_usd=self._cost_cap_usd)
         runner = self._extract_runner_factory(ledger)
+        handle = self._start_run_dir(blog_id, run_index=run_index, url=url)
         try:
-            result = runner.run(url, ledger=ledger)
-        except CyberlabGenError as exc:
-            # Classify the halt so the run loop knows whether to skip just this blog
-            # (blog-fatal: truncation, malformed, jury/Layer-1 reject, bad URL) or
-            # abort the whole run (global: no served model, auth/quota/config), or
-            # treat it as a transient blip (retryable). See _classify_pipeline_failure.
-            return self._halt_record(
-                blog_id, run_index, ledger, exc, failure_kind=_classify_pipeline_failure(exc)
+            try:
+                result = runner.run(url, ledger=ledger)
+            except CyberlabGenError as exc:
+                # Classify the halt so the run loop knows whether to skip just this
+                # blog (blog-fatal: truncation, malformed, jury/Layer-1 reject, bad
+                # URL), abort the whole run (global: no served model, auth/quota/
+                # config), or treat it as a transient blip. See
+                # _classify_pipeline_failure.
+                self._persist_run_dir(
+                    handle,
+                    runner=runner,
+                    result=None,
+                    ledger=ledger,
+                    status=_eval_halt_status(exc),
+                    halt_reason=str(exc),
+                )
+                return self._halt_record(
+                    blog_id, run_index, ledger, exc, failure_kind=_classify_pipeline_failure(exc)
+                )
+            layer1 = self._validator.validate(result.spec)
+            self._write_spec(blog_id, run_index, result.spec)
+            record = record_from_run(
+                blog_id=blog_id,
+                run_index=run_index,
+                shipped=True,
+                layer1_passed=layer1.passed,
+                cost_usd=ledger.total_usd,
+                spec=result.spec,
+                value_type_proposals=len(result.value_type_proposals),
+                facet_proposals=len(result.facet_proposals),
+                verdict=Verdict.APPROVE if not result.low_jury_confidence else Verdict.REVISE,
+                low_jury_confidence=result.low_jury_confidence,
             )
-        layer1 = self._validator.validate(result.spec)
-        self._write_spec(blog_id, run_index, result.spec)
-        return record_from_run(
-            blog_id=blog_id,
-            run_index=run_index,
-            shipped=True,
-            layer1_passed=layer1.passed,
-            cost_usd=ledger.total_usd,
-            spec=result.spec,
-            value_type_proposals=len(result.value_type_proposals),
-            facet_proposals=len(result.facet_proposals),
-            verdict=Verdict.APPROVE if not result.low_jury_confidence else Verdict.REVISE,
-            low_jury_confidence=result.low_jury_confidence,
+            self._persist_run_dir(
+                handle,
+                runner=runner,
+                result=result,
+                ledger=ledger,
+                status=(
+                    RunStatus.SHIPPED_LOW_CONFIDENCE
+                    if result.low_jury_confidence
+                    else RunStatus.SHIPPED
+                ),
+                halt_reason=None,
+            )
+            return record
+        except BaseException as exc:  # persist the partial, then re-raise
+            # An interrupt or unexpected crash (not a CyberlabGenError): persist what
+            # the pipeline produced so even a Ctrl-C'd run leaves a readable record.
+            interrupted = isinstance(exc, KeyboardInterrupt)
+            self._persist_run_dir(
+                handle,
+                runner=runner,
+                result=None,
+                ledger=ledger,
+                status=RunStatus.INTERRUPTED if interrupted else RunStatus.CRASHED,
+                halt_reason="interrupted" if interrupted else str(exc),
+            )
+            raise
+
+    def _start_run_dir(self, blog_id: str, *, run_index: int, url: str) -> RunHandle | None:
+        """Open the run directory for this eval run (no-op when no run store)."""
+        if self._run_store is None:
+            return None
+        return self._run_store.start(
+            kind=RunKind.EVAL,
+            label=blog_id,
+            id_hint=f"{blog_id}-run{run_index}",
+            lineage=RunLineage(input_ref=url),
         )
+
+    def _persist_run_dir(
+        self,
+        handle: RunHandle | None,
+        *,
+        runner: ExtractRunner,
+        result: object,
+        ledger: CostLedger,
+        status: RunStatus,
+        halt_reason: str | None,
+    ) -> None:
+        """Persist this run's artifacts + cost and finalize ``run.json`` (best-effort).
+
+        The spec comes from the shipped ``result`` when present, else the runner's
+        last (partial) ``PipelineState``; the jury verdict and enrichment come from
+        that state. Best-effort throughout so persistence never masks the run's own
+        outcome.
+        """
+        if handle is None:
+            return
+        from cyberlab_gen.framework.orchestrator import PipelineState
+        from cyberlab_gen.schemas.attack_spec import AttackSpec
+
+        last = getattr(runner, "last_state", None)
+        state = last if isinstance(last, PipelineState) else None
+        spec = getattr(result, "spec", None)
+        if not isinstance(spec, AttackSpec):
+            spec = state.spec if state is not None else None
+        if spec is not None:
+            meta = spec.extraction_metadata
+            handle.update_lineage(
+                model=str(meta.model), extractor_version=str(meta.extractor_version)
+            )
+            handle.write_artifact(SPEC_FILENAME, spec)
+        if state is not None:
+            if state.verdict is not None:
+                handle.write_artifact(JURY_VERDICT_FILENAME, state.verdict)
+            if state.enrichment is not None:
+                handle.write_artifact(ENRICHMENT_FILENAME, state.enrichment)
+        handle.write_cost(ledger)
+        handle.finalize(status, halt_reason=halt_reason)
 
     def _write_spec(self, blog_id: str, run_index: int, spec: AttackSpec) -> None:
         """Write a shipped run's AttackSpec to ``specs_dir`` (no-op when unset).
@@ -318,6 +424,21 @@ class ProviderBackedEvalRunner:
             halt_reason=str(exc),
             failure_kind=failure_kind,
         )
+
+
+def _eval_halt_status(exc: Exception) -> RunStatus:
+    """Map a pipeline ``CyberlabGenError`` halt to a run-store status (ADR 0039)."""
+    from cyberlab_gen.errors import BudgetExceeded, ValidationError
+    from cyberlab_gen.framework.orchestrator import JuryRejectionError
+
+    # JuryRejectionError is a ValidationError subclass — check it first.
+    if isinstance(exc, JuryRejectionError):
+        return RunStatus.HALTED_REJECT
+    if isinstance(exc, ValidationError):
+        return RunStatus.HALTED_VALIDATION
+    if isinstance(exc, BudgetExceeded):
+        return RunStatus.BUDGET_EXCEEDED
+    return RunStatus.FAILED
 
 
 def record_from_run(
@@ -466,7 +587,16 @@ def run_blog_set(
         for i in range(n):
             if progress is not None:
                 progress.blog_run_started(blog_id, blog_pos=pos, blog_total=total, run_index=i, n=n)
-            record = runner.run_once(blog_id, run_index=i)
+            try:
+                record = runner.run_once(blog_id, run_index=i)
+            except BaseException:  # archive the partial, then re-raise
+                # A non-CyberlabGenError escape (KeyboardInterrupt, an unexpected
+                # crash) — incl. on the FIRST blog, where the end-of-blog on_partial
+                # below never fires. Archive what finished so spent money never leaves
+                # nothing on disk (ADR 0039; ADR 0028 only covered later-blog crashes).
+                if on_partial is not None:
+                    on_partial(_build())
+                raise
             blog_runs.append(record)
             records.append(record)
             total_cost += record.cost_usd

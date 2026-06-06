@@ -700,12 +700,10 @@ def test_sigterm_guard_converts_to_keyboard_interrupt() -> None:
     """
     import signal
 
-    from cyberlab_gen.cli.main import (
-        _persisting_signal_guard,  # pyright: ignore[reportPrivateUsage]
-    )
+    from cyberlab_gen.runtime import persisting_signal_guard
 
     before = signal.getsignal(signal.SIGTERM)
-    with _persisting_signal_guard():
+    with persisting_signal_guard():
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         with pytest.raises(KeyboardInterrupt):

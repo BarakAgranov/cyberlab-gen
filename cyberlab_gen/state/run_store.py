@@ -91,8 +91,9 @@ class RunStatus(StrEnum):
     OUT_OF_SCOPE = "out_of_scope"
     ABORTED = "aborted"
     BUDGET_EXCEEDED = "budget_exceeded"
+    FAILED = "failed"  # a classified pipeline failure (truncation, malformed, tool loop, ...)
     INTERRUPTED = "interrupted"
-    CRASHED = "crashed"
+    CRASHED = "crashed"  # an unexpected, unclassified error
 
 
 class RunLineage(ArtifactModel):

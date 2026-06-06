@@ -24,6 +24,7 @@ import argparse
 import sys
 from typing import TYPE_CHECKING
 
+from cyberlab_gen.state import RunStore
 from eval.runner.manifest import load_manifest, walk_path
 from eval.runner.report import REPORTS_RELDIR, EvalReport, archive_report
 from eval.runner.runner import DEFAULT_COST_CAP_USD, DEFAULT_N, run_blog_set
@@ -194,17 +195,25 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    from cyberlab_gen.runtime import persisting_signal_guard
     from eval.runner.progress import StderrEvalProgress
 
     # pragma: no cover - needs a live provider
     runner = _build_provider_backed_runner(manifest, cost_cap_usd=DEFAULT_COST_CAP_USD)
-    report, path = run_eval(  # pragma: no cover
-        runner=runner,
-        provider_backed=True,
-        progress=StderrEvalProgress(),
-        cost_cap_usd=DEFAULT_COST_CAP_USD,
-        blog_ids=blog_ids,
-    )
+    try:
+        # SIGTERM->KeyboardInterrupt so a terminate unwinds through the run-store and
+        # incremental-archive finally blocks (a partial run is saved), like Ctrl-C.
+        with persisting_signal_guard():
+            report, path = run_eval(  # pragma: no cover
+                runner=runner,
+                provider_backed=True,
+                progress=StderrEvalProgress(),
+                cost_cap_usd=DEFAULT_COST_CAP_USD,
+                blog_ids=blog_ids,
+            )
+    except KeyboardInterrupt:  # pragma: no cover - live path
+        print("eval: interrupted; partial results were archived.", file=sys.stderr)  # noqa: T201
+        return 130
     # Final machine-readable summary stays on stdout (progress went to stderr).
     print(  # noqa: T201 # pragma: no cover
         f"eval: ran {report.runs_per_blog} run(s) x {len(report.blog_ids)} blog(s)"
@@ -279,6 +288,10 @@ def _build_provider_backed_runner(
         # maintainer can read the actual emitted AttackSpec (the report holds only
         # metrics). Co-located with the default report dir (REPORTS_RELDIR).
         specs_dir=_default_reports_dir(REPORTS_RELDIR) / "specs",
+        # Every run (shipped or halted) also gets a complete, non-overwriting run
+        # directory under eval/reports/runs/ — its spec, jury verdict, enrichment,
+        # cost breakdown and run.json grouped together for inspection (ADR 0039).
+        run_store=RunStore(_default_reports_dir(REPORTS_RELDIR) / "runs"),
     )
 
 
