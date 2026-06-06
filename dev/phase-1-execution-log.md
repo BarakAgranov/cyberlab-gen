@@ -1336,3 +1336,72 @@ committed (all `just verify` green):
 - ADR 0039/0040 (Phoenix-local observability).
 
 Next ADR number: **0039** (0038 is the highest used).
+
+## Operational-foundation pass — outcomes #5 + #1/#2 done (2026-06-06)
+
+The remaining two outcomes from the handoff above, completed in a fresh session and
+committed (every step `just verify` green). The persistence half (#5) was deliberately
+broadened with sign-off into the system's **artifact-store / run memory**, not just
+crash-insurance.
+
+### #5 — Artifact persistence: the run store (ADR 0039)
+
+- **New `cyberlab_gen/state/run_store.py`** (`RunStore`/`RunHandle`/`RunRecord`/
+  `RunLineage`/`RunKind`/`RunStatus`). Every run gets a non-overwriting directory
+  `<UTC-ts>-<slug>/` holding `spec.yaml`, `jury-verdict.yaml`, `enrichment.yaml`,
+  `cost.yaml` (the full `CostReportBlock` the eval report discarded), `run.json`
+  (status/halt_reason/timing/lineage/cost summary/artifact list) and the run log.
+  Created + `run.json` written **before** the first LLM call; re-flushed on each write;
+  finalized in a `finally` on every exit. Writes are best-effort (log+swallow).
+- **Real vs eval separation by location** (sign-off decision): real `extract` →
+  `~/.cyberlab-gen/runs/`; eval → in-repo `eval/reports/runs/`. Real-extract keeps the
+  cwd `attack-spec.yaml` deliverable AND mirrors a full run record (sign-off: "mirror").
+- **Exit guarantees.** `cli/extract.run_extract` wraps the pipeline in try/finally and
+  persists on ship/halt/budget/`KeyboardInterrupt`/crash; `eval.run_once` persists per
+  run (partial spec on a halt); `run_blog_set` archives the partial on ANY escape from
+  `run_once` (closes the first-blog-crash gap ADR 0028 left). New shared
+  `cyberlab_gen/runtime.persisting_signal_guard` converts SIGTERM→`KeyboardInterrupt`
+  so a terminate unwinds through the persistence finally in BOTH entry points.
+- Status taxonomy: added `RunStatus.FAILED` (classified pipeline halt) vs `CRASHED`
+  (unexpected). Repo-wide ruff `runtime-evaluated-base-classes` config replaced the
+  scattered `# noqa: TC001` pydantic-field workarounds.
+
+### #5 (resume) — LangGraph checkpointer (ADR 0040, ADR-0023 locked-surface amendment)
+
+- `build_pipeline` gained an **additive** `checkpointer=` param (→ `graph.compile`) and
+  the returned `run` callable a `thread_id` + `state=None` (resume). Default (no
+  checkpointer) is byte-for-byte the old behaviour. Recorded explicitly as a locked-
+  surface amendment.
+- `framework/checkpointing.open_sqlite_checkpointer` opens an `AsyncSqliteSaver` with
+  `JsonPlusSerializer(pickle_fallback=True)` — required because `AttackSpec.source.url`
+  is a `HttpUrl` that LangGraph's msgpack serializer can't encode (the flagged serde
+  risk, confirmed and fixed). Local checkpoints only (pickle trust = the run dir).
+- Wired opt-in via `PipelineExtractRunner.enable_checkpointing` (leaves the
+  `ExtractRunner` Protocol + all fakes untouched), writing `<run-dir>/checkpoint.sqlite`,
+  a fresh thread per drive so a feedback re-run never resumes a completed graph.
+  User-facing `--resume` flag deferred per sign-off. Dep `langgraph-checkpoint-sqlite`.
+- Test proves a mid-node crash leaves a checkpoint and resume re-runs only the failed
+  node (also the `PipelineState` serde round-trip).
+
+### #1/#2 — Local Phoenix observability (ADR 0041, ADR-0023 traced-node touch)
+
+- `cyberlab_gen/tracing_setup.setup_tracing()` points pydantic-ai's **native** OTel
+  (`Agent.instrument_all`) + manual stage spans at a local Phoenix. Probes the endpoint
+  before importing OTel → zero-cost no-op when Phoenix is down; never raises; background
+  export. `CYBERLAB_GEN_TRACING` = auto|off|on. Called at both entry points after logging.
+- `build_pipeline` wraps each node in `stage_span` (a no-op when off) — additive traced
+  touch of the locked builder.
+- **Deviation from the handoff dep list (flagged in ADR 0041):** used native pydantic-ai
+  OTel only — did NOT add `openinference-instrumentation-pydantic-ai`, which would
+  double-count the same layer (ADR 0036). Deps are an optional `[observability]` extra
+  (`arize-phoenix-otel`); the optional `phoenix.otel` import is pyright-guarded so the
+  strict gate passes with or without the extra. README documents the docker start + view.
+
+### Verification
+
+`just verify` green at each step (final: 576 passed, 1 skipped — the live cassette).
+Provider-backed eval NOT run (real money; the user runs it). Five commits, no tag:
+`07980db` (run store), `b258148` (CLI persistence), `1c16fa8` (eval persistence +
+first-blog fix), `607191f` (checkpointer), `b14a6ee` (Phoenix).
+
+Next ADR number: **0042**.
