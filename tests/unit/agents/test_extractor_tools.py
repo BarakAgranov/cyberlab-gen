@@ -145,7 +145,11 @@ async def test_propose_target_facet_collected() -> None:
 
 
 async def test_propose_runtime_facet_rejected_at_boundary() -> None:
-    # The Extractor is NOT the authority for runtime:* facets (schema.md §4.16).
+    # The Extractor is NOT the authority for runtime:* facets (schema.md §4.16). The
+    # proposal is still dropped (not recorded), but the rejection must NOT be an error
+    # result: a proposal is an optional side-channel, and an out-of-authority category
+    # can never be fixed by retrying — as a ModelRetry (budget 1) it would escalate to a
+    # fatal ToolRetryError over an optional proposal (ADR 0043).
     ex = _executor()
     result = await ex.execute(
         _call(
@@ -159,9 +163,21 @@ async def test_propose_runtime_facet_rejected_at_boundary() -> None:
             },
         )
     )
-    assert result.is_error
+    assert not result.is_error  # rejected, but never fatal
+    assert "not recorded" in result.content
     assert "Planner" in result.content
     assert ex.facet_proposals == []
+
+
+async def test_propose_invalid_value_type_is_dropped_not_fatal() -> None:
+    # A malformed proposal is dropped with an explanation, never an error result (ADR 0043).
+    ex = _executor()
+    result = await ex.execute(
+        _call(TOOL_PROPOSE_VALUE_TYPE, {"name": "x"})  # missing required description/reasoning
+    )
+    assert not result.is_error
+    assert "rejected" in result.content
+    assert ex.value_type_proposals == []
 
 
 async def test_unknown_tool_is_error_not_raise() -> None:

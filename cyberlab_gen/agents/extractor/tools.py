@@ -261,10 +261,18 @@ class ExtractorToolExecutor:
         try:
             proposal = ProposedValueType.model_validate(call.arguments)
         except ValidationError as exc:
+            # A proposal is an optional advisory side-channel — a rejection must NOT be
+            # an error result (ADR 0043): the provider turns is_error into a ModelRetry,
+            # and with the tool-retry budget of 1 a repeated bad proposal would escalate
+            # to a fatal ToolRetryError and kill the whole extraction. Drop it (not
+            # recorded) and let the model continue or re-propose.
             return ToolResult(
                 call_id=call.call_id,
-                content=f"invalid value_type proposal: {exc.errors()}",
-                is_error=True,
+                content=(
+                    f"value_type proposal rejected (not recorded): {exc.errors()}. "
+                    "Proposals are optional — correct and re-propose if it matters, or continue."
+                ),
+                is_error=False,
             )
         self.value_type_proposals.append(proposal)
         logger.info("extractor proposed value_type %s", proposal.name)
@@ -279,24 +287,33 @@ class ExtractorToolExecutor:
     def _propose_facet(self, call: ToolCall) -> ToolResult:
         category = str(call.arguments.get("category", ""))
         if category not in EXTRACTOR_FACET_CATEGORIES:
-            # Mechanical authority gate, not LLM discretion (schema.md §4.16).
+            # Mechanical authority gate, not LLM discretion (schema.md §4.16). The
+            # proposal is dropped (not recorded), but this is NOT an error result
+            # (ADR 0043): an out-of-authority category can never be fixed by repeating,
+            # and as a ModelRetry (tool-retry budget 1) it would escalate to a fatal
+            # ToolRetryError over an *optional* proposal. The model is told why and
+            # continues.
             return ToolResult(
                 call_id=call.call_id,
                 content=(
-                    f"facet category {category!r} is not the Extractor's authority; "
-                    "the Extractor proposes only target:* and blog-derived "
-                    "lab_class_signal:* facets (runtime:* and lab-derived facets are "
-                    "the Planner's)."
+                    f"facet category {category!r} is not the Extractor's authority — "
+                    "proposal not recorded. The Extractor proposes only target:* and "
+                    "blog-derived lab_class_signal:* facets (runtime:* and lab-derived "
+                    "facets are the Planner's). Continue."
                 ),
-                is_error=True,
+                is_error=False,
             )
         try:
             proposal = ProposedFacet.model_validate(call.arguments)
         except ValidationError as exc:
+            # Optional advisory proposal — drop it, never fatal (ADR 0043).
             return ToolResult(
                 call_id=call.call_id,
-                content=f"invalid facet proposal: {exc.errors()}",
-                is_error=True,
+                content=(
+                    f"facet proposal rejected (not recorded): {exc.errors()}. "
+                    "Proposals are optional — correct and re-propose if it matters, or continue."
+                ),
+                is_error=False,
             )
         self.facet_proposals.append(proposal)
         logger.info("extractor proposed facet %s", proposal.name)
