@@ -506,9 +506,16 @@ class _RaisingRunner:
     error was raised, exactly as the production runner does.
     """
 
-    def __init__(self, exc: BaseException, *, last_state: object | None = None) -> None:
+    def __init__(
+        self,
+        exc: BaseException,
+        *,
+        last_state: object | None = None,
+        content_hash: str | None = None,
+    ) -> None:
         self._exc = exc
         self.last_state = last_state
+        self.content_hash = content_hash
 
     def run(self, url: str, *, ledger: CostLedger) -> RunResult:
         del url, ledger
@@ -690,6 +697,52 @@ def test_persist_from_state_writes_all_stage_artifacts(tmp_path: Path) -> None:
     assert (handle.directory / JURY_VERDICT_FILENAME).is_file()
     assert (handle.directory / ENRICHMENT_FILENAME).is_file()
     assert handle.record.lineage.model == "m"  # lineage pulled from the spec metadata
+
+
+def test_run_store_lineage_populated_on_failed_run(tmp_path: Path) -> None:
+    """Even a run that dies before emitting records model + input_hash (comparable runs)."""
+    from cyberlab_gen.errors import MalformedOutput
+    from cyberlab_gen.providers import (
+        AgentLabel,
+        CallOutcome,
+        CapabilityHint,
+        CostLedgerEntry,
+        TokenUsage,
+    )
+
+    runs = tmp_path / "runs"
+    ledger = _ledger(None)
+    # A billed call happened before the failure (as in the real Wiz-blog run).
+    ledger.record(
+        CostLedgerEntry(
+            timestamp=datetime(2026, 6, 7, tzinfo=UTC),
+            agent_label=AgentLabel.EXTRACTOR,
+            provider="anthropic",
+            model="claude-opus-4-8",
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            usage=TokenUsage(input_tokens=43000, output_tokens=900, cost_usd=Decimal("0.48")),
+            outcome=CallOutcome.FAILED,
+            purpose="cli",
+        )
+    )
+    fake = _RaisingRunner(MalformedOutput("schema-invalid emit"), content_hash="a" * 64)
+
+    with pytest.raises(MalformedOutput):
+        run_extract(
+            url="https://blog.example.com/x",
+            interactive=False,
+            auto=True,
+            runner=fake,
+            ledger=ledger,
+            stdin_is_tty=False,
+            out_dir=tmp_path,
+            run_store=RunStore(runs),
+        )
+
+    record = _read_record(_only_run_dir(runs))
+    assert record.status is RunStatus.FAILED
+    assert record.lineage.model == "claude-opus-4-8"  # from the ledger (no spec emitted)
+    assert record.lineage.input_hash == "a" * 64  # from the runner's content hash
 
 
 def test_sigterm_guard_converts_to_keyboard_interrupt() -> None:

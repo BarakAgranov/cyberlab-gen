@@ -188,6 +188,11 @@ class PipelineExtractRunner:
         """
         return self._last_state
 
+    @property
+    def content_hash(self) -> str | None:
+        """The ingested blog's content hash, for run lineage (``None`` before :meth:`run`)."""
+        return self._ingestion.content_hash if self._ingestion is not None else None
+
     def run(self, url: str, *, ledger: CostLedger) -> RunResult:
         from cyberlab_gen.framework.ingestion import ingest, read_cached_text
 
@@ -798,8 +803,29 @@ def _persist_run(
     """
     _persist_from_state(handle, getattr(runner, "last_state", None))
     handle.write_cost(ledger)
+    _populate_lineage(handle, runner=runner, ledger=ledger)
     status, reason = _resolve_status(result=result, path=path, exc=sys.exc_info()[1])
     handle.finalize(status, halt_reason=reason)
+
+
+def _populate_lineage(handle: RunHandle, *, runner: ExtractRunner, ledger: CostLedger) -> None:
+    """Fill run lineage knowable even on a failed (pre-emit) run — what makes runs
+    comparable (ADR 0039).
+
+    ``model``/``extractor_version`` come from the emitted spec when there is one
+    (:func:`_persist_from_state`); here we add the ingested ``input_hash`` and, when no
+    spec was produced, fall back to the model actually billed (from the ledger) so a run
+    that died before emitting still records which model + input it ran on.
+    ``update_lineage`` ignores ``None`` fields, so this never clears a known value.
+    """
+    content_hash = getattr(runner, "content_hash", None)
+    model = handle.record.lineage.model
+    if model is None and ledger.entries:
+        model = ledger.entries[-1].model
+    handle.update_lineage(
+        input_hash=content_hash if isinstance(content_hash, str) else None,
+        model=model,
+    )
 
 
 def _persist_from_state(handle: RunHandle, state: PipelineState | None) -> None:

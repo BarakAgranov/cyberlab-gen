@@ -390,6 +390,16 @@ class ProviderBackedEvalRunner:
             if state.enrichment is not None:
                 handle.write_artifact(ENRICHMENT_FILENAME, state.enrichment)
         handle.write_cost(ledger)
+        # Lineage knowable even on a failed (pre-emit) run, so runs stay comparable
+        # (ADR 0039): the ingested input hash, and — when no spec was produced — the
+        # model actually billed (from the ledger). update_lineage ignores None fields.
+        content_hash = getattr(runner, "content_hash", None)
+        model = handle.record.lineage.model
+        if model is None and ledger.entries:
+            model = ledger.entries[-1].model
+        handle.update_lineage(
+            input_hash=content_hash if isinstance(content_hash, str) else None, model=model
+        )
         handle.finalize(status, halt_reason=halt_reason)
 
     def _write_spec(self, blog_id: str, run_index: int, spec: AttackSpec) -> None:

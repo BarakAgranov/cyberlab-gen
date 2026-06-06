@@ -548,6 +548,35 @@ async def test_cost_recording_provider_records_billed_usage_when_the_call_raises
     assert entry.provider == "raising"
 
 
+async def test_cost_recording_provider_logs_a_billed_failure_live(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Cost visibility (ADR 0038) must cover a call that RAISED, not only successes:
+    # the Wiz-blog run died on a failed call and the per-call cost line is what makes
+    # the spend visible in the run log as it happens. Assert the failed call logs too.
+    import logging
+
+    from cyberlab_gen.errors import EmitTruncated
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    provider = CostRecordingProvider(_RaisingInnerProvider(billed_cost="0.48"), ledger)  # type: ignore[arg-type]
+    with caplog.at_level(logging.INFO), pytest.raises(EmitTruncated):
+        await provider.complete_with_tools(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            tools=[],
+            tool_executor=_unused_executor(),
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=3,
+        )
+    line = next((r.getMessage() for r in caplog.records if "LLM call #1" in r.getMessage()), "")
+    assert "[failed]" in line
+    assert "cost=$0.48" in line
+
+
 async def test_cost_recording_provider_skips_failure_with_no_billed_usage() -> None:
     # A ProviderError that carries no usage (failed before any vendor call billed)
     # records nothing — there is no honest cost to attribute.
