@@ -25,3 +25,6 @@ class CliContext:
 
     state: LocalState
     cost_ledger: CostLedger
+    #: ``--show-cost``: echo each LLM call's cost to stderr live (off by default so the
+    #: console stays terse, ADR 0037; the full per-call detail is always in the run log).
+    show_cost: bool = False

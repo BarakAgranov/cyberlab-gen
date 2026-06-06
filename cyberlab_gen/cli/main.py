@@ -124,6 +124,16 @@ def _main(  # pyright: ignore[reportUnusedFunction]
             ),
         ),
     ] = False,
+    show_cost: Annotated[
+        bool,
+        typer.Option(
+            "--show-cost",
+            help=(
+                "Echo each LLM call's cost to stderr as it happens (cost is always "
+                "written to the run log regardless; this surfaces it live without --debug)."
+            ),
+        ),
+    ] = False,
     _version: Annotated[
         bool,
         typer.Option(
@@ -155,7 +165,7 @@ def _main(  # pyright: ignore[reportUnusedFunction]
         Decimal(str(max_llm_cost)) if max_llm_cost is not None else DEFAULT_CATASTROPHE_CEILING_USD
     )
     ledger = CostLedger(run_id="cli-session", cap_usd=cap_usd)
-    cli_ctx = CliContext(state=state, cost_ledger=ledger)
+    cli_ctx = CliContext(state=state, cost_ledger=ledger, show_cost=show_cost)
     ctx.obj = cli_ctx
     last_invocation_context = cli_ctx
 
@@ -204,7 +214,9 @@ def generate(
     raise typer.Exit(code=1)
 
 
-def _build_extract_runner(state: LocalState, ledger: CostLedger) -> "ExtractRunner":
+def _build_extract_runner(
+    state: LocalState, ledger: CostLedger, *, show_cost: bool = False
+) -> "ExtractRunner":
     """Build the production :class:`PipelineExtractRunner` (or the injected fake).
 
     The ``extract_runner_factory`` test seam (ADR 0024) lets the CLI tests supply
@@ -231,7 +243,12 @@ def _build_extract_runner(state: LocalState, ledger: CostLedger) -> "ExtractRunn
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
     registry = build_provider_registry()
-    provider = CostRecordingProvider(AnthropicProvider(), ledger, purpose="cli")
+    provider = CostRecordingProvider(
+        AnthropicProvider(),
+        ledger,
+        purpose="cli",
+        on_call=output.print_cost if show_cost else None,
+    )
     registries = load_merged_registries()
     return PipelineExtractRunner(
         extractor=Extractor(provider=provider, registry=registry, registries=registries),
@@ -275,7 +292,7 @@ def extract(
         )
     cli_ctx = ctx.obj
     assert isinstance(cli_ctx, CliContext)
-    runner = _build_extract_runner(cli_ctx.state, cli_ctx.cost_ledger)
+    runner = _build_extract_runner(cli_ctx.state, cli_ctx.cost_ledger, show_cost=cli_ctx.show_cost)
     # The run store persists every run's artifacts on every exit path (ADR 0039);
     # the directory is created by the code, never set up by the user by hand.
     cli_ctx.state.ensure_runs_dir()

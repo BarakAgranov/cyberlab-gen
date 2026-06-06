@@ -577,6 +577,30 @@ async def test_cost_recording_provider_logs_a_billed_failure_live(
     assert "cost=$0.48" in line
 
 
+async def test_cost_recording_provider_on_call_echoes_each_call() -> None:
+    # --show-cost wiring (ADR 0038): an on_call sink receives a concise per-call line
+    # for live display, in addition to the run-log INFO line.
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    seen: list[str] = []
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    provider = CostRecordingProvider(
+        _FakeInnerProvider(cost="0.50"),  # type: ignore[arg-type]
+        ledger,
+        on_call=seen.append,
+    )
+    await provider.complete(
+        [],
+        output_schema=_Out,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        agent_label=AgentLabel.EXTRACTOR,
+    )
+    assert len(seen) == 1
+    assert "llm call #1" in seen[0]
+    assert "cost=$0.50" in seen[0]
+
+
 async def test_cost_recording_provider_skips_failure_with_no_billed_usage() -> None:
     # A ProviderError that carries no usage (failed before any vendor call billed)
     # records nothing — there is no honest cost to attribute.

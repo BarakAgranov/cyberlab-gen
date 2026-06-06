@@ -46,6 +46,15 @@ def print_info(msg: str) -> None:
     typer.echo(msg)
 
 
+def print_cost(msg: str) -> None:
+    """Write a live per-call cost line to stderr (the ``--show-cost`` echo).
+
+    Goes to stderr so it never pollutes the stdout the CLI uses for results; the full
+    per-call detail is always in the run-log file regardless (ADR 0038).
+    """
+    typer.echo(msg, err=True)
+
+
 def print_error(msg: str, exc: BaseException | None = None) -> None:
     """Write ``msg`` to stderr; include the traceback when ``--debug`` is on.
 

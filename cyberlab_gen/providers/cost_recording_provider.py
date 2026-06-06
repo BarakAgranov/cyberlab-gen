@@ -32,6 +32,7 @@ from cyberlab_gen.providers.base import Provider
 from cyberlab_gen.providers.cost_ledger import CallOutcome, CostLedgerEntry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from decimal import Decimal
 
     from pydantic import BaseModel
@@ -57,10 +58,22 @@ class CostRecordingProvider(Provider):
     call surface's job, which this wrapper is part of.
     """
 
-    def __init__(self, inner: Provider, ledger: CostLedger, *, purpose: str = "eval") -> None:
+    def __init__(
+        self,
+        inner: Provider,
+        ledger: CostLedger,
+        *,
+        purpose: str = "eval",
+        on_call: Callable[[str], None] | None = None,
+    ) -> None:
         self._inner = inner
         self._ledger = ledger
         self._purpose = purpose
+        # Optional live echo of each per-call cost line (ADR 0038 visibility). The run
+        # log always gets the full INFO line; ``on_call`` lets a caller ALSO surface a
+        # concise line live (e.g. the CLI's ``--show-cost`` → stderr), since the console
+        # is WARNING-only by default (ADR 0037). ``None`` ⇒ log only (unchanged).
+        self._on_call = on_call
 
     @property
     def name(self) -> str:
@@ -174,10 +187,11 @@ class CostRecordingProvider(Provider):
     def _log_call(
         self, agent_label: AgentLabel, model: str, usage: TokenUsage, outcome: CallOutcome
     ) -> None:
+        n = len(self._ledger.entries)
         logger.info(
             "LLM call #%d [%s]: agent=%s model=%s in=%d out=%d cache_r=%d cache_w=%d "
             "cost=$%s cumulative=$%s",
-            len(self._ledger.entries),
+            n,
             outcome.value,
             agent_label.value,
             model,
@@ -188,6 +202,11 @@ class CostRecordingProvider(Provider):
             usage.cost_usd,
             self._ledger.total_usd,
         )
+        if self._on_call is not None:
+            self._on_call(
+                f"  llm call #{n} [{outcome.value}]: {model} "
+                f"cost=${usage.cost_usd} (cumulative ${self._ledger.total_usd})"
+            )
 
     def _enforce_ceiling(self, agent_label: AgentLabel, usage: TokenUsage, model: str) -> None:
         """Abort the run if cumulative spend crossed the catastrophe ceiling (ADR 0038)."""

@@ -125,6 +125,19 @@ def test_state_dir_flag_omitted_uses_home_dotdir() -> None:
     assert cli_main.last_invocation_context.state.root == Path.home() / ".cyberlab-gen"
 
 
+def test_show_cost_flag_plumbs_into_context() -> None:
+    """``--show-cost`` sets ``ctx.obj.show_cost``; omitting it defaults to False."""
+    result = runner.invoke(app, ["--show-cost", "generate", "http://example.test"])
+    assert result.exit_code == 1
+    assert cli_main.last_invocation_context is not None
+    assert cli_main.last_invocation_context.show_cost is True
+
+    cli_main.last_invocation_context = None
+    result = runner.invoke(app, ["generate", "http://example.test"])
+    assert cli_main.last_invocation_context is not None
+    assert cli_main.last_invocation_context.show_cost is False
+
+
 def test_debug_flag_flips_output_module_state() -> None:
     """``--debug`` sets ``cli.output._debug_enabled`` to ``True`` for the invocation."""
     result = runner.invoke(app, ["--debug", "generate", "http://example.test"])
