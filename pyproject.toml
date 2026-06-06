@@ -33,6 +33,9 @@ dev = [
     # sources (coding-conventions.md §8.4). Record once, replay forever.
     "pytest-recording>=0.13",
 ]
+observability = [
+    "arize-phoenix-otel>=0.16.1",
+]
 
 [project.scripts]
 cyberlab-gen = "cyberlab_gen.cli.main:main"

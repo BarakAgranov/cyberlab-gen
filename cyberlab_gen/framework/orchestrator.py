@@ -55,10 +55,11 @@ from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult, enrich
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
+from cyberlab_gen.tracing_setup import stage_span
 from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Callable
     from typing import Any
 
     from langchain_core.runnables import RunnableConfig
@@ -249,6 +250,30 @@ class _Node(StrEnum):
 # --- the graph builder -----------------------------------------------------
 
 
+def _traced_async(name: str, fn: Callable[[PipelineState], Awaitable[PipelineState]]):
+    """Wrap an async node so its execution is a pipeline-stage span (ADR 0041).
+
+    Return type is left to inference so it stays the precise coroutine type LangGraph's
+    ``add_node`` expects (an ``Awaitable`` annotation is too broad to match).
+    """
+
+    async def _wrapped(state: PipelineState) -> PipelineState:
+        with stage_span(name):
+            return await fn(state)
+
+    return _wrapped
+
+
+def _traced_sync(name: str, fn: Callable[[PipelineState], PipelineState]):
+    """Wrap a sync node so its execution is a pipeline-stage span (ADR 0041)."""
+
+    def _wrapped(state: PipelineState) -> PipelineState:
+        with stage_span(name):
+            return fn(state)
+
+    return _wrapped
+
+
 class PipelineRun(Protocol):
     """The async callable :func:`build_pipeline` returns (ADR 0023 surface, ADR 0040).
 
@@ -420,10 +445,14 @@ def build_pipeline(
         return state.route
 
     graph: StateGraph[PipelineState, None, PipelineState, PipelineState] = StateGraph(PipelineState)
-    graph.add_node(_Node.EXTRACT.value, extract_node)
-    graph.add_node(_Node.VALIDATE.value, validate_node)
-    graph.add_node(_Node.JURY.value, jury_node)
-    graph.add_node(_Node.ENRICH.value, enrich_node)
+    # Each node is wrapped in a stage span (ADR 0041) so the extract/validate/jury/
+    # enrich tree shows under the agent spans in Phoenix. ``stage_span`` is a no-op
+    # context manager when tracing is off, so this is zero-cost and behaviour-neutral
+    # by default — an additive, traced-only touch of the ADR-0023-locked builder.
+    graph.add_node(_Node.EXTRACT.value, _traced_async(_Node.EXTRACT.value, extract_node))
+    graph.add_node(_Node.VALIDATE.value, _traced_sync(_Node.VALIDATE.value, validate_node))
+    graph.add_node(_Node.JURY.value, _traced_async(_Node.JURY.value, jury_node))
+    graph.add_node(_Node.ENRICH.value, _traced_sync(_Node.ENRICH.value, enrich_node))
 
     graph.add_edge(START, _Node.EXTRACT.value)
     graph.add_edge(_Node.EXTRACT.value, _Node.VALIDATE.value)

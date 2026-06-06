@@ -39,3 +39,26 @@ the right doc section.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md). The verify gate is `just verify`
 (ruff, pyright strict, pytest).
+
+### Observability (local Phoenix tracing)
+
+Every LLM call and pipeline stage can be viewed as an OpenTelemetry trace in a
+**local** [Arize Phoenix](https://github.com/Arize-ai/phoenix) instance (model,
+tokens, cost, stop reason, prompt/response, tool calls, and the
+extract → validate → jury → enrich stage tree). Data stays on your machine — no
+cloud export. Tracing is **opt-in and auto-detected**: it is a no-op unless a
+Phoenix instance is reachable, so normal runs are unaffected.
+
+1. Install the extra: `uv sync --extra observability`
+2. Start a local Phoenix:
+
+   ```
+   docker run -p 6006:6006 -p 4317:4317 arizephoenix/phoenix:latest
+   ```
+
+3. Run any `extract` (or the eval) as usual and open the traces at
+   <http://localhost:6006>.
+
+`CYBERLAB_GEN_TRACING` controls it: `auto` (default — enable when Phoenix is
+reachable), `off` (never), `on` (force setup even before the probe). The endpoint
+defaults to `http://localhost:6006`.

@@ -162,9 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     ran — a useful offline smoke check). An unknown ``--blog`` id exits 2.
     """
     from cyberlab_gen.logging_setup import setup_logging
+    from cyberlab_gen.tracing_setup import setup_tracing
 
     args = _parse_args(argv)
     log_path = setup_logging(run_id="eval")
+    # Stream traces to a local Phoenix if one is running; a no-op otherwise (ADR 0041).
+    setup_tracing()
     print(f"eval: run log -> {log_path}", file=sys.stderr)  # noqa: T201
     manifest = load_manifest()
     missing = check_walks_resolve(manifest)

@@ -40,6 +40,7 @@ from cyberlab_gen.logging_setup import setup_logging
 from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD, CostLedger
 from cyberlab_gen.runtime import persisting_signal_guard
 from cyberlab_gen.state import LocalState, RunStore
+from cyberlab_gen.tracing_setup import setup_tracing
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -143,6 +144,9 @@ def _main(  # pyright: ignore[reportUnusedFunction]
     global last_invocation_context
     output.set_debug(debug)
     setup_logging(debug=debug)
+    # Auto-detect a local Phoenix and stream traces to it; a no-op when it's down
+    # (ADR 0041). Never blocks or crashes a run.
+    setup_tracing()
     state = LocalState(root=state_dir) if state_dir is not None else LocalState()
     # Default to the high catastrophe ceiling (ADR 0038), not "no cap": even without
     # --max-llm-cost a runaway is bounded. --max-llm-cost lets the user set an
