@@ -73,6 +73,8 @@ The rotation cadence is roughly per-minor-release. Major releases may rotate mor
 
 The harness records the following metrics per eval run, per blog. These are **objective and reproducible up to model non-determinism** (see §7.6). They form the spine of the harness's reporting.
 
+**The harness reads these from the pipeline's own emitted run record — it does not recompute them.** The pipeline already runs the mechanical layers and emits its verdicts (e.g. the static-schema Layer-1 verdict, computed *with* the run's provisional-proposals context); the harness *measures pipeline output*. Re-running a validator outside the pipeline would risk a different result — e.g. a Layer-1 false failure from not re-applying the run's provisional proposals (`schema.md §4.16`) — so measurement reads pipeline truth, it never re-derives it. (This matches the `architecture.md §1.8` framing: the harness is a *peer that measures* the pipeline, not a second implementation of its checks.)
+
 #### Validator pass rates (per layer)
 
 - Layer 1 (schema): pass / fail.

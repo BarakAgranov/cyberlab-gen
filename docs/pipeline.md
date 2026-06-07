@@ -334,7 +334,7 @@ The output stage is dumb: it moves files from the working directory to the user'
 
 **Working directory cleanup.** On success, the working directory is cleaned up. On failure, the working directory is preserved at `~/.cyberlab-gen/runs/<run-id>/` for user inspection and possible resumption (§3.7).
 
-**`validation-report.md` placement.** At the lab root, always generated. The user sees it immediately alongside `README.md`. The corresponding JSON version (`validation_report.json`) lives in `.cyberlab-gen/` for machine-readable use.
+**`validation-report.md` placement.** At the lab root, always generated. The user sees it immediately alongside `README.md`. The corresponding JSON version (`validation_report.json`) lives in `.cyberlab-gen/` for machine-readable use. This emitted verdict is **authoritative for downstream consumers**: the eval harness reads the pipeline's own mechanical verdicts (`eval.md §7.4`) — including the extract run's static-schema verdict carried in the run record — rather than re-running the validator outside the pipeline.
 
 **`iteration_snapshots/` size.** Snapshots are full lab state. For large multi-phase labs, the snapshots directory can grow significantly. Users who want to slim labs can delete `.cyberlab-gen/iteration_snapshots/` after inspection without breaking the lab's runnability.
 

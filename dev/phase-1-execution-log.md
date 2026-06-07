@@ -1668,4 +1668,14 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   ADR 0048 (patch) and ADR 0051 (provenance-structure layer). Code (move enrichment before the jury;
   re-run after patch; add the field; wire the exemption) is the later work-stream.
 
+### F1 — the eval reads pipeline truth, doesn't recompute it (doc note; no ADR)
+
+- Stated normatively that the eval harness reads the pipeline's **own emitted** mechanical verdicts
+  (`eval.md §7.4`) and never re-runs a validator outside the pipeline — which would risk a Layer-1
+  false failure from not re-applying the run's provisional-proposals context. Added a matching note
+  to `pipeline.md §3.2.13` (the emitted verdict is authoritative; the extract run record carries the
+  static-schema verdict the eval reads). Matches the `§1.8` peer-that-measures framing. Code (read
+  the emitted verdict instead of re-running `StaticSchemaValidator`; drop the retired adapter's
+  `toolu_`/`req_` 400-normalization) is the separate work-stream. No ADR — clarifies existing intent.
+
 Next ADR number: **0053**.
