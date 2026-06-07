@@ -1678,4 +1678,19 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   the emitted verdict instead of re-running `StaticSchemaValidator`; drop the retired adapter's
   `toolu_`/`req_` 400-normalization) is the separate work-stream. No ADR — clarifies existing intent.
 
-Next ADR number: **0053**.
+### G1 — the run store is the single persistence authority (ADR 0053)
+
+- Designated the **run store** as the single persistence authority, reconciling ADR 0039 (run
+  store) and ADR 0040 (checkpointer), which don't compose on a mid-graph abort: the run store
+  persisted from an in-memory `last_state` only set on a *clean* graph return, so a mid-node abort
+  (e.g. a jury-stage `TransientFailure` after a clean extraction) dropped the partial run even
+  though the checkpointer had the completed-node state on disk. Decision: the run store reads the
+  checkpoint (or the graph's last-emitted state) **directly** on every exit path — one authority,
+  one capture of the partial run; the checkpointer stays narrow (resumable super-step state). Added
+  a "Persistence authority: the run store" paragraph to `pipeline.md §3.5`.
+- No change to ADR 0039's structure or ADR 0040's surface — G1 only designates the authority and the
+  data source between them (which neither pinned). Composes with F1 (the run record the store holds
+  is the authoritative artifact the eval reads). Code (read the checkpoint directly; drop the second
+  partial-run path) is the later work-stream.
+
+Next ADR number: **0054**.

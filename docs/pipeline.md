@@ -592,6 +592,8 @@ The user can resume with `cyberlab-gen resume <run-id>`. Resume requires the sam
 
 **Hard fail mid-run with no checkpoint possible.** Partial output is preserved in the working directory at `~/.cyberlab-gen/runs/<run-id>/` for user diagnosis. The user does *not* receive this as a shipped lab — failure here means no lab ships, only a diagnostic report. (This is distinct from §3.2.12's "ship with low-confidence flag" outcome on budget exhaustion; that path produces a shippable lab. A hard provider failure produces no lab.)
 
+**Persistence authority: the run store.** The two on-disk systems above — the run store (`~/.cyberlab-gen/runs/<run-id>/`, the system's memory of what a run produced) and the LangGraph checkpointer (`~/.cyberlab-gen/checkpoints/<run-id>/`, resumable completed-node state) — are **not** two independent "remember the partial run" mechanisms. The **run store is the single persistence authority**: on every exit, clean or aborted, it records what the run produced by reading the checkpoint (the completed-node state) or the graph's last-emitted state **directly** — not an in-memory field populated only on a clean graph return (which a mid-graph abort leaves empty, dropping the partial run even though the checkpoint holds it). The checkpointer's job stays narrow — persist super-step state so `resume` can continue — and the run store reads from that same state, so a partial run is captured once, by one authority. See ADR 0053.
+
 **What this stage does not do.**
 
 - **Automatically switch providers mid-run.** Switching providers can change behavior in subtle ways; the pipeline never makes that decision silently. The user can change their config and resume.
