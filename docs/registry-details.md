@@ -62,7 +62,7 @@ Per `schema.md §4.12`. The Pydantic model is `ValueTypeEntry` from `schema-deta
   proposed_in_run: null                       # null for bundled entries; a run-id for overlay entries
 ```
 
-For bundled entries `proposed_by` is `maintainer` (or omitted — that's the default) and `proposed_in_run` is `null` (or omitted). For overlay (runtime-proposed) entries the framework sets `proposed_by: extractor` (or `planner`) and `proposed_in_run: <run-id>` when the proposal is accepted.
+For bundled entries `proposed_by` is `maintainer` (or omitted — that's the default) and `proposed_in_run` is `null` (or omitted). For overlay (runtime-proposed) entries the framework sets `proposed_by: extractor` (or `planner`) and `proposed_in_run: <run-id>` when the run's spec **ships** and the provisional term is promoted to the overlay (`schema.md §4.16` stage 4) — not at proposal time.
 
 The full proposal envelope — `proposal_origin`, `source_lab`, `source_blog`, `proposed_by_model`, `proposed_at`, `reasoning` — is preserved as audit context in the overlay file under a separate top-level `proposals:` block keyed by entry name, per `schema.md §4.16`. The registry-entry shape itself is identical between bundled and overlay (so the YAML examples here apply to both); the difference is at the registry-file level, where overlay files have an additional `proposals:` block. See `schema-details.md §6.6` for the Pydantic shape (`OverlayRegistryFile[E]` and `ProposalAuditBlock`).
 

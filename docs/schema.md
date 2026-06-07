@@ -777,18 +777,22 @@ proposed_entry:
 
 #### Proposal lifecycle
 
-1. **Authorship.** The Extractor (for value types and blog-derived facets) or the Planner (for runtime and lab-derived facets) emits a `proposed_entry`. The agent has already searched the existing registry and found no match; proposal is the response to that absence, not a casual addition.
+The key discipline: **a proposal never mutates shared state until the spec that uses it ships.** Within-run resolution and global promotion are separate events with separate gates.
 
-2. **Jury review.** The Extractor-Jury or Planner-Jury (depending on which agent proposed) verifies the proposal: is it justified by content the upstream agent saw? Is its shape coherent? Does it overlap an existing entry the agent missed? If the jury identifies a problem, the upstream agent re-runs with feedback (which may resolve to using an existing entry, or refining the proposal). The jury does not propose its own entries.
+1. **Propose.** The Extractor (value types, blog-derived facets) or the Planner (runtime facets, lab-derived facets, execution contexts) emits a `proposed_entry`. The agent has already searched the bundled registry *and* the overlay and found no match; the proposal is the response to that absence, not a casual addition. (Which registries accept runtime proposals is set by "Proposal authority by registry" above; `external_data_sources` never does.)
 
-3. **Decision.**
-   - **Interactive mode (`--interactive`):** the user reviews each proposal at the post-Extractor or post-Planner interrupt.
+2. **Provisional within-run resolution.** The proposed term resolves **within the current run only** — it is added to a run-scoped view of the registry so the AttackSpec can validate and the pipeline can proceed. **No global write happens here.** In `--interactive`, the user reviews each proposal at the post-Extractor / post-Planner interrupt (**Accept** or **Edit**; an edited proposal is re-validated against the registry entry schema, reopening the editor with errors as comments on a structurally invalid edit). In `--auto`, the proposal is accepted into the run-scoped view automatically. Rejecting a single proposal in isolation has no coherent semantics — the value exists in the spec and the system requires typed values; a user who disagrees Edits the proposal, gives artifact-level upstream feedback (option 2 of the menu in `pipeline.md §3.2.5` / `§3.2.8`) so the proposal changes when the agent re-runs, or Aborts.
 
-     The per-proposal menu offers **Accept** or **Edit**. Edited proposals go through the same revalidation-with-comments loop as artifact edits — the framework re-validates the edited proposal against the registry's entry schema; structurally invalid edits reopen the editor with errors as comments. Rejecting a single proposal in isolation has no coherent semantics — the value exists in the AttackSpec, and the system requires typed values. A user who disagrees has three real paths: Edit the proposal to what they think is right; provide upstream-agent feedback at the artifact level (option 2 of the four-option menu in `pipeline.md §3.2.5` or `§3.2.8`) so the proposal disappears or changes when the upstream agent re-runs against the corrected understanding; or Abort if no good path forward exists.
+3. **The jury reviews the spec — not the proposals in isolation.** The Extractor-Jury / Planner-Jury reviews the AttackSpec / manifest as a whole (fidelity, provenance, coherence). A proposal's *justification* is covered here implicitly: the field that uses the proposed term is reviewed like any other, and a term not justified by the blog surfaces as a provenance or fidelity problem on that field, fixed by the normal refinement patch (`§4.9`, `architecture.md §1.7`). There is no separate jury gate that judges proposals for overlap or shape — that is mechanical (stage 4). The jury does not propose its own entries.
 
-   - **Auto mode (`--auto`):** the proposal is automatically accepted into the overlay. The manifest uses the new type name. Each auto-accepted entry is printed during generation (e.g., `[proposal accepted] k8s_sa_token added to overlay`) and listed in detail in the run report at completion. The user can later inspect or modify entries in `~/.cyberlab-gen/registry-overlay/` at any time.
+4. **Promotion to the global overlay — gated on the spec shipping.** When (and only when) a run's spec **ships**, the framework writes that run's provisional terms to the shared `~/.cyberlab-gen/registry-overlay/`, applying a **mechanical merge-check at write time**: a proposed term that duplicates or overlaps an existing bundled/overlay entry is merged or dropped (dedup), not written twice. Each promoted entry is printed during the run (e.g., `[proposal promoted] k8s_sa_token added to overlay`) and listed in the run report. If the spec does **not** ship — jury `reject`, a mechanical halt, or a user abort — its provisional terms are **not** promoted; they remain only in the run record. This yields three structural guarantees:
+   - A shipped spec's vocabulary is **always globally resolvable** — every term it references now exists in bundled or overlay, so a shipped lab can never carry a dangling reference to a term that exists in no registry.
+   - There are **no orphan overlay entries** — a term reaches the shared overlay only alongside a spec that used it *and* shipped.
+   - `--auto` promotes **only terms from specs that shipped**, which is the real guardrail. (The prior design auto-wrote *every* proposal to the global overlay with no gate — the structural root of the registry pollution and the "worked yesterday, broke today" cross-run nondeterminism.)
 
-4. **Promotion to bundled.** Promotion from user overlay to the bundled registry happens via PR to the cyberlab-gen repo. If an entry is broadly useful — surfaced repeatedly across blogs in eval-harness data — a maintainer PRs it into the bundled registry and ships it in a release.
+   The mechanical merge-check **replaces** the older "jury reviews proposals for overlap" gate: dedup/overlap is deterministic and auditable, consistent with the mechanical-safety-check rule (`architecture.md §1.6`), not an LLM judgment.
+
+5. **Graduation to bundled.** From the overlay, broadly-useful entries graduate to the bundled registry via maintainer PR, informed by telemetry-aggregated usage across runs (`eval.md §7.9`). Human-curated and deliberate — unchanged by this lifecycle. Bundled ships to all users on `git pull`, so a graduated term no longer needs local proposal.
 
 #### Overlay file shape: entries and proposals are separate
 
@@ -825,14 +829,16 @@ The `entries:` block lists the registry entries themselves — same Pydantic sha
 
 **Why separate, not on-entry.** Two reasons. First, bundled and overlay registry entries having identical shape simplifies the Pydantic model — no optional `proposal_audit` field block, no conditional logic about when the field is populated. The registry-entry Pydantic class is the same for both, and the registry-file-level model (`{entries:, proposals:}`) is what differs between bundled and overlay. Second, the proposal audit is about *acceptance history*, not about the entry's *content* — keeping it adjacent rather than inside avoids the implication that the audit is part of the entry's identity. Two runs that propose the same entry shape produce identical registry entries with different audit blocks; that's the right model.
 
-#### Per-run cap on auto-accepted proposals
+#### Per-run cap on proposals
 
-Default 5 per run (v1 placeholder, pending eval-harness data per `architecture.md §8.4`), configurable. Beyond the cap, the agent is required to either:
-- (a) Use an existing registry entry it might have missed.
-- (b) Refactor the AttackSpec to eliminate the need for the additional types.
-- (c) The run is flagged as proposing-too-much and halted with a clear report for user inspection.
+Default 5 per run (v1 placeholder, pending eval-harness data per `architecture.md §8.4`), configurable. The cap is enforced by **in-loop steering**, not a hard stop: when a run reaches the cap, the framework feeds the agent structured guidance to either
 
-The cap protects the overlay from a single runaway run polluting the registry with redundant or hallucinated entries; it does not produce broken or degraded labs.
+- (a) use an existing registry entry it might have missed, or
+- (b) refactor the AttackSpec to eliminate the need for the additional types.
+
+This steering is just another refinement signal, so it is **bounded by the refinement iteration and budget caps** (`architecture.md §1.7`): the agent gets bounded attempts to come back under the cap, and only if it cannot within those caps does the run terminate via the normal budget-exhaustion path (ship the best state with a `proposing-too-much` flag, or halt if no usable spec was produced). The cap is not a separate hard-halt mechanism that short-circuits the loop.
+
+The cap protects the overlay from a single runaway run proposing redundant or hallucinated entries; combined with the spec-ships promotion gate (above), it does not produce broken or degraded labs.
 
 #### Labs are decoupled from the registry after generation
 

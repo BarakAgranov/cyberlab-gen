@@ -1595,4 +1595,26 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   today, so the interrupt is dead. Code (everyday budget + iteration caps + a live estimate) is the
   later work-stream; the $25 enforcement already exists.
 
-Next ADR number: **0050**.
+### E1 — proposal promotion gated on the spec shipping (ADR 0050)
+
+- Rewrote the `schema.md §4.16` proposal lifecycle to the maintainer's revised gate: propose →
+  **provisional within-run resolution** (run-scoped, no global write) → jury reviews the **spec**
+  (proposal justification covered implicitly) → **if the spec ships, its provisional terms are
+  promoted to the global overlay with a mechanical dedup/overlap merge-check at write time** →
+  graduate to bundled via PR. If the spec doesn't ship, nothing is promoted (terms stay in the run
+  record). The mechanical merge-check **replaces** the old "jury reviews proposals for overlap"
+  gate (dedup is mechanical per `§1.6`, not an LLM call). Captured the three guarantees: a shipped
+  spec's vocabulary is always globally resolvable, no orphan overlay entries, and `--auto` promotes
+  only from shipped specs (the real fix for the old auto-write-everything pollution bug).
+- Reframed the per-run proposal cap from a hard halt to **in-loop steering** (use existing /
+  refactor) **bounded by the refinement iteration/budget caps** (B2).
+- Aligned `agents.md §5.7` (Planner-Jury reviews the spec; Accept/Edit is the user's menu; dedup is
+  the mechanical merge-check) and `registry-details.md` (overlay metadata set on spec-ship, not at
+  proposal time).
+- **Flagged, not changed:** `schema.md §4.16` "Proposal authority by registry" still omits
+  `execution_contexts` / `thesis_types` (proposable per ADR 0044/0045), and `registry-details.md`
+  still calls `thesis_types` PR-only — a proposable-set drift surfaced for a follow-up, independent
+  of the gate rewrite. (Recorded in ADR 0050.)
+- Code (overlay-write-on-ship + merge-check + bounded over-cap steering) is the later work-stream.
+
+Next ADR number: **0051**.

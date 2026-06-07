@@ -249,7 +249,7 @@ The `thesis.types` list is *descriptive* (this lab matches these types) not *pre
 
 **Provenance discipline.** Verifies Planner decisions trace to AttackSpec content. Phases must be derivable from chain steps; lab_resources must be implied by chain preconditions or explicit blog mentions; prereqs must be sourced from blog or framework defaults.
 
-**Facet review scope.** The Planner-Jury reviews facets declared *by the Planner* — `runtime:*` and lab-derived `lab_class_signal:*` (per §5.7). Facets inherited from the AttackSpec (`target:*` and blog-derived `lab_class_signal:*`) were reviewed by the Extractor-Jury and are taken as-is. The Planner-Jury also reviews any `runtime:*` or lab-derived `lab_class_signal:*` facet proposals the Planner emitted, with the same Accept/Edit semantics as the Extractor-Jury reviews value-type proposals.
+**Facet review scope.** The Planner-Jury reviews facets declared *by the Planner* — `runtime:*` and lab-derived `lab_class_signal:*` (per §5.7). Facets inherited from the AttackSpec (`target:*` and blog-derived `lab_class_signal:*`) were reviewed by the Extractor-Jury and are taken as-is. The Planner-Jury also reviews the manifest fields that *use* any `runtime:*` or lab-derived `lab_class_signal:*` facet the Planner proposed — a proposed facet is justified (or not) by the spec that uses it, the same way the Extractor-Jury covers value-type proposals through spec review. Per-proposal **Accept/Edit** is the user's interrupt menu (`schema.md §4.16` stage 2); overlap/dedup against existing entries is the mechanical merge-check at promotion time (`schema.md §4.16` stage 4), not a jury gate.
 
 **Quality bar.**
 
