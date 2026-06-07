@@ -78,15 +78,35 @@ class ExternalLookupRecord(InternalModel):
     detail: str
 
 
-def extractor_tool_definitions() -> list[ToolDefinition]:
-    """The three tool schemas advertised to the model (``agents.md §5.4``)."""
+def extractor_tool_definitions(
+    registered_source_ids: list[str] | None = None,
+) -> list[ToolDefinition]:
+    """The four tool schemas advertised to the model (``agents.md §5.4``).
+
+    ``registered_source_ids`` is the merged ``external_data_sources`` registry's ids; when
+    given, the ``external_lookup`` description names exactly the sources that can be
+    served, so the model stops guessing ids (the Wiz run called a non-existent
+    ``mitre_attack`` source). ``None`` falls back to a generic description.
+    """
+    if registered_source_ids:
+        sources_clause = (
+            "Registered source ids you may use: "
+            + ", ".join(repr(s) for s in registered_source_ids)
+            + ". Any other source_id is treated as unavailable."
+        )
+    else:
+        sources_clause = "Use only source ids registered in external_data_sources."
     return [
         ToolDefinition(
             name=TOOL_EXTERNAL_LOOKUP,
             description=(
                 "Look up an identifier against an authoritative external data source "
-                "(e.g. source_id='nvd', params={'cve_id': 'CVE-2024-1234'}). Required "
-                "before claiming any external_api-sourced value (search-before-claim)."
+                "(e.g. source_id='nvd', params={'cve_id': 'CVE-2024-1234'}). "
+                f"{sources_clause} "
+                "Do NOT use this for MITRE ATT&CK technique ids — there is no 'mitre' / "
+                "'mitre_attack' source; technique ids are validated automatically against "
+                "the bundled MITRE catalog, not via external_lookup. Required before "
+                "claiming any external_api-sourced value (search-before-claim)."
             ),
             input_schema={
                 "type": "object",

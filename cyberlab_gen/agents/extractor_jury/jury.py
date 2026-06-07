@@ -102,6 +102,7 @@ class ExtractorJury:
             raise TypeError("ExtractorJury.registries must be a MergedRegistries")
 
         findings = verify_provenance(spec, lookups)
+        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
         executor = ExtractorToolExecutor(registries=self._registries, nvd_client=self._nvd_client)
         user_content = self._build_user_turn(
             spec=spec, blog_content=blog_content, findings=findings
@@ -114,7 +115,7 @@ class ExtractorJury:
             messages,
             output_schema=JuryVerdict,
             capability=CapabilityHint.HIGH_QUALITY_REASONING,
-            tools=extractor_tool_definitions(),
+            tools=extractor_tool_definitions(registered_source_ids=source_ids),
             tool_executor=executor,
             max_iterations=self._max_tool_iterations,
         )

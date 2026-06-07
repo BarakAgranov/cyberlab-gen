@@ -158,6 +158,7 @@ class Extractor:
         if not isinstance(self._registries, MergedRegistries):  # pragma: no cover - guard
             raise TypeError("Extractor.registries must be a MergedRegistries")
 
+        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
         base_user = self._build_user_turn(blog_content=blog_content, source_summary=source_summary)
         max_attempts = 1 + self._hallucination_retry_attempts
         feedback = ""
@@ -176,7 +177,7 @@ class Extractor:
                 messages,
                 output_schema=AttackSpec,
                 capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
-                tools=extractor_tool_definitions(),
+                tools=extractor_tool_definitions(registered_source_ids=source_ids),
                 tool_executor=executor,
                 max_iterations=self._max_tool_iterations,
                 max_tokens=self._max_output_tokens,

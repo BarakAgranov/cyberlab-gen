@@ -17,6 +17,7 @@ from cyberlab_gen.agents.extractor.tools import (
     TOOL_PROPOSE_THESIS_TYPE,
     TOOL_PROPOSE_VALUE_TYPE,
     ExtractorToolExecutor,
+    extractor_tool_definitions,
 )
 from cyberlab_gen.errors import ExternalApiRateLimitError
 from cyberlab_gen.framework.enrichment import NvdCveData
@@ -143,6 +144,21 @@ async def test_propose_target_facet_collected() -> None:
     assert not result.is_error
     assert len(ex.facet_proposals) == 1
     assert ex.facet_proposals[0].category == "target"
+
+
+def test_tool_definitions_advertise_four_tools_with_registered_sources() -> None:
+    defs = extractor_tool_definitions(registered_source_ids=["nvd"])
+    names = {d.name for d in defs}
+    assert names == {
+        TOOL_EXTERNAL_LOOKUP,
+        TOOL_PROPOSE_VALUE_TYPE,
+        TOOL_PROPOSE_FACET,
+        TOOL_PROPOSE_THESIS_TYPE,
+    }
+    lookup = next(d for d in defs if d.name == TOOL_EXTERNAL_LOOKUP)
+    # The description names the registered source and steers away from a 'mitre' source.
+    assert "'nvd'" in lookup.description
+    assert "mitre" in lookup.description.lower()
 
 
 async def test_propose_thesis_type_collected() -> None:
