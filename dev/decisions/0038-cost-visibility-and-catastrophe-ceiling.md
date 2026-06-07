@@ -1,5 +1,12 @@
 # 0038 — Per-call cost visibility + one high catastrophe ceiling
 
+> **Superseded in part by [ADR 0047](0047-catastrophe-ceiling-enforced-on-billed-failures.md).**
+> This ADR argued the catastrophe ceiling needs no enforcement on the failure path ("a failed
+> call that crosses the line needs no extra abort"). That premise is false for retried billed
+> failures (`MalformedOutput`), so ADR 0047 enforces the ceiling on **every** billed call,
+> success or failure. The per-call cost-visibility decision below still stands; only the
+> failure-path rationale is superseded.
+
 **Date:** 2026-06-05
 **Phase:** 1 (operational-foundation pass, outcome #6)
 **Architecture refs:** `provider-interface.md §5` (cost tracking; the framework — not

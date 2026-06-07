@@ -527,13 +527,10 @@ The retry strategy implements `pipeline.md §3.7`. The provider layer owns it, n
 
 ### 6.1 Transient failures
 
-Timeouts, transient 5xx errors, and 429 rate-limit responses are retried with exponential backoff:
+Timeouts, transient 5xx errors, and 429 rate-limit responses are retried with exponential backoff. Since the pydantic-ai migration (ADR 0036) the owner differs by call type — there is no single framework-owned transient loop covering both:
 
-- Up to 3 attempts (initial + 2 retries).
-- Base delay 1s, exponential factor 2, jitter ±30%.
-- All attempts counted as one "provider call" from the agent's perspective.
-
-If retries are exhausted, the provider raises `ProviderError.TransientFailure` and the framework writes a checkpoint per `pipeline.md §3.7`.
+- **LLM calls** — transient retry is handled by the **anthropic SDK** inside the pydantic-ai agent runtime, at the SDK's own default (currently 2 retries). The framework does not wrap LLM calls in its own transient loop; tuning this means the SDK/agent `max_retries`, not the `retries:` block below.
+- **Ingestion fetch** (the HTTP blog fetch in `framework/ingestion.py`) — uses the framework's strategy from `providers/retries.py` (`TRANSIENT_RETRIES`): up to 3 attempts (initial + 2 retries), base delay 1s, exponential factor 2, jitter ±30%. All attempts count as one fetch from the caller's perspective; on exhaustion the fetch fails transiently and the framework writes a checkpoint per `pipeline.md §3.7`.
 
 ### 6.2 Malformed structured output
 
@@ -748,7 +745,7 @@ cost:
   show_estimate_before_each_stage: true
 
 retries:
-  transient_max_attempts: 3         # tunable per pipeline.md §3.7
+  transient_max_attempts: 3         # ingestion-fetch transient strategy (retries.py); LLM transient is the anthropic SDK default — see §6.1
   malformed_output_max_attempts: 2  # provider-internal; default 2 (initial + 1 retry) per §6.2 / ADR 0018
   base_delay_seconds: 1
   exponential_factor: 2

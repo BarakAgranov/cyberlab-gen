@@ -6,7 +6,9 @@ For what cyberlab-gen actually is, read `docs/architecture.md §0.1` (one paragr
 
 ## Status right now
 
-Phase 0 — skeleton. Provider abstraction, Pydantic schemas, registry loaders, CLI stubs, mock provider, the test harness. **No real generation works yet.** The four CLI verbs exist as stubs that print "not yet implemented." Do not assume any agent (Extractor, Planner, etc.) is callable. Do not write Phase 1+ logic. The phase the repo is in is recorded in the most recent git tag (`v0.x.y`); check it before assuming features exist.
+Phase 1 — the front half of the pipeline runs for real against a paid provider. The `extract` verb works end-to-end: Ingestion → Extractor → Layer-1 static-schema validation → Extractor-Jury → persistence, with per-call cost recording, the catastrophe ceiling, the post-Extractor interactive interrupt, and the propose→overlay→validate proposal loop (ADR 0044). Persistence is the run-store, which saves every run on every exit path (ADR 0039); the agent layer runs on pydantic-ai (ADR 0036) and observability is local Phoenix (ADR 0041). **Callable agents today: only the Extractor and the Extractor-Jury.**
+
+**Still stubs:** `generate`, `validate`, `fix`, and `telemetry submit` print a not-implemented message and exit non-zero. The downstream agents — **Planner, the Per-phase / Lab-level / Cleanup / Docs Generators, the Critic, the Repair Agent** — do **not** exist yet. Do not assume any of them is callable, and do not build the `generate` pipeline unless the task explicitly says to. The most recent git tag (`v0.0.1-setup`) is stale and lags the real state by dozens of commits — trust the `dev/` execution logs and ADRs over the tag until it is re-cut.
 
 ## Build, test, verify
 

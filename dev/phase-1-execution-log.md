@@ -1564,6 +1564,23 @@ in this pass touches `cyberlab_gen/`, so `just verify` stays green by constructi
 ADR 0048 records A1+A2 and the snapshot demotion, and notes the D1/D2 deferral (A1 works with
 inline provenance, so the side-map / chunked-emit redesign is not needed now). Remaining plan items
 queued: E1 (proposal lifecycle + jury gate), B2 (two-cap budget), A3/B1 (one mechanical-validator
-stack), C1 (enrich-before-jury + mark provenance), orientation cleanup (7a–7d), F1, G1.
+stack), C1 (enrich-before-jury + mark provenance), F1, G1.
+
+### Orientation cleanup (7a / 7c / 7d — pure doc-accuracy, no ADR)
+
+- **7a** — rewrote the `CLAUDE.md` "Status right now" section from "Phase 0 — skeleton, four CLI
+  verbs are stubs" to the real Phase-1 state: `extract` works end-to-end (Ingestion → Extractor →
+  Layer-1 → Extractor-Jury → run-store persistence, with cost recording, catastrophe ceiling,
+  post-Extractor interrupt, and the propose→overlay→validate loop); only the Extractor and
+  Extractor-Jury are callable; `generate`/`validate`/`fix`/`telemetry submit` remain stubs and the
+  downstream agents don't exist. Noted that the `v0.0.1-setup` tag is stale (HEAD is 82 commits
+  ahead) — re-tagging is the maintainer's call.
+- **7c** — corrected `provider-interface.md §6.1`: post-ADR-0036, LLM transient retry is the
+  anthropic SDK default (2), and the 3-attempt `retries.py` / `TRANSIENT_RETRIES` strategy now
+  governs only the ingestion fetch (`framework/ingestion.py:22-23`). Annotated the `retries:`
+  config block to match.
+- **7d** — added a non-destructive "superseded in part by ADR 0047" note atop ADR 0038 (the
+  failure-path rationale only; the cost-visibility decision stands). ADR body otherwise unchanged,
+  per the immutable-ADR convention.
 
 Next ADR number: **0049**.
