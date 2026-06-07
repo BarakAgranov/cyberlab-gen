@@ -1694,3 +1694,34 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   partial-run path) is the later work-stream.
 
 Next ADR number: **0054**.
+
+## Code work-stream (A1–G1 spine) — Step A2: typed contents in `RefinementFeedback` — 2026-06-07
+
+First commit of the *code* work-stream that follows the now-settled docs (ADR 0048). A2 is A1's
+load-bearing prerequisite: the cross-stage feedback object must carry the **structured** findings,
+not stringified text, so the A1 patch coordinator can address by field path.
+
+- **`RefinementFeedback` now carries typed contents** (`framework/orchestrator.py`). Replaced
+  `items: list[str]` with two typed payloads — `static_findings: list[StaticSchemaFinding]` and
+  `jury_feedback: list[JuryFieldFeedback]` — discriminated by the existing `kind`. A
+  `_payload_matches_kind` model-validator enforces that exactly the matching payload is populated
+  (structural_retry ⇒ static_findings only; refinement ⇒ jury_feedback only; the matching list
+  non-empty), so a mis-built feedback object fails loudly instead of rendering an empty prompt.
+- **The jury's `suggested_fix` is preserved** (it was silently dropped by the old f-string flatten
+  at the boundary). `render()` and the new `feedback_lines()` surface it (`field_path: problem
+  (suggested fix: …)`); `render()` is still the *only* place text is produced, and only at the
+  Extractor-prompt boundary (the typed-contents rule, `architecture.md §1.7`).
+- **The producers pass structure, not strings.** `validate_node` hands the live
+  `StaticSchemaResult.findings`; `jury_node` hands the live `JuryVerdict.feedback`. Behaviour is
+  otherwise unchanged in A2 — still full re-extraction; the patch *mechanism* is A1.
+- **`unresolved_feedback` kept as `list[str]`** (run-report output, not a cross-stage boundary), but
+  now rendered from the structured feedback via `feedback_lines()`, so the report also gains
+  `suggested_fix`. Deliberately not made structural to avoid rippling into `PipelineOutcome` /
+  `ExtractResult` / run-store / report rendering — out of A2's scope and unrelated to the patch path.
+- **Tests** (`tests/unit/framework/test_orchestrator.py`, +10, TDD red-first): structured round-trip
+  incl. `suggested_fix`; `render()` for both kinds; the kind↔payload validator on bad input; and two
+  end-to-end pipeline tests proving `suggested_fix` survives the producer→Extractor prompt boundary
+  and into `unresolved_feedback` (both of which fail on the pre-A2 stringified boundary).
+- No divergence from the doc design — the typed-contents contract survived contact with the code.
+  `just verify` green (ruff, ruff format, pyright strict 0 errors, 617 passed / 1 skipped). No ADR
+  (A2 implements ADR 0048; no new decision). No tag.

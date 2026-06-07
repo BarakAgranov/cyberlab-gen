@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from cyberlab_gen.agents.extractor.extractor import ExtractionResult
 from cyberlab_gen.agents.extractor_jury.schema import (
@@ -34,9 +35,11 @@ from cyberlab_gen.agents.extractor_jury.schema import (
 )
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.orchestrator import (
+    FeedbackKind,
     JuryRejectionError,
     PipelineState,
     PipelineStatus,
+    RefinementFeedback,
     build_pipeline,
     reject_interactive_when_headless,
     run_pipeline,
@@ -62,7 +65,11 @@ from cyberlab_gen.schemas.enums import (
 )
 from cyberlab_gen.schemas.ingestion import IngestionResult
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
-from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
+from cyberlab_gen.validators.static_schema_validator import (
+    StaticSchemaCode,
+    StaticSchemaFinding,
+    StaticSchemaValidator,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -473,3 +480,161 @@ async def test_no_checkpointer_keeps_prior_behaviour() -> None:
     run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
     state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
     assert state.status is PipelineStatus.SHIPPED
+
+
+# --- A2: RefinementFeedback carries typed *contents*, not strings (ADR 0048) ---
+#
+# The cross-stage feedback object must retain the STRUCTURED findings — the jury's
+# JuryFieldFeedback (incl. suggested_fix, previously discarded) and the static-schema
+# StaticSchemaFinding — and render to prompt text only at the prompt boundary. These
+# tests pin: (1) structured round-trip incl. suggested_fix, (2) render() output,
+# (3) the kind↔payload invariant, and (4) that the structure (e.g. suggested_fix)
+# survives the producer→Extractor boundary rather than being flattened away.
+
+
+def test_refinement_feedback_round_trips_jury_feedback_with_suggested_fix() -> None:
+    fb = RefinementFeedback(
+        kind=FeedbackKind.REFINEMENT,
+        jury_feedback=[
+            JuryFieldFeedback(
+                field_path="thesis.summary", problem="too vague", suggested_fix="quote §2 verbatim"
+            )
+        ],
+    )
+    restored = RefinementFeedback.model_validate(fb.model_dump())
+    assert restored == fb
+    assert isinstance(restored.jury_feedback[0], JuryFieldFeedback)
+    # the suggested_fix is retained in the structured form (it used to be dropped)
+    assert restored.jury_feedback[0].suggested_fix == "quote §2 verbatim"
+
+
+def test_refinement_feedback_round_trips_static_findings() -> None:
+    fb = RefinementFeedback(
+        kind=FeedbackKind.STRUCTURAL_RETRY,
+        static_findings=[
+            StaticSchemaFinding(
+                code=StaticSchemaCode.UNKNOWN_FACET, location="facets[0]", detail="no such facet"
+            )
+        ],
+    )
+    restored = RefinementFeedback.model_validate(fb.model_dump())
+    assert restored == fb
+    assert isinstance(restored.static_findings[0], StaticSchemaFinding)
+    assert restored.static_findings[0].code is StaticSchemaCode.UNKNOWN_FACET
+
+
+def test_refinement_render_structural_contains_header_and_finding_render() -> None:
+    fb = RefinementFeedback(
+        kind=FeedbackKind.STRUCTURAL_RETRY,
+        static_findings=[
+            StaticSchemaFinding(
+                code=StaticSchemaCode.UNKNOWN_FACET, location="facets[0]", detail="no such facet"
+            )
+        ],
+    )
+    rendered = fb.render()
+    assert "STRUCTURAL VALIDATION FAILURE" in rendered
+    # the structured finding's own one-line render reaches the prompt verbatim
+    assert "unknown_facet@facets[0]: no such facet" in rendered
+
+
+def test_refinement_render_refinement_includes_field_path_problem_and_suggested_fix() -> None:
+    fb = RefinementFeedback(
+        kind=FeedbackKind.REFINEMENT,
+        jury_feedback=[
+            JuryFieldFeedback(
+                field_path="thesis.summary",
+                problem="too vague",
+                suggested_fix="quote the RCE paragraph",
+            )
+        ],
+    )
+    rendered = fb.render()
+    assert "JURY REVISION REQUESTED" in rendered
+    assert "thesis.summary: too vague" in rendered
+    assert "quote the RCE paragraph" in rendered
+
+
+def test_refinement_render_omits_suggested_fix_clause_when_absent() -> None:
+    fb = RefinementFeedback(
+        kind=FeedbackKind.REFINEMENT,
+        jury_feedback=[JuryFieldFeedback(field_path="thesis.summary", problem="too vague")],
+    )
+    rendered = fb.render()
+    assert "thesis.summary: too vague" in rendered
+    assert "suggested fix" not in rendered
+
+
+def test_refinement_feedback_rejects_refinement_carrying_static_findings() -> None:
+    with pytest.raises(PydanticValidationError):
+        RefinementFeedback(
+            kind=FeedbackKind.REFINEMENT,
+            static_findings=[
+                StaticSchemaFinding(
+                    code=StaticSchemaCode.UNKNOWN_FACET, location="facets[0]", detail="x"
+                )
+            ],
+        )
+
+
+def test_refinement_feedback_rejects_structural_carrying_jury_feedback() -> None:
+    with pytest.raises(PydanticValidationError):
+        RefinementFeedback(
+            kind=FeedbackKind.STRUCTURAL_RETRY,
+            jury_feedback=[JuryFieldFeedback(field_path="thesis.summary", problem="x")],
+        )
+
+
+def test_refinement_feedback_rejects_empty_matching_payload() -> None:
+    # a structural retry with no findings, and a refinement with no feedback, are both
+    # meaningless — the matching payload must be non-empty.
+    with pytest.raises(PydanticValidationError):
+        RefinementFeedback(kind=FeedbackKind.STRUCTURAL_RETRY)
+    with pytest.raises(PydanticValidationError):
+        RefinementFeedback(kind=FeedbackKind.REFINEMENT)
+
+
+async def test_jury_revise_rerun_prompt_carries_suggested_fix() -> None:
+    # The structured suggested_fix must survive to the Extractor re-run prompt. With the
+    # old stringified `list[str]` boundary this was dropped; this is the regression test.
+    good = _spec(facets=["target:aws"])
+    ext = _FakeExtractor([good])
+    revise = _verdict(
+        Verdict.REVISE,
+        feedback=[
+            JuryFieldFeedback(
+                field_path="thesis.summary",
+                problem="too vague",
+                suggested_fix="quote the blog's privilege-escalation paragraph",
+            )
+        ],
+    )
+    jury = _FakeJury([revise, _verdict(Verdict.APPROVE)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert "JURY REVISION REQUESTED" in ext.calls[1]
+    assert "thesis.summary: too vague" in ext.calls[1]
+    assert "quote the blog's privilege-escalation paragraph" in ext.calls[1]
+
+
+async def test_unresolved_feedback_preserves_suggested_fix() -> None:
+    # On cap exhaustion the run-report `unresolved_feedback` is rendered from the
+    # structured feedback, so suggested_fix survives into the report too.
+    good = _spec(facets=["target:aws"])
+    ext = _FakeExtractor([good])
+    revise = _verdict(
+        Verdict.REVISE,
+        feedback=[
+            JuryFieldFeedback(
+                field_path="thesis.summary", problem="too vague", suggested_fix="add a citation"
+            )
+        ],
+    )
+    jury = _FakeJury([revise])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury, refinement_cap=1)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED_LOW_CONFIDENCE
+    assert any("thesis.summary" in item for item in state.unresolved_feedback)
+    assert any("add a citation" in item for item in state.unresolved_feedback)

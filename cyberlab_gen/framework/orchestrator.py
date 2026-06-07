@@ -42,7 +42,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
 
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # These artifact/result types are *runtime* imports (not TYPE_CHECKING) because
 # ``PipelineState`` is a Pydantic model whose fields reference them, and LangGraph
@@ -50,17 +50,21 @@ from pydantic import BaseModel, ConfigDict, Field
 # ``from __future__ import annotations`` the hints must resolve at runtime. ruff's
 # TC001 wrongly wants them in a type-checking block; the noqa pins the requirement.
 from cyberlab_gen.agents.extractor.extractor import ExtractionResult
-from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict, Verdict
+from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVerdict, Verdict
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult, enrich
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.tracing_setup import stage_span
-from cyberlab_gen.validators.static_schema_validator import PendingProposals, StaticSchemaResult
+from cyberlab_gen.validators.static_schema_validator import (
+    PendingProposals,
+    StaticSchemaFinding,
+    StaticSchemaResult,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from typing import Any
+    from typing import Any, Self
 
     from langchain_core.runnables import RunnableConfig
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -95,17 +99,53 @@ class FeedbackKind(StrEnum):
 
 
 class RefinementFeedback(InternalModel):
-    """Typed structured feedback handed to a re-run Extractor (ADR 0023).
+    """Typed structured feedback handed to a re-run Extractor (ADR 0023, ADR 0048).
 
-    The ``UserFeedback``-like object ``pipeline.md §3.3`` requires: no free text
-    crosses the stage boundary untyped — this typed object *is* the contract, and
-    ``render`` produces its prompt rendering inside the Extractor stage. ``kind``
-    records whether the re-run is a structural retry (static-schema findings) or a
-    quality refinement (Jury feedback) so the run report can distinguish them.
+    The typed-boundary contract (``CLAUDE.md``, ``architecture.md §1.7``) means typed
+    *contents*, not a typed wrapper around stringified data: the structured findings
+    travel between stages in their structured form, and ``render`` produces prompt text
+    only at the prompt boundary (the Extractor stage), with the structured form retained
+    for the framework. Retaining the structure — field paths and the jury's
+    ``suggested_fix`` in particular — is the load-bearing prerequisite that lets the
+    refinement coordinator address and patch by field path (ADR 0048 A1).
+
+    ``kind`` discriminates the two re-run mechanisms (``architecture.md §1.7``) and
+    selects which payload is carried: a structural retry carries the static-schema
+    findings (``static_findings``); a quality refinement carries the jury's field-level
+    feedback (``jury_feedback``). The ``_payload_matches_kind`` validator enforces that
+    exactly the matching payload is populated, so a mis-built feedback object fails
+    loudly rather than rendering to an empty or mismatched prompt.
     """
 
     kind: FeedbackKind
-    items: list[str] = Field(default_factory=list[str])
+    static_findings: list[StaticSchemaFinding] = Field(default_factory=list[StaticSchemaFinding])
+    jury_feedback: list[JuryFieldFeedback] = Field(default_factory=list[JuryFieldFeedback])
+
+    @model_validator(mode="after")
+    def _payload_matches_kind(self) -> Self:
+        if self.kind is FeedbackKind.STRUCTURAL_RETRY:
+            if self.jury_feedback:
+                raise ValueError("a structural_retry feedback must not carry jury_feedback")
+            if not self.static_findings:
+                raise ValueError("a structural_retry feedback must carry static_findings")
+        else:  # REFINEMENT
+            if self.static_findings:
+                raise ValueError("a refinement feedback must not carry static_findings")
+            if not self.jury_feedback:
+                raise ValueError("a refinement feedback must carry jury_feedback")
+        return self
+
+    def feedback_lines(self) -> list[str]:
+        """The per-finding one-line renderings (also reused for the run report).
+
+        For a structural retry each line is the ``StaticSchemaFinding``'s own
+        ``code@location: detail`` render; for a refinement each line is
+        ``field_path: problem`` with the jury's ``suggested_fix`` appended when present
+        (the part the old stringified boundary discarded).
+        """
+        if self.kind is FeedbackKind.STRUCTURAL_RETRY:
+            return [finding.render() for finding in self.static_findings]
+        return [_render_jury_feedback(item) for item in self.jury_feedback]
 
     def render(self) -> str:
         """Render the feedback as the prompt addendum the Extractor re-run sees."""
@@ -118,8 +158,16 @@ class RefinementFeedback(InternalModel):
                 "field-targeted fixes. Address every item:"
             )
         )
-        lines = [header, *(f"- {item}" for item in self.items)]
+        lines = [header, *(f"- {line}" for line in self.feedback_lines())]
         return "\n".join(lines)
+
+
+def _render_jury_feedback(item: JuryFieldFeedback) -> str:
+    """One ``field_path: problem`` line, with the jury's ``suggested_fix`` when present."""
+    base = f"{item.field_path}: {item.problem}"
+    if item.suggested_fix:
+        return f"{base} (suggested fix: {item.suggested_fix})"
+    return base
 
 
 # --- the typed pipeline state (the LangGraph channel) ----------------------
@@ -364,7 +412,7 @@ def build_pipeline(
         if state.structural_attempts < structural_retry_attempts:
             state.pending_feedback = RefinementFeedback(
                 kind=FeedbackKind.STRUCTURAL_RETRY,
-                items=state.static_schema.rendered_findings(),
+                static_findings=state.static_schema.findings,
             )
             state.route = _Node.EXTRACT.value
             logger.info(
@@ -408,13 +456,13 @@ def build_pipeline(
             )
             state.route = END
             return state
-        # revise: refinement, bounded by the per-agent cap.
-        feedback_items = [f"{f.field_path}: {f.problem}" for f in verdict.feedback]
+        # revise: refinement, bounded by the per-agent cap. The structured jury feedback
+        # (field paths + suggested_fix) is retained for the framework; rendering to prompt
+        # text happens only at the Extractor boundary (ADR 0048 A2, the typed-contents rule).
+        feedback = RefinementFeedback(kind=FeedbackKind.REFINEMENT, jury_feedback=verdict.feedback)
         if state.refinement_iterations < refinement_cap:
             state.refinement_iterations += 1
-            state.pending_feedback = RefinementFeedback(
-                kind=FeedbackKind.REFINEMENT, items=feedback_items
-            )
+            state.pending_feedback = feedback
             state.route = _Node.EXTRACT.value
             logger.info(
                 "jury revise; routing to Extractor REFINEMENT (iteration %d/%d)",
@@ -423,9 +471,11 @@ def build_pipeline(
             )
             return state
         # cap exhausted with a revise verdict — ship with low_jury_confidence
-        # (the disagreement-without-progress (b) case, pipeline.md §3.2.3).
+        # (the disagreement-without-progress (b) case, pipeline.md §3.2.3). The run report's
+        # unresolved_feedback is the structured feedback rendered to lines (an output boundary,
+        # so stringifying here is fine — it now also preserves suggested_fix).
         state.status = PipelineStatus.SHIPPED_LOW_CONFIDENCE
-        state.unresolved_feedback = feedback_items
+        state.unresolved_feedback = feedback.feedback_lines()
         state.route = _Node.ENRICH.value
         logger.info("refinement cap exhausted on revise; shipping with low_jury_confidence")
         return state
