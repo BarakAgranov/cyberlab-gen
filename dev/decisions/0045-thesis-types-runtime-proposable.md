@@ -64,6 +64,10 @@ docs/registry PR; it is low-risk but orthogonal to the mechanism.
 
 ## Doc divergence to reconcile (maintainer doc pass — not edited here)
 
+> **Reconciled** in the A1–G1 docs-revision pass (2026-06-07, E1 follow-up): the three spots
+> below were updated, and `execution_contexts` was corrected alongside. See ADR 0050 and the
+> phase-1 execution log.
+
 This reversal makes the architecture docs stale for `thesis_types`; per CLAUDE.md these
 are not edited from an implementation task. To reconcile in a docs PR:
 - `registry-details.md §1` — move `thesis_types` from "open-set in spirit but no runtime

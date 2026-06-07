@@ -11,9 +11,9 @@ This document is implementation-ready. The YAML examples here are what gets chec
 
 Three categories of registry behavior, repeated throughout this document:
 
-- **Open-set, runtime-extensible.** Agents may propose new entries via the proposal lifecycle in `schema.md §4.16`. v1 seed entries are starting points; the user overlay accumulates more over time. `value_types`, `facets` (per-category), `execution_contexts`.
+- **Open-set, runtime-extensible.** Agents may propose new entries via the proposal lifecycle in `schema.md §4.16`. v1 seed entries are starting points; the user overlay accumulates more over time. `value_types`, `facets` (per-category), `execution_contexts`, `thesis_types`.
 - **Closed-set, maintainer-only.** Entries are added by PR to the cyberlab-gen repo only. No runtime proposals. Used for stable industry-standard categories (detection components, severity) or for entries where adding requires code changes (external data sources, provisioning mechanisms). `external_data_sources`, `static_catalogs`, `detection_components`, `severity_levels`, `detection_formats`, `provisioning_mechanisms`, `lab_credentials`.
-- **Open-set in spirit but no runtime proposal flow.** The registry grows by maintainer PR (informed by telemetry-aggregated patterns from `eval.md §7.9`), not by agent proposal at runtime. `thesis_types` falls here — the v1 seed is the curated walk's enumeration; promotion of new thesis types happens via PR.
+- **Open-set in spirit but no runtime proposal flow.** A registry that is conceptually open yet grows only by maintainer-PR curation, not runtime proposal. **As of ADR 0045 no first-class registry falls here** — `thesis_types`, formerly the sole example, is now runtime-proposable (listed in the first category above). The pattern is retained as a description for any future registry that should grow by curation alone.
 
 Two of these categories overlap on the "static reference data" property: `static_catalogs` (closed-set) and `lab_credentials` (closed-set) are *consulted* on-demand by agents and validators, not iterated through. They're listed under closed-set above (which describes their proposal-flow status) rather than carving out a fourth category for their consultation pattern.
 
@@ -2030,7 +2030,7 @@ Layer 5's behavior: a string in generated lab content matching a real-credential
 ### 7.6 `thesis_types`
 
 **Path:** `registry/thesis_types.yaml`
-**Open-set in spirit (registry-evolution per `schema.md §4.16`); the v1 seed is the curated walk's enumeration.**
+**Open-set, runtime-extensible — Extractor-proposed (`schema.md §4.16`, ADR 0045); the v1 seed is the curated walk's enumeration, which the overlay grows at runtime.**
 
 ```yaml
 - name: ttp_chain
@@ -2095,10 +2095,10 @@ The v1 seed across all registries:
 | `detection_formats` | 4 | Closed enum |
 | `provisioning_mechanisms` | 7 | Closed enum |
 | `lab_credentials` | 7 | Closed, maintainer-curated |
-| `thesis_types` | 10 | Open-set in spirit, curated seed |
+| `thesis_types` | 10 | Open-set, Extractor-extensible |
 | **Total** | **~188** | |
 
-The open-set registries (`value_types`, `facets`, `execution_contexts`) ship with seed entries adequate for the curated blog set's coverage. They grow at runtime via the proposal lifecycle in `schema.md §4.16`. The closed registries ship complete in v1; adding entries requires maintainer PR and (for `external_data_sources`) typically code changes.
+The open-set registries (`value_types`, `facets`, `execution_contexts`, `thesis_types`) ship with seed entries adequate for the curated blog set's coverage. They grow at runtime via the proposal lifecycle in `schema.md §4.16`. The closed registries ship complete in v1; adding entries requires maintainer PR and (for `external_data_sources`) typically code changes.
 
 The seed counts here are the *starting points*. The architecture is designed to handle gaps via overlay growth, not by frontloading exhaustive enumeration. A user who runs cyberlab-gen on twenty curated blogs over a year will have an overlay that meaningfully exceeds the seed — and that's the system working as designed.
 

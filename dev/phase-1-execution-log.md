@@ -1617,4 +1617,17 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   of the gate rewrite. (Recorded in ADR 0050.)
 - Code (overlay-write-on-ship + merge-check + bounded over-cap steering) is the later work-stream.
 
+### E1 follow-up — reconcile the proposable-set drift (no new ADR; completes E1)
+
+- Folded in the drift ADR 0050 flagged, on the maintainer's call: `thesis_types` and
+  `execution_contexts` ARE runtime-proposable (ADR 0044/0045), so docs saying otherwise were
+  flatly contradicting the code. Corrected `schema.md §4.16` "Proposal authority by registry" to
+  the right set — **value_types** (Extractor), **facets** (split), **execution_contexts**
+  (Planner), **thesis_types** (Extractor) proposable; **external_data_sources** explicitly NOT.
+  Updated `registry-details.md` §1 (moved `thesis_types` into the runtime-proposable category;
+  marked the now-empty "no runtime proposal flow" category vacant rather than rippling the
+  three-category framing), §7.6 (no longer a closed bundled-only catalog — Extractor-proposed), and
+  the §8 summary table. Added a "reconciled" pointer to ADR 0045's doc-divergence section (which had
+  pre-listed exactly these spots).
+
 Next ADR number: **0051**.

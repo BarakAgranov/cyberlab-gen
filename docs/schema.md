@@ -745,10 +745,14 @@ The three first-class registries are designed to evolve. Two evolution mechanism
 
 #### Proposal authority by registry
 
+Four registries accept runtime proposals — `value_types`, `facets`, `execution_contexts`, and `thesis_types`. `external_data_sources` does **not** (a new source needs adapter code, not just a registry row).
+
 - **`value_types`** — **Extractor only.** Blog-derived; the Extractor is the only agent that reads the blog.
 - **`facets`** — **split by category**:
   - `target:*` and blog-derived `lab_class_signal:*` — Extractor proposes.
   - `runtime:*` and lab-derived `lab_class_signal:*` — Planner proposes.
+- **`execution_contexts`** — **Planner.** When a step needs an execution context the registry doesn't yet name (the manifest would otherwise fall back to `other`), the Planner proposes a new context entry rather than letting `other` persist into the final manifest.
+- **`thesis_types`** — **Extractor.** Blog-derived, like value types; no category gate. The Extractor proposes a thesis type when the blog's attack thesis matches no existing entry, so a spec naming a not-yet-registered thesis type ships (provisional pass → overlay-on-ship) instead of halting.
 - **`external_data_sources`** — **no runtime proposals.** Adding a new source typically requires code changes (auth handling, response parsing). Maintainer PR only.
 
 If the Planner finds itself needing a value type the Extractor didn't propose, that's a signal the Extractor missed something; the Planner-Jury flags this and the refinement loop routes back to the Extractor (see `pipeline.md §3.2.6`).
