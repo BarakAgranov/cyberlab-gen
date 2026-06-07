@@ -1405,3 +1405,69 @@ Provider-backed eval NOT run (real money; the user runs it). Five commits, no ta
 first-blog fix), `607191f` (checkpointer), `b14a6ee` (Phoenix).
 
 Next ADR number: **0042**.
+
+---
+
+## The propose → overlay → validate loop + thesis_types + the static_schema rename
+
+Sign-off task (the Wiz-CodeBuild `--auto` halt investigation, then implement). Four
+sequenced, separately-committed parts, `just verify` green at each (final: 603 passed,
+1 skipped — the live cassette). Provider-backed eval NOT run (real money; the user runs
+it). ADRs 0044/0045/0046.
+
+### Part A — propose → approve → overlay-write → validate loop (ADR 0044) — `b02b89b`
+
+- The propose tools only appended to in-memory lists; "acceptance" printed but wrote
+  nothing, and Layer-1 ran *before* the acceptance point — a spec failing on a freshly
+  proposed facet halted before the proposal could resolve it.
+- New `registries/overlay_writer.py` (atomic per-vocabulary write: entries + framework-
+  stamped `proposals:` audit block). New `framework/proposal_acceptance.py` (Proposed* →
+  entry, stamp audit, write; `--auto` batch up to the cap = `approval=auto`,
+  `--interactive` per-proposal = `approval=human`).
+- **Provisional resolution**: `StaticSchemaValidator.validate(spec, pending=...)` treats a
+  reference covered by an in-flight proposal as a provisional pass (logged), threaded from
+  the orchestrator and the eval re-validation. Lighter than rebuilding the frozen merged
+  registry mid-graph (the chosen ordering fix).
+- Over-cap `--auto` halts with `ProposalCapExceeded` (no silent drop). `ProposalAuditBlock`:
+  `source_lab` made optional (no lab at extraction time — judgment call), new
+  `approval: auto|human` field (additive).
+
+### Part B — thesis_types runtime-proposable (ADR 0045, amends 0016) — `d837223`
+
+- `thesis_types` moved from a closed bundled-only catalog (ADR 0016) into
+  `MergedRegistries` as a first-class runtime registry (entries + overlay), resolved by
+  the validator like facets; the other four ADR-0016 catalogs stay closed.
+- New `propose_thesis_type` Extractor tool + `ProposedThesisType` + `to_entry`, feeding the
+  Part-A loop; `thesis_type_proposals` threaded through `ExtractionResult`/`RunResult`, the
+  orchestrator pending set, acceptance (auto cap + interactive), and eval.
+- `external_data_sources` left maintainer-PR-only (needs adapter code). Did NOT hand-seed
+  the obvious missing thesis types (`credential_theft`, `ci_cd_compromise`) — flagged in
+  ADR 0045 as an optional fast-follow so the proposal/curation signal isn't pre-empted.
+
+### Part C — rename `layer1` → `static_schema` everywhere (ADR 0046) — `b05dd6c`
+
+- Supersedes ADR 0026's keep-numbered-keys; amends ADR 0023's locked node id. No `layer1`
+  token survives in `cyberlab_gen/`, `eval/`, or `tests/`: report/metric keys
+  (`static_schema_passed` / `static_schema_pass_rate` / `overall_static_schema_pass_rate`),
+  `PipelineState.static_schema`, node id `validate_static_schema`, halt/error strings,
+  logs, and code docstrings/comments.
+- Archived `eval/reports/*.yaml` keep old keys (accepted, not migrated). The `docs/*.md`
+  positional Layer-1/2/3/5 taxonomy is left to a maintainer doc pass (renaming it would
+  orphan Layers 2/3/5 / rewrite the contract).
+
+### Part D — source-id tool description + a doc fix — `9f36e02`
+
+- `external_lookup` description now enumerates the registered source ids (threaded from the
+  merged registry) and steers away from a `mitre`/`mitre_attack` source (the Wiz run's
+  category error); MITRE ids are validated against the bundled catalog, not via lookup.
+- `schema.md §281` corrected: `external_data_sources` is NOT runtime-proposable (contra the
+  old wording; matches §4.16 / §744); proposable set is value_types, facets,
+  execution_contexts, thesis_types.
+
+### Doc divergence flagged (maintainer doc pass — not edited here)
+
+ADR 0045 lists the `registry-details.md §1`/§7.6/§8 and `schema.md §4.16` updates needed
+to reflect thesis_types-now-proposable; ADR 0046 notes the `docs/*.md` report-key examples
+(`layer_1`) and positional taxonomy left for a deliberate docs PR.
+
+Next ADR number: **0047**.
