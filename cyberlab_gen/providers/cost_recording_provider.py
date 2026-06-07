@@ -13,12 +13,19 @@ Two jobs, both at the single point that sees every billed call:
    and logs one line: model, input/output/cache tokens, the cost of *that* call, and
    the running cumulative total and call count. After one or two runs the user can
    answer "where does the money go?" from the run log alone.
-2. **The catastrophe ceiling.** After recording a successful call, if cumulative
-   spend has crossed ``ledger.cap_usd`` (the high backstop, default
-   ``DEFAULT_CATASTROPHE_CEILING_USD``), it raises :class:`BudgetExceeded` to abort
-   the run immediately. The ledger never raises (``§5.3``); this framework-side
-   wrapper makes the decision. A *failed* call that crosses the line needs no extra
-   abort — its own ``ProviderError`` already halts the run, and the spend is recorded.
+2. **The catastrophe ceiling.** After recording *any* billed call — success **and**
+   billed-but-raised failure — if cumulative spend has crossed ``ledger.cap_usd`` (the
+   high backstop, default ``DEFAULT_CATASTROPHE_CEILING_USD``), it raises
+   :class:`BudgetExceeded` to abort the run immediately. The ledger never raises
+   (``§5.3``); this framework-side wrapper makes the decision. Enforcing on the failure
+   path too is essential, and corrects ADR 0038's original premise (amended by ADR
+   0047): a billed *failure* does **not** reliably halt the run. A ``MalformedOutput``
+   is caught and retried by the structural-retry / refinement machinery (``call_surface``
+   §, ``architecture.md §1.7``), so its ``ProviderError`` is absorbed while each retry
+   bills again — spend accumulates unbounded if the ceiling is checked only on success.
+   ``BudgetExceeded`` is a ``HardFailure`` (not a ``MalformedOutput``), so it escapes
+   that machinery and halts; the original error is preserved as its ``cause``, never
+   masked. Below the ceiling the failure path re-raises the original error unchanged.
 """
 
 from __future__ import annotations
@@ -165,8 +172,16 @@ class CostRecordingProvider(Provider):
         A call with no attached usage/model (it failed before any vendor call, or the
         layer below did not attach) records nothing. Recorded as ``FAILED`` so the
         ledger distinguishes wasted spend from healthy spend while ``total_usd`` still
-        counts it. The ceiling is **not** re-raised here: the original error already
-        aborts the run, and overriding it would mask the real cause.
+        counts it.
+
+        The catastrophe ceiling is enforced here too (ADR 0047, amending ADR 0038): a
+        run dominated by billed failures must be bounded the same as a succeeding one,
+        because a failed call's ``ProviderError`` is **not** guaranteed to halt the run
+        — a ``MalformedOutput`` is retried by layers above this wrapper while each
+        attempt bills again. When cumulative spend crosses the ceiling this raises
+        :class:`BudgetExceeded` with ``exc`` threaded through as the ``cause`` so the
+        original failure is preserved, not masked. Below the ceiling nothing is raised
+        here and the caller re-raises ``exc`` unchanged.
         """
         if exc.usage is None or exc.model is None:
             return
@@ -183,6 +198,7 @@ class CostRecordingProvider(Provider):
             )
         )
         self._log_call(agent_label, exc.model, exc.usage, CallOutcome.FAILED)
+        self._enforce_ceiling(agent_label, exc.usage, exc.model, cause=exc)
 
     def _log_call(
         self, agent_label: AgentLabel, model: str, usage: TokenUsage, outcome: CallOutcome
@@ -208,8 +224,23 @@ class CostRecordingProvider(Provider):
                 f"cost=${usage.cost_usd} (cumulative ${self._ledger.total_usd})"
             )
 
-    def _enforce_ceiling(self, agent_label: AgentLabel, usage: TokenUsage, model: str) -> None:
-        """Abort the run if cumulative spend crossed the catastrophe ceiling (ADR 0038)."""
+    def _enforce_ceiling(
+        self,
+        agent_label: AgentLabel,
+        usage: TokenUsage,
+        model: str,
+        *,
+        cause: ProviderError | None = None,
+    ) -> None:
+        """Abort the run if cumulative spend crossed the catastrophe ceiling (ADR 0038).
+
+        Called after every billed call — success (``_record``) and billed failure
+        (``_record_billed_failure``) alike, ADR 0047 — so the ceiling bounds a
+        failure-dominated run identically to a successful one. On the failure path the
+        originating provider error is passed as ``cause`` so escalating to
+        :class:`BudgetExceeded` chains it rather than masking it; on the success path
+        ``cause`` is ``None``.
+        """
         remaining = self._ledger.remaining_under_cap()
         if remaining is None or remaining > 0:
             return
@@ -221,7 +252,7 @@ class CostRecordingProvider(Provider):
             ceiling,
             len(self._ledger.entries),
         )
-        raise BudgetExceeded(
+        budget_exceeded = BudgetExceeded(
             f"cumulative LLM spend ${spent} reached the ${ceiling} catastrophe ceiling after "
             f"{len(self._ledger.entries)} billed call(s); aborting to stop a runaway. This is a "
             f"HIGH backstop, not an everyday cap — now that per-call costs are visible in the run "
@@ -230,7 +261,11 @@ class CostRecordingProvider(Provider):
             ceiling_usd=ceiling,
             usage=usage,
             model=model,
+            cause=cause,
         )
+        if cause is None:
+            raise budget_exceeded
+        raise budget_exceeded from cause
 
 
 __all__ = ["CostRecordingProvider"]

@@ -662,6 +662,59 @@ async def test_cost_recording_provider_aborts_mid_run_at_catastrophe_ceiling() -
     assert exc_info.value.model == "m"
 
 
+async def test_cost_recording_provider_trips_ceiling_on_billed_failures() -> None:
+    # ADR 0038 amended by ADR 0047: a run made entirely of BILLED FAILURES (truncated/
+    # malformed emits the vendor billed but that raise, ADR 0033) must trip the
+    # catastrophe ceiling too. The ceiling used to be enforced only on the success path
+    # (`_record`), on the false premise that a failed call's own error always halts the
+    # run. It does not: a MalformedOutput is caught and RETRIED by the structural-retry
+    # / refinement machinery, so billed spend accumulated with the ceiling never checked
+    # and could overshoot the cap. The wrapper must bound a failing run like a succeeding
+    # one.
+    from cyberlab_gen.errors import BudgetExceeded, EmitTruncated
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CallOutcome, CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("1.00"))
+    inner = _RaisingInnerProvider(billed_cost="0.60")
+    provider = CostRecordingProvider(inner, ledger)  # type: ignore[arg-type]
+
+    async def _failing_call() -> None:
+        await provider.complete_with_tools(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            tools=[],
+            tool_executor=_unused_executor(),
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=3,
+        )
+
+    # First billed failure: $0.60, under the $1.00 ceiling. Records the spend and
+    # re-raises the ORIGINAL provider error unchanged — no escalation below the ceiling.
+    with pytest.raises(EmitTruncated):
+        await _failing_call()
+    assert ledger.total_usd == Decimal("0.60")
+
+    # Second billed failure: $1.20 cumulative crosses the ceiling. The wrapper now
+    # escalates to BudgetExceeded (a HardFailure the retry machinery does not absorb) so
+    # the runaway actually halts — instead of re-raising the original error, which the
+    # structural-retry loop would have caught and retried.
+    with pytest.raises(BudgetExceeded) as exc_info:
+        await _failing_call()
+
+    assert ledger.total_usd == Decimal("1.20")  # the crossing call's spend is recorded
+    assert len(ledger.entries) == 2
+    assert all(e.outcome is CallOutcome.FAILED for e in ledger.entries)  # all billed failures
+    assert exc_info.value.spent_usd == Decimal("1.20")
+    assert exc_info.value.ceiling_usd == Decimal("1.00")
+    assert exc_info.value.usage is not None  # billed usage attached for honest accounting
+    assert exc_info.value.model == "claude-opus-4-8"
+    # The original billed failure is preserved as the cause, never masked.
+    assert isinstance(exc_info.value.__cause__, EmitTruncated)
+    assert isinstance(exc_info.value.cause, EmitTruncated)
+
+
 async def test_cost_recording_provider_logs_each_call_with_cumulative(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
