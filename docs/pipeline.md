@@ -254,7 +254,7 @@ The framework reads each failure (validator finding or quality concern) and re-r
 
 **Stopping strategies are pluggable.** v1 ships three: fixed-N iterations (baseline), score plateau, validator+Critic verdict. The eval harness compares them; users can select via config. See `eval.md §7.7`.
 
-**Cost discipline.** Per `architecture.md §1.7`: default budget of $10 LLM spend (configurable via `--max-llm-cost` or config) OR 20 total iterations OR 5 per agent, whichever hits first. When the next iteration's estimated cost would exceed the cap, the budget-overrun interrupt (§3.1.1) fires in both modes.
+**Cost discipline.** Per `architecture.md §1.7`, refinement is bounded by the everyday budget ($10 default LLM spend, configurable via `--max-llm-cost`) OR 20 total iterations OR 5 per agent, whichever hits first; the predictive budget-overrun interrupt (§3.1.1) fires before an iteration whose estimated cost would cross the everyday budget, in both modes. The separate **$25 catastrophe ceiling** is a hard backstop enforced on every billed call — success or failure (ADR 0047) — independent of this loop; it stops a runaway the predictive interrupt misses.
 
 **Why both per-agent and total caps.** The per-agent cap (5) sums across agents to more than the total cap (20). The per-agent cap is a *fairness* mechanism — it prevents one agent from consuming the entire iteration budget while others get nothing — not a budget mechanism. The total cap is what binds in typical practice. Per-agent caps matter for pathological cases where one agent fails repeatedly while others would have produced clean output if given iteration room.
 

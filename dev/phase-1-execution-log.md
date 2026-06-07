@@ -1583,4 +1583,16 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   failure-path rationale only; the cost-visibility decision stands). ADR body otherwise unchanged,
   per the immutable-ADR convention.
 
-Next ADR number: **0049**.
+### B2 — two cost caps: everyday budget vs catastrophe backstop (ADR 0049)
+
+- Reconciled the $10-vs-$25 confusion in `architecture.md §1.7` and `pipeline.md §3.2.12`. They
+  are two distinct mechanisms, now documented as such: the **$10 everyday refinement budget** (soft
+  cap, enforced *before* spending by the predictive budget-overrun interrupt, user-overridable) and
+  the **$25 catastrophe ceiling** (hard backstop, enforced on every billed call — success or
+  failure, ADR 0047 — mechanical, no override). Tied the everyday budget to A1 (targeted patching is
+  ~10× cheaper/iteration, so the budget rarely binds). Flagged that the interrupt and iteration caps
+  must be *live*, not inert — the predictive next-iteration estimate is hardwired to zero in code
+  today, so the interrupt is dead. Code (everyday budget + iteration caps + a live estimate) is the
+  later work-stream; the $25 enforcement already exists.
+
+Next ADR number: **0050**.

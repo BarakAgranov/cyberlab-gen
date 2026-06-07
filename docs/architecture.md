@@ -242,11 +242,13 @@ The Critic is advisory. Its verdict never directly blocks shipping a lab. The on
 
 When validation or jury feedback flags issues, the system refines by **targeted patch**, not blind re-extraction. The framework hands the responsible agent the prior artifact plus the *structured* findings (typed and field-level — see `schema.md §4.9`); the agent returns a **patch** supplying new content and provenance for **only the flagged field paths**. The framework deep-sets that patch onto a copy of the prior artifact and re-validates, so every unflagged field stays byte-identical. Refinement is therefore **convergent by construction** — touching only flagged paths cannot regress an unflagged one, which is exactly the failure mode (a quality score bouncing 9→6→9→10) of re-rolling every field each pass. The one exception is the artifact-level natural-language-feedback path in interactive mode, where the user rejects the whole artifact rather than naming fields; there a from-scratch re-run is correct. Refinement is bounded by configurable caps:
 
-- **Total LLM cost cap** (default $10; configurable via `--max-llm-cost` or config).
+- **Everyday LLM cost budget** (default $10; configurable via `--max-llm-cost` or config) — the refinement budget the predictive interrupt enforces (see below). Distinct from the catastrophe ceiling.
 - **Total iteration cap** (default 20).
 - **Per-agent iteration cap** (default 5).
 
-When the next iteration's estimated cost would push spend past the cap, the budget-overrun interrupt fires in both interactive and auto modes. The user can raise the cap, abort, or explicitly proceed past the cap.
+When the next iteration's estimated cost would push spend past the everyday budget, the predictive budget-overrun interrupt fires in both interactive and auto modes. The user can raise the budget, abort, or explicitly proceed past it.
+
+**Two distinct cost caps, not one.** The $10 above is the *everyday refinement budget* — a soft cap the predictive interrupt enforces *before* spending. Separately, a higher **catastrophe ceiling** (default $25) is a hard backstop enforced mechanically by `CostRecordingProvider` on **every billed call, success or failure** (ADR 0047), to stop a runaway the interrupt failed to catch — a single call far over its estimate, or a failure-dominated loop that never reaches the predictive check. The everyday budget is where the user operates; the catastrophe ceiling is the seatbelt, and it is a mechanical safety check (`§1.6`), never an LLM decision. With targeted-patch refinement (above, ~10× cheaper per iteration than re-extraction) the per-iteration estimate is small, so the everyday budget rarely binds in practice — but both mechanisms must be **live** (the interrupt must compute a real next-iteration estimate, not a hardwired zero) rather than inert.
 
 **Retry vs. refinement.** Two different mechanisms:
 
@@ -261,7 +263,7 @@ Refinement is for *quality* feedback; retry is for *structural* flakiness. Schem
 
 **Stopping strategies are pluggable.** v1 ships three: fixed-N iterations (baseline), score plateau, and validator+Critic verdict. The eval harness compares them; users can select via config. See `eval.md §7.7` for the comparison methodology.
 
-**Placeholder caps pending eval-harness data.** The $10 / 20 / 5 defaults are starting points. The first eval-harness run measures actual usage on the curated set and produces calibrated values for v1 release. Users may need to raise caps in the interim; see §8 for items requiring empirical data before locking.
+**Placeholder caps pending eval-harness data.** The $10 / 20 / 5 defaults are starting points. The first eval-harness run measures actual usage on the curated set and produces calibrated values for v1 release. Users may need to raise caps in the interim; see §8 for items requiring empirical data before locking. (The $25 catastrophe ceiling is a backstop, not an everyday number to calibrate — it stays well above the everyday budget. These caps and the predictive interrupt must *exist and be live* even at placeholder values; an interrupt that never fires because next-iteration cost is hardwired to zero is a bug, not a placeholder.)
 
 **Two budgets in v1, not three.** LLM token budget (paid to providers, per this section) and external API call cap (operational concern, see `pipeline.md §3.2.4`). Cloud resource budget is v2-bound — it doesn't apply in v1 because Layer 4 (the only stage that would spend cloud money) is v2-deferred.
 
