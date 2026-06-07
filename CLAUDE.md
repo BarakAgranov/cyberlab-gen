@@ -73,7 +73,7 @@ If you're unsure whether syntax is 3.13-current, check `pyproject.toml`'s `requi
 
 - Pyright in strict mode. No `Any` without an inline `# noqa: ANN401` and a justification.
 - `extra="forbid"` on every artifact model (Pydantic) — via the `ArtifactModel` base class in `cyberlab_gen/schemas/base.py`. Internal-only types use `InternalModel` with `extra="ignore"`.
-- No free text passes between pipeline stages. Every cross-stage boundary is typed.
+- No free text passes between pipeline stages. Every cross-stage boundary is typed — and *typed* means typed **contents**, not a typed wrapper around stringified data. Structured findings (jury field-level feedback, validator findings) travel between stages in structured form (`field_path`, `problem`, `suggested_fix`); rendering to prompt text happens only at the prompt boundary, with the structured form retained for the framework. This is the prerequisite for targeted-patch refinement (`docs/architecture.md §1.7`).
 - Logging uses lazy-format (`logger.info("processing %s", x)`), not f-strings.
 
 **Test discipline.**

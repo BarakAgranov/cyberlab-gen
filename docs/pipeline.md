@@ -245,7 +245,7 @@ Per-phase confidence feeds the README's "How to use this lab" section and the `v
 **Output.** Updated lab directory; loop continues until pass / abandon / cap hit.
 
 **Responsibilities.**
-- For each validation failure or quality concern, identify the responsible agent and re-run with structured feedback.
+- For each validation failure or quality concern, identify the responsible agent and re-run it with the prior artifact plus the structured findings; the agent returns a **patch** of only the flagged field paths, which the coordinator deep-sets onto the prior artifact and re-validates (`architecture.md §1.7`, `schema.md §4.9`).
 - Re-validate.
 - Track iteration count and accumulated LLM cost.
 - Stop when validator passes and quality is acceptable, abandonment criteria met, iteration cap hit, or cost cap hit.
@@ -272,7 +272,7 @@ The framework reads each failure (validator finding or quality concern) and re-r
 - **Budget exhausted, last verdict was Critic `reject`** → still ships best snapshot; the rejection is prominently surfaced in `validation-report.md` and per-phase confidence flags in the README.
 - **Cascade-abandoned (no coherent artifact produced)** → does not ship. The user receives a structured failure report with iteration history. Per `architecture.md §0.5 criterion 2`, true abandonment is rare and reserved for cases where no usable lab was produced at all.
 
-**Best-state retention.** Each iteration's lab state is snapshotted to working directory subdirectories (e.g., `iter-3/`, `iter-4/`). The coordinator retains the top-3 by combined validator+quality score plus the most recent. On budget exhaustion, the highest-scored snapshot is shipped, with its iteration number and score history surfaced in the run report. (Snapshots beyond the top-3 are pruned during the run; on abandon, all retained snapshots and the iteration-causality log are preserved for user diagnosis.)
+**Best-state retention (secondary safety net).** Targeted patch refinement (`architecture.md §1.7`) makes per-field regression impossible *within* an artifact — only flagged fields are written — so snapshots are no longer the primary convergence mechanism. They remain a fallback that bounds *cross-phase* oscillation (a coupled re-generation of one phase can still perturb another; see the Cycle/Cascade patterns above) and preserves the best result on budget exhaustion. Each iteration's lab state is snapshotted to working directory subdirectories (e.g., `iter-3/`, `iter-4/`). The coordinator retains the top-3 by combined validator+quality score plus the most recent. On budget exhaustion, the highest-scored snapshot is shipped, with its iteration number and score history surfaced in the run report. (Snapshots beyond the top-3 are pruned during the run; on abandon, all retained snapshots and the iteration-causality log are preserved for user diagnosis.)
 
 #### 3.2.13 Output
 

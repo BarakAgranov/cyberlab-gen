@@ -1528,3 +1528,42 @@ any more real runs."
   `claude-opus-4-8`, real cost, `checkpoint.sqlite`). Not test code — no repo change.
 
 Next ADR number: **0048**.
+
+## Doc-revision pass (A1–G1 design alignment) — spine: A1 + A2 — 2026-06-07
+
+Docs-only work-stream that revises the architecture corpus to describe the better design from the
+A1–G1 comprehension report and to make docs and code mutually aligned. Four design decisions were
+settled with the maintainer up front: **C1** → enrich *before* the jury **and** still mark
+framework-written provenance distinctly; **E1** over-cap → in-loop steering bounded by the
+refinement iteration/budget caps; **B2** → two caps ($10 everyday budget + $25 catastrophe
+backstop); **D1/D2** → deferred. Code follows the settled docs as a separate work-stream — nothing
+in this pass touches `cyberlab_gen/`, so `just verify` stays green by construction.
+
+### A1 — refinement is a targeted patch, not blind re-extraction (ADR 0048)
+
+- **The spine.** `architecture.md §1.7` framed refinement as "re-runs the responsible agent,"
+  which the code read as full re-extraction (non-convergent — quality bounces 9→6→9→10 — and ~10×
+  cost/iteration). Rewrote §1.7 and its retry-vs-refinement table to mandate the patch mechanism:
+  prior artifact + typed structured findings in, a patch of only the flagged field paths out,
+  deep-set onto a copy and re-validated → convergent by construction. Full re-extraction is kept
+  only for the artifact-level natural-language-feedback path (interactive).
+- **Propagated** to `agents.md` (Extractor §5.4 note; jury `revise` contract and the
+  individual-field failure mode in §5.5), `pipeline.md §3.2.12` (patch is the default; best-state
+  snapshots reframed as a *secondary* net that bounds cross-phase oscillation only), and a new
+  `schema.md §4.9` subsection "Refinement addressing: field paths and patches" documenting the
+  `field_path → patch` convention and that inline provenance survives a patch unchanged.
+
+### A2 — typed boundary means typed *contents* (prerequisite for A1)
+
+- Sharpened the `CLAUDE.md` typed-boundary principle: "typed" means typed contents, not a typed
+  wrapper around stringified data; structured findings travel structured and are rendered to prompt
+  text only at the prompt boundary. This is what lets the coordinator address and patch by field
+  path. (Mostly a later code fix — `RefinementFeedback` is `list[str]` today — but the principle is
+  now unambiguous.)
+
+ADR 0048 records A1+A2 and the snapshot demotion, and notes the D1/D2 deferral (A1 works with
+inline provenance, so the side-map / chunked-emit redesign is not needed now). Remaining plan items
+queued: E1 (proposal lifecycle + jury gate), B2 (two-cap budget), A3/B1 (one mechanical-validator
+stack), C1 (enrich-before-jury + mark provenance), orientation cleanup (7a–7d), F1, G1.
+
+Next ADR number: **0049**.

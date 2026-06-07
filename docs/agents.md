@@ -106,7 +106,7 @@ The Extractor must execute a real search call against external sources for any i
 
 **Notes.**
 
-- The Extractor sees the entire blog at once (with chunking only if length exceeds context window). It does not do progressive extraction; the AttackSpec is produced in one pass, then refined by the jury. The chunking strategy and reconciliation logic live in implementation; long blogs are a real v1 concern with the eval harness including long-blog cases.
+- The Extractor sees the entire blog at once (with chunking only if length exceeds context window). It does not do progressive extraction; the AttackSpec is produced in one pass, then refined by the jury via **targeted patch** — on a `revise`, the Extractor edits only the flagged fields rather than re-extracting (`architecture.md §1.7`). The chunking strategy and reconciliation logic live in implementation; long blogs are a real v1 concern with the eval harness including long-blog cases.
 - The Extractor populates `chain_step_excerpts` — per-step quoted blog passages — that flow downstream so other agents can see source text without re-reading the whole blog. The Planner re-keys these into per-phase excerpt bundles.
 - Scope decisions vs. planning decisions: the Extractor decides *whether the content is in cyberlab-gen's scope at all*. The Planner decides *whether a coherent lab can be planned given user configuration, registry coverage, and reproducibility ladder*. Two different "should this become a lab" questions, separated by responsibility.
 
@@ -122,7 +122,7 @@ The Extractor must execute a real search call against external sources for any i
 
 **Output.** A structured verdict (`approve` / `revise` with feedback / `reject` with reason).
 
-The jury produces a judgment; the framework reads the verdict and decides what to do: `approve` → continue; `revise` → Extractor re-runs with feedback (counts against refinement budget); `reject` → pipeline halts with explanation.
+The jury produces a judgment; the framework reads the verdict and decides what to do: `approve` → continue; `revise` → the framework hands the Extractor the prior AttackSpec plus the jury's *structured*, field-level feedback, and the Extractor returns a **patch** for only the flagged fields (counts against refinement budget; see `architecture.md §1.7` and `schema.md §4.9`); `reject` → pipeline halts with explanation.
 
 **Tools.** Same as Extractor (same tool inventory, same external sources). The jury can independently verify external API responses.
 
@@ -146,7 +146,7 @@ The jury rejects fields where provenance doesn't match the claim.
 
 **Failure modes.**
 
-- **Jury identifies provenance fraud in individual fields (1–3 content fields with mismatched citations) → `revise` verdict with field-specific feedback.** The Extractor re-runs with targeted feedback identifying the specific fields. The pipeline does not halt.
+- **Jury identifies provenance fraud in individual fields (1–3 content fields with mismatched citations) → `revise` verdict with field-specific feedback.** The Extractor receives the prior AttackSpec plus targeted field-level feedback and returns a **patch** for those specific fields; the framework deep-sets it and re-validates, leaving unflagged fields untouched (`architecture.md §1.7`). The pipeline does not halt.
 - **Jury identifies provenance fraud systematic across many fields (>30% of content fields with mismatched citations) → `reject` verdict.** This indicates the Extractor was operating in a fundamentally broken mode (cascading hallucination); the pipeline halts with the rejection reason in the run report.
 - **Disagreement handling.** When juries disagree (multi-model split) or retries are exhausted: in `--interactive`, escalate to user with both opinions surfaced; in `--auto`, accept the lower-scoring assessment as conservative default. When retries are exhausted, distinguish two outcomes:
   - (a) jury verdict is `reject` with a fundamental concern → halt;

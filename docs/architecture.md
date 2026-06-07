@@ -240,7 +240,7 @@ The Critic is advisory. Its verdict never directly blocks shipping a lab. The on
 
 ### 1.7 Refinement is bounded and strategy-pluggable
 
-When validation or jury feedback flags issues, the system refines: re-runs the responsible agent with structured feedback. Refinement is bounded by configurable caps:
+When validation or jury feedback flags issues, the system refines by **targeted patch**, not blind re-extraction. The framework hands the responsible agent the prior artifact plus the *structured* findings (typed and field-level — see `schema.md §4.9`); the agent returns a **patch** supplying new content and provenance for **only the flagged field paths**. The framework deep-sets that patch onto a copy of the prior artifact and re-validates, so every unflagged field stays byte-identical. Refinement is therefore **convergent by construction** — touching only flagged paths cannot regress an unflagged one, which is exactly the failure mode (a quality score bouncing 9→6→9→10) of re-rolling every field each pass. The one exception is the artifact-level natural-language-feedback path in interactive mode, where the user rejects the whole artifact rather than naming fields; there a from-scratch re-run is correct. Refinement is bounded by configurable caps:
 
 - **Total LLM cost cap** (default $10; configurable via `--max-llm-cost` or config).
 - **Total iteration cap** (default 20).
@@ -253,7 +253,7 @@ When the next iteration's estimated cost would push spend past the cap, the budg
 | Aspect | Retry | Refinement |
 |---|---|---|
 | Trigger | Stage-internal failure (timeout, schema-invalid, malformed) | Downstream judgment (jury, validator, Critic) |
-| Input | Same as original call | Original + structured feedback |
+| Input | Same as original call | Prior artifact + typed structured findings; agent returns a patch of flagged fields |
 | Budget | Stage-local (default 3 attempts) | Pipeline-wide (per the caps above) |
 | Coordinator | Stage's own retry logic | Refinement loop coordinator (`pipeline.md §3.2.12`) |
 
