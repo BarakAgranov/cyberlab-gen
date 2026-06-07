@@ -1470,4 +1470,61 @@ ADR 0045 lists the `registry-details.md §1`/§7.6/§8 and `schema.md §4.16` up
 to reflect thesis_types-now-proposable; ADR 0046 notes the `docs/*.md` report-key examples
 (`layer_1`) and positional taxonomy left for a deliberate docs PR.
 
-Next ADR number: **0047**.
+## Safety fixes from the comprehension report (L1, L7) + pollution cleanup — 2026-06-07
+
+Two well-characterized safety defects from the whole-system comprehension report, plus a
+one-time cleanup of the real state dir they had already polluted. "Clear the decks before
+any more real runs."
+
+### Fix 1 (L1) — catastrophe ceiling enforced on billed failures (ADR 0047, amends 0038)
+
+- **Evidence-backed.** `CostRecordingProvider._enforce_ceiling` was called only from
+  `_record` (success), never from `_record_billed_failure`. Verified the failure path is
+  retried, not halted: `call_surface._with_structural_retry` catches `MalformedOutput` and
+  re-runs (1+2 attempts), so a billed-but-raised emit accumulates spend with the ceiling
+  never consulted. ADR 0038's "a failed call needs no extra abort" premise is false for
+  the retried failure modes (only `EmitTruncated`/`HardFailure` halt fast).
+- **Mechanism.** `_record_billed_failure` now calls `_enforce_ceiling(..., cause=exc)`
+  after recording the `FAILED` entry. `_enforce_ceiling` gained an optional `cause`; on
+  crossing it raises `BudgetExceeded` (a `HardFailure` the retry machinery does not
+  absorb) `from cause`, preserving the original error rather than masking it. Below the
+  ceiling, nothing new is raised and the caller re-raises the original unchanged — normal
+  billed failures are byte-for-byte unchanged; only the crossing failure escalates.
+- **Test.** `test_cost_recording_provider_trips_ceiling_on_billed_failures` (TDD:
+  confirmed RED — the 2nd billed failure raised `EmitTruncated`, not `BudgetExceeded` —
+  then GREEN). Asserts spend recorded, escalation on crossing, and the original preserved
+  as `__cause__`/`.cause`. Module + method docstrings corrected to supersede ADR 0038's
+  rationale.
+
+### Fix 2 (L7) — session-wide state-root isolation for the test suite
+
+- **Evidence-backed.** `tests/conftest.py` isolated only logs/tracing; `LocalState().root`
+  and `default_overlay_dir()` both derive from `Path.home()`, and several committed CLI
+  tests invoke the verb with no `--state-dir`, so they wrote `RunStore`/overlay data into
+  the real `~/.cyberlab-gen/`. Confirmed the single chokepoint: no `expanduser`/env-HOME
+  usage and no import-time home capture anywhere in the package — every state path resolves
+  `Path.home()` at call time.
+- **Mechanism (judgment call on shape).** New autouse, function-scoped `isolate_state_root`
+  fixture monkeypatches `Path.home()` to a per-test `tmp_path/home`. Function scope (not a
+  session fixture) so isolation is per-test with no overlay/runs bleed, mirroring the
+  existing `isolate_run_logs`. Patching `Path.home` (vs setting `HOME`/`USERPROFILE`) is
+  platform-independent and is the exact chokepoint; it is *test-only* and does not touch
+  production resolution (still `--state-dir`, ADR 0012/0013). The two pre-existing
+  default-root tests assert `state.root == Path.home() / ".cyberlab-gen"` and stay green
+  (both sides see the patched home; neither does I/O).
+- **Guard.** New `tests/integration/test_state_isolation.py` (TDD: RED without the fixture —
+  `default_overlay_dir()` resolved to the real `~/.cyberlab-gen/registry-overlay` — then
+  GREEN) asserts home, `LocalState` paths, and the overlay dir all resolve under pytest's
+  tmp. Fails if the net is ever removed.
+
+### Fix 3 — one-time cleanup of the already-polluted real state dir (maintainer-approved)
+
+- One-time manual cleanup of `~/.cyberlab-gen/`, done *after* Fix 2 so it can't be
+  re-polluted. **Removed** 186 `*-example-com-blog*` run dirs (fixture slug
+  `https://example.com/blog`, `by_model: {}`, `model: null`) and both overlay files
+  (`facets.yaml` `target:fastly`/"a CDN" and `value_types.yaml` `s3_bucket_arn`/"an arn",
+  each `source_blog: https://example.com/blog`, `proposed_by_model: m`). **Kept** the 3
+  `*-www-wiz-io-wiz-research-codebreach-vulnerability*` real extractions (real URL,
+  `claude-opus-4-8`, real cost, `checkpoint.sqlite`). Not test code — no repo change.
+
+Next ADR number: **0048**.
