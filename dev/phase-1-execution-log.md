@@ -1630,4 +1630,24 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   the §8 summary table. Added a "reconciled" pointer to ADR 0045's doc-divergence section (which had
   pre-listed exactly these spots).
 
-Next ADR number: **0051**.
+### A3/B1 — one orchestrator-owned mechanical-validator stack (ADR 0051)
+
+- Made the mechanical checks on extraction output **one orchestrator-owned stack** instead of
+  three scattered owners. New `validation.md §6.10.2` names the sibling layers (static-schema,
+  provenance-structure, grounding/search-before-claim), states they feed **one findings set**, and
+  draws the two consequences: the Extractor **does not run its own validation-retry loop** (the
+  orchestrator owns the budget/routing — restoring `§1.5`), and the **jury consumes** the findings
+  rather than re-deriving them (mirroring how the Critic reads the Validator report "without
+  re-checking"). Reframed `§6.10.1` row 3 (owner: agent's content-level retry → the orchestrator
+  stack). Aligned `agents.md §5.4` (Extractor produces content, no self-validation budget) and
+  `§5.5` (jury Inputs gains the findings set; provenance discipline keeps only the *semantic* half).
+- This genuinely **amends ADR 0021** (pt 4 the Extractor-stage hallucination loop → orchestrator
+  stack; pt 6 the jury's independent search-before-claim re-run → consume findings) and **refines
+  ADR 0023** (the Extractor-internal budget "the orchestrator never sees" folds into the stack).
+  Both ADRs annotated with pointers; ADR 0051 records the decision. The retry-vs-refinement split
+  and the checks' mechanical nature are unchanged — only ownership/routing moves.
+- Bonus: gives A1 a single accumulating findings set to patch from. Code (move the checks to the
+  orchestrator stack; drop the duplicate jury re-run; collapse the hallucination budget) is the
+  later work-stream.
+
+Next ADR number: **0052**.

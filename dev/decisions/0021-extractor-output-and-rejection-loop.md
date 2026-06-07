@@ -1,5 +1,12 @@
 # 0021 — Extractor/Jury output envelopes, in-flight proposals, and the framework rejection-and-reprompt loop
 
+> **Points 4 and 6 amended by [ADR 0051](0051-one-orchestrator-owned-mechanical-validator-stack.md).**
+> The search-before-claim / MITRE / CVE checks (pt 4) move from the Extractor stage's own
+> `hallucination_retry_attempts` loop to one orchestrator-owned mechanical-validator stack, and the
+> jury (pt 6) **consumes** that stack's findings instead of independently re-running
+> search-before-claim. The checks themselves stay framework-level and mechanical; only their
+> ownership/routing changes. Points 1–3 and 5 stand.
+
 **Date:** 2026-06-01
 **Phase:** Phase 1 (Task 5)
 **Architecture refs:** `agents.md §5.4`, `§5.5`, `pipeline.md §3.2.2`, `§3.2.3`, `schema.md §4.15`, `§4.16`, `§4.20`, `§4.10`, `provider-interface.md §4`, `architecture.md §1.5`, ADR 0018

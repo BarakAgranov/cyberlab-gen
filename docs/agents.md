@@ -85,7 +85,7 @@ The Extractor cannot read the file system, cannot execute code, cannot fetch URL
 
 **Provenance discipline.** Provenance is categorical (per `schema.md §4.20`): the source is what actually produced the value, not a preference. The Extractor sets `source: blog_explicit` when the blog directly states the value; `source: llm_inference` when the schema field needs filling and the blog implies (rather than states) the answer; `source: unknown_from_blog` when neither applies. The Extractor never invents context the blog didn't establish; inference is allowed but must be marked and cited.
 
-The Extractor must execute a real search call against external sources for any inferred CVE, technique mapping, or advisory reference. Pure recall is not allowed (the "search-before-claim" pattern from `schema.md §4.15`). The framework rejects an AttackSpec that contains `external_api`-sourced fields without corresponding tool call records in the agent's trace.
+The Extractor must execute a real search call against external sources for any inferred CVE, technique mapping, or advisory reference. Pure recall is not allowed (the "search-before-claim" pattern from `schema.md §4.15`). These are **mechanical checks the orchestrator owns and routes** (`validation.md §6.10.2`), not an Extractor-internal loop: the framework rejects an AttackSpec whose `external_api` fields lack matching tool-call records in the trace, and the *orchestrator* — not the Extractor — decides whether to re-run it. The Extractor produces content; it does not own a validation-retry budget (`architecture.md §1.5`).
 
 **Decision tree for typed values** (per `schema.md §4.10`): the Extractor's prompt includes the discipline for choosing among existing type, propose new, or `extras` (for non-value content). The Extractor is the only agent that proposes new value types; if it puts a value in `extras` when it should have proposed a value type (or vice versa), the Extractor-Jury flags and the Extractor re-runs.
 
@@ -119,6 +119,7 @@ The Extractor must execute a real search call against external sources for any i
 - The AttackSpec produced by the Extractor.
 - The original blog content (for fidelity checks).
 - The Extractor's tool call trace (for provenance verification).
+- The mechanical-validator stack's findings set (`validation.md §6.10.2`) — the jury **consumes** these (static-schema, provenance-structure, grounding) and does not re-derive them, mirroring how the Critic reads the Validator report without re-checking (`§5.14`).
 
 **Output.** A structured verdict (`approve` / `revise` with feedback / `reject` with reason).
 
@@ -126,7 +127,7 @@ The jury produces a judgment; the framework reads the verdict and decides what t
 
 **Tools.** Same as Extractor (same tool inventory, same external sources). The jury can independently verify external API responses.
 
-**Provenance discipline.** The jury verifies every `source` claim:
+**Provenance discipline.** The *mechanical* half — that an `external_api` field has matching tool-call evidence in the trace at all — is the stack's provenance-structure layer (`validation.md §6.10.2`); the jury consumes that and adds the *semantic* half it is uniquely for, verifying that each `source` claim actually holds:
 
 - For `blog_explicit`: does the cited passage actually say what the field claims?
 - For `external_api`: does the cited API response actually contain that value?

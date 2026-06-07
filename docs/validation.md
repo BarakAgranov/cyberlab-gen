@@ -450,10 +450,23 @@ The system has **four** distinct "redo" mechanisms. They were previously assembl
 |---|---|---|---|---|
 | 1 | **Transient retry** | Network/provider unreachable, timeout, transient 5xx, 429 rate-limit | Provider layer (`provider-interface.md §6.1`, `pipeline.md §3.7`) | retry |
 | 2 | **Malformed-output retry** | Response doesn't parse against the declared `output_schema` (unparseable / wrong shape) | Two layers: provider-internal re-prompt then the agent call surface's stage budget (`provider-interface.md §6.2`, ADR 0018) | retry |
-| 3 | **Grounding / search-before-claim retry** | Valid, schema-correct JSON but *ungrounded facts*: a hallucinated MITRE/CVE id, or an `external_api` field with no matching tool-call evidence | The producing agent's content-level retry (`agents.md §5.4`, `pipeline.md §3.2.2`, ADR 0021) | retry |
+| 3 | **Grounding / search-before-claim check** | Valid, schema-correct JSON but *ungrounded facts*: a hallucinated MITRE/CVE id, or an `external_api` field with no matching tool-call evidence | The orchestrator's mechanical-validator stack (`§6.10.2`) — routes the finding to the producing agent, which re-emits; the orchestrator owns the budget (`architecture.md §1.5`), not the agent | retry |
 | 4 | **Refinement** | A *quality* verdict from a jury or the Critic (e.g. the Extractor-Jury `revise` verdict, a validator Layer 2/3 finding, a Critic `refine`) | Refinement loop coordinator (`pipeline.md §3.2.12`, ADR 0023) | refinement |
 
 **The hard rule (`architecture.md §1.7`):** mechanisms 1–3 are **retry** — structural-flakiness recovery, stage-local budget, same-or-re-prompted input, raising the agent-failure path on exhaustion. Mechanism 4 is **refinement** — quality-driven, pipeline-wide budget, *original input plus structured feedback*. They never cross: a structural failure (1–3) never consumes refinement budget, and a quality verdict (4) is never re-run as a bare retry. In particular, a **Layer 1 failure is structural and routes to retry (mechanism 2 or 3), never refinement** (`§6.10`, first bullet); only Layer 2/3 and jury/Critic verdicts feed mechanism 4.
+
+#### 6.10.2 One orchestrator-owned mechanical-validator stack
+
+The mechanical checks on **extraction output** are one stack, **owned and routed by the orchestrator** — not checks scattered inside the producing agent. The sibling layers:
+
+- **Static schema** (Layer 1, `§6.4`) — shape, types, registry references.
+- **Provenance structure** — every content field carries a well-formed provenance block, and every `external_api` field carries matching tool-call evidence in the trace (`schema.md §4.9`).
+- **Grounding / search-before-claim** — identifiers with an authoritative source (CVE, MITRE, GitHub, npm) were looked up, not recalled (`schema.md §4.15`).
+
+They run cheap-first and their findings accumulate into **one findings set**. On a mechanical finding the orchestrator routes it back to the producing agent, which re-emits a **patch** for the flagged fields (`architecture.md §1.7`). Two consequences:
+
+- **The producing agent does not run its own validation-retry loop.** It produces content; the framework runs the checks and the *orchestrator* decides whether and how to re-run it. An agent owning its own framework-check retry budget would violate the `architecture.md §1.5` invariant (LLMs never decide their own retry budgets). This sharpens the retry-ownership split of ADR 0021/0023 — see ADR 0051.
+- **The jury consumes this findings set; it does not re-derive it.** The Extractor-Jury reads the mechanical findings and adds only the semantic judgment it is uniquely for — *does the cited passage actually support this claim?* — exactly as the Critic reads the Validator report "without re-checking" (`agents.md §5.14`). The external-API-trace check lives in the stack once, not once in the Extractor and again in the jury.
 
 ### 6.11 What the validator does not do
 

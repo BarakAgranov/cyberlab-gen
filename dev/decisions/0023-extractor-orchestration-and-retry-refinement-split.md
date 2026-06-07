@@ -1,5 +1,11 @@
 # 0023 — Extractor pipeline: LangGraph state machine, retry-vs-refinement split, and the Layer-1 → retry seam
 
+> **Refined by [ADR 0051](0051-one-orchestrator-owned-mechanical-validator-stack.md).** The
+> "Extractor's internal hallucination/search-before-claim budget … the orchestrator never sees"
+> (decision pt 1) folds into one orchestrator-owned mechanical-validator stack — the orchestrator
+> owns that routing too. The retry-vs-refinement split itself (Layer-1/structural → retry; jury
+> `revise` → refinement) is unchanged.
+
 **Date:** 2026-06-01
 **Phase:** 1 (Task 6)
 **Architecture refs:** `pipeline.md §3.1`, `pipeline.md §3.2.2`–§3.2.4, `pipeline.md §3.3`, `validation.md §6.4`, `validation.md §6.10`, `architecture.md §1.5`, `architecture.md §1.7`
