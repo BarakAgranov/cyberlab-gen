@@ -1650,4 +1650,22 @@ stack), C1 (enrich-before-jury + mark provenance), F1, G1.
   orchestrator stack; drop the duplicate jury re-run; collapse the hallucination budget) is the
   later work-stream.
 
-Next ADR number: **0052**.
+### C1 — enrich before the jury + mark framework provenance (ADR 0052)
+
+- **Reorder (sub-option a):** enrichment now runs *before* the Extractor-Jury, so the jury reviews
+  the enriched spec — *shipped = reviewed*. Updated `pipeline.md §3.2.3` (jury input = enriched
+  spec), `§3.2.4` (execution-order note: runs before §3.2.3 despite the section number — renumbering
+  deferred to avoid breaking `§3.2.x` refs; re-runs after a refinement patch so the invariant holds
+  across iterations), and reordered the `§3.3` cross-stage table.
+- **Mark (sub-option b):** every field enrichment writes is stamped `framework_enriched: true`.
+  Added the field to the `schema.md §4.9` provenance shape and a "framework-enriched vs agent-claimed
+  `external_api`" subsection. The mark is doubly load-bearing now that enrichment precedes the jury:
+  the provenance-structure mechanical layer (`validation.md §6.10.2`, A3/B1) and the jury **exempt**
+  `framework_enriched` fields from the agent-trace evidence requirement — without it they'd be
+  false-flagged as ungrounded (the framework's call isn't in the agent's trace) — while
+  *agent-claimed* `external_api` stays held to search-before-claim.
+- Builds on ADR 0020 (framework-only authorship unchanged; the mark is additive); composes with
+  ADR 0048 (patch) and ADR 0051 (provenance-structure layer). Code (move enrichment before the jury;
+  re-run after patch; add the field; wire the exemption) is the later work-stream.
+
+Next ADR number: **0053**.

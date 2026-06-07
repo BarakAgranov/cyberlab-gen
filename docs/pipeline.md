@@ -95,11 +95,11 @@ This protects against the blog changing mid-pipeline. Protection against prompt-
 
 #### 3.2.3 Extractor-Jury
 
-**Input.** The AttackSpec produced by the Extractor + the blog content + the Extractor's tool call trace.
+**Input.** The **enriched** AttackSpec (pre-Planner enrichment, §3.2.4, runs *before* the jury in execution order — see the §3.3 table) + the blog content + the Extractor's tool call trace.
 
 **Output.** A structured verdict (`approve` / `revise` with feedback / `reject` with reason).
 
-**Responsibilities.** Review the AttackSpec for fidelity to blog, completeness, and provenance correctness. The jury verifies every `source` claim: for `blog_explicit`, does the cited passage actually say what the field claims? For `external_api`, does the cited API response actually contain that value? For `llm_inference`, is the reasoning trace coherent?
+**Responsibilities.** Review the AttackSpec for fidelity to blog, completeness, and provenance correctness. The jury verifies every `source` claim: for `blog_explicit`, does the cited passage actually say what the field claims? For `external_api`, does the cited API response actually contain that value? For `llm_inference`, is the reasoning trace coherent? Because enrichment runs first, the jury reviews the **final** provenance — *what ships equals what was reviewed*. Framework-written fields are marked `framework_enriched: true` (`schema.md §4.9`): the jury treats those as trusted (the framework made the authoritative call) and does not require agent tool-call evidence for them — that requirement applies only to *agent-claimed* `external_api` fields.
 
 **Framework acts on the jury's verdict.** The jury produces a judgment; the framework reads the verdict and decides what to do: `approve` → continue; `revise` → Extractor re-runs with feedback (counts against refinement budget); `reject` → pipeline halts with explanation.
 
@@ -111,7 +111,9 @@ The 0.7 jury approval floor and N=2 retry count are tunable defaults pending eva
 
 #### 3.2.4 Pre-Planner enrichment (framework, not agent)
 
-**Input.** The jury-approved AttackSpec.
+**Execution order: enrichment runs *before* the Extractor-Jury (§3.2.3), on the Extractor's raw output** — so the jury reviews the enriched spec and *what ships equals what was reviewed*. (The section number predates this ordering; the cross-stage table in §3.3 shows the real sequence. Renumbering is deferred to avoid breaking the many `§3.2.x` cross-references.) On a jury `revise`, the Extractor patches the flagged fields and enrichment re-runs on the patched spec before the jury re-reviews, so the invariant holds across refinement iterations.
+
+**Input.** The Extractor's AttackSpec (pre-jury).
 
 **Output.** An enriched AttackSpec with additional provenance records from authoritative external sources.
 
@@ -119,7 +121,7 @@ The 0.7 jury approval floor and N=2 retry count are tunable defaults pending eva
 
 For example: every CVE ID in the AttackSpec gets enriched with NVD data, KEV inclusion, EPSS score, and MSRC data (for Microsoft CVEs) before the AttackSpec is finalized. The framework — not an agent — sets the field's `source: external_api` with citations to both the blog passage and the API response.
 
-This is the "framework-only-authorship" rule from `schema.md §4.9`. When the API contradicts a `blog_explicit` Extractor finding, the framework rewrites the field with `source: external_api` and both citations preserved. *Every* such rewrite is recorded with a `discrepancy_with_blog: true` flag on the provenance metadata so it remains auditable.
+This is the "framework-only-authorship" rule from `schema.md §4.9`. **Every field enrichment writes or rewrites is stamped `framework_enriched: true`** (`schema.md §4.9`), distinguishing the framework's own authoritative API call (trusted — no agent tool-call evidence required) from an *agent-claimed* `external_api` field (which must be tool-backed). When the API contradicts a `blog_explicit` Extractor finding, the framework rewrites the field with `source: external_api`, both citations preserved, and `discrepancy_with_blog: true`; *every* such rewrite is recorded so it remains auditable.
 
 **Materiality-scaled surfacing.** Not all discrepancies warrant interrupting the user. The system distinguishes:
 
@@ -343,9 +345,9 @@ All inter-stage boundaries are typed Pydantic models. Free-text never crosses ag
 | From | To | Contract type |
 |------|-----|--------------|
 | Ingestion | Extractor | `IngestionResult` + cached blog content |
-| Extractor | Extractor-Jury | `AttackSpec` |
-| Extractor-Jury | Pre-Planner enrichment | `AttackSpec` (approved) |
-| Pre-Planner enrichment | Post-Extractor interrupt | `AttackSpec` (enriched) |
+| Extractor | Pre-Planner enrichment | `AttackSpec` |
+| Pre-Planner enrichment | Extractor-Jury | `AttackSpec` (enriched) |
+| Extractor-Jury | Post-Extractor interrupt | `AttackSpec` (enriched, approved) |
 | Post-Extractor interrupt | Planner | `AttackSpec` (approved) |
 | Planner | Planner-Jury | `LabPlan` |
 | Planner-Jury | Post-Planner interrupt | `LabPlan` (approved) |

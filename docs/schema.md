@@ -460,6 +460,10 @@ field:
   confidence_source: framework_computed | model_self_reported   # required when confidence is set
   requires_user_confirmation: <bool>   # set by the framework; see below
   reason: <string>                     # required when source is unknown_from_blog
+  # Set true by the framework on any field it writes during pre-Planner enrichment
+  # (§3.2.4) — marks a framework-made authoritative API call, distinct from an
+  # agent-claimed external_api field. Default false/absent.
+  framework_enriched: <bool>
   # Set by the framework when pre-Planner enrichment overrides a blog value
   # with an authoritative external_api value. Preserves the audit trail.
   discrepancy_with_blog: <bool>
@@ -497,6 +501,15 @@ When pre-Planner enrichment finds a value that contradicts the Extractor's `blog
 **Every such override is recorded structurally on the provenance metadata** (`discrepancy_with_blog: true`, with the original blog value preserved in `overridden_blog_value` and the materiality classification recorded in `discrepancy_classification`). The materiality is determined by the source's `discrepancy_materiality_rules` declaration (§4.14). The Generator and docs use the API value going forward; the post-Extractor interrupt surfaces material discrepancies for user review (`pipeline.md §3.2.5`); the Critic notes both material and non-material discrepancies in its quality assessment.
 
 Authoritativeness is per-source-per-field-type, not absolute. The authoritativeness mapping is encoded in the `external_data_sources` registry (§4.14). New sources extend the mapping via registry entry.
+
+#### Framework-enriched vs. agent-claimed `external_api`
+
+Both an agent-claimed external lookup and the framework's own enrichment call land as `source: external_api`, but they are grounded differently and the pipeline must tell them apart — so enrichment stamps every field it writes with **`framework_enriched: true`**:
+
+- **`external_api` + `framework_enriched: true`** — the *framework's* own authoritative call during pre-Planner enrichment (`pipeline.md §3.2.4`). The API-response citation is the evidence; there is no agent tool-call to point at, and none is required.
+- **`external_api` without `framework_enriched`** — an *agent-claimed* external value. The agent must have a matching tool-call in its trace (search-before-claim, `§4.15`); the mechanical provenance-structure layer (`validation.md §6.10.2`) rejects it otherwise.
+
+This distinction is load-bearing because enrichment runs **before** the jury (`pipeline.md §3.2.4`, so what ships equals what was reviewed). Framework-written `external_api` fields therefore reach the jury and the mechanical layer; without the `framework_enriched` mark they would be false-flagged as ungrounded (no agent trace entry). The mark is what lets both **exempt** them while still holding *agent-claimed* `external_api` fields to the tool-backed requirement.
 
 #### Two things called "unknown" — they're different
 

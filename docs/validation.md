@@ -460,7 +460,7 @@ The system has **four** distinct "redo" mechanisms. They were previously assembl
 The mechanical checks on **extraction output** are one stack, **owned and routed by the orchestrator** — not checks scattered inside the producing agent. The sibling layers:
 
 - **Static schema** (Layer 1, `§6.4`) — shape, types, registry references.
-- **Provenance structure** — every content field carries a well-formed provenance block, and every `external_api` field carries matching tool-call evidence in the trace (`schema.md §4.9`).
+- **Provenance structure** — every content field carries a well-formed provenance block, and every *agent-claimed* `external_api` field carries matching tool-call evidence in the trace (`schema.md §4.9`). Framework-enriched fields (`framework_enriched: true`, written by enrichment `pipeline.md §3.2.4`) are exempt — the framework made the call, so the API-response citation is the evidence, not an agent trace entry.
 - **Grounding / search-before-claim** — identifiers with an authoritative source (CVE, MITRE, GitHub, npm) were looked up, not recalled (`schema.md §4.15`).
 
 They run cheap-first and their findings accumulate into **one findings set**. On a mechanical finding the orchestrator routes it back to the producing agent, which re-emits a **patch** for the flagged fields (`architecture.md §1.7`). Two consequences:
