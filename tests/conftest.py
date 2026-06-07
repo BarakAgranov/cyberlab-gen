@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -11,7 +12,37 @@ from cyberlab_gen.tracing_setup import reset_tracing_for_tests
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def isolate_state_root(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Redirect ``Path.home()`` to a per-test tmp dir so NO test writes the real home.
+
+    ``LocalState().root`` (state root + ``runs/``, ``checkpoints/``, ``reports/``,
+    ``cache/``) and ``registries.loader.default_overlay_dir()`` (the registry overlay)
+    both derive their paths from ``Path.home()``. Patching that single chokepoint
+    isolates all of them at once — including for a test that forgets ``--state-dir`` and
+    would otherwise build a ``RunStore`` and the overlay writer under the developer's
+    real ``~/.cyberlab-gen/``. (A real past leak: ~189 ``example-com-blog`` run dirs and a
+    polluted overlay landed there because the old fixture isolated only logs/tracing.)
+
+    Autouse + function-scoped: every present and future test is covered, with per-test
+    isolation so overlay/runs state never bleeds between tests. The fake home is a
+    dedicated factory-minted dir — a *sibling* of each test's ``tmp_path``, not a child —
+    so it never intrudes on a test that inspects its own ``tmp_path`` contents. Returns
+    the home path so the guard in ``tests/integration/test_state_isolation.py`` can assert
+    against it. This is *test-only* isolation, distinct from production path resolution,
+    which uses the ``--state-dir`` flag (ADR 0012/0013), never a ``Path.home`` patch.
+    """
+    home = tmp_path_factory.mktemp("home")
+
+    def _home(_cls: type[Path]) -> Path:
+        return home
+
+    monkeypatch.setattr(Path, "home", classmethod(_home))
+    return home
 
 
 @pytest.fixture(autouse=True)
