@@ -4,7 +4,7 @@ Architectural source: ``agents.md §5.4`` (Extractor tool inventory),
 ``schema.md §4.15`` (agent access to external sources), ``§4.16`` (proposal
 authority), ADR 0021.
 
-The Extractor has exactly three tools (the brief's item 2):
+The Extractor has four tools (ADR 0045 added ``propose_thesis_type``):
 
 - ``external_lookup(source_id, params)`` — a read-only call against an
   ``external_data_sources`` registry entry. Phase 1 wires NVD; every other source id
@@ -19,6 +19,8 @@ The Extractor has exactly three tools (the brief's item 2):
 - ``propose_facet`` — emits a ``ProposedFacet``, but **only** for ``target:*`` or
   blog-derived ``lab_class_signal:*`` facets. A ``runtime:*`` (or any other)
   category is rejected at the tool boundary — that authority is the Planner's.
+- ``propose_thesis_type`` — emits a ``ProposedThesisType`` (ADR 0045). ``thesis_types``
+  is an open-set, runtime-proposable registry (no category gate).
 
 The Extractor is read-only: no filesystem, no code execution, no URL fetching
 outside this tool interface (``agents.md §5.4``). This executor therefore never
@@ -40,6 +42,7 @@ from pydantic import ValidationError
 from cyberlab_gen.agents.proposals import (
     EXTRACTOR_FACET_CATEGORIES,
     ProposedFacet,
+    ProposedThesisType,
     ProposedValueType,
 )
 from cyberlab_gen.errors import ExternalApiRateLimitError
@@ -55,6 +58,7 @@ logger = logging.getLogger(__name__)
 TOOL_EXTERNAL_LOOKUP = "external_lookup"
 TOOL_PROPOSE_VALUE_TYPE = "propose_value_type"
 TOOL_PROPOSE_FACET = "propose_facet"
+TOOL_PROPOSE_THESIS_TYPE = "propose_thesis_type"
 
 #: Source id the Phase-1 ``external_lookup`` wires to a live (recordable) client.
 _NVD_SOURCE_ID = "nvd"
@@ -132,6 +136,23 @@ def extractor_tool_definitions() -> list[ToolDefinition]:
                 "required": ["name", "category", "description", "applies_at_levels", "reasoning"],
             },
         ),
+        ToolDefinition(
+            name=TOOL_PROPOSE_THESIS_TYPE,
+            description=(
+                "Propose a new thesis_types registry entry (snake_case name) when the "
+                "blog's thesis does not match any existing thesis type. thesis_types is "
+                "open-set and runtime-proposable."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["name", "description", "reasoning"],
+            },
+        ),
     ]
 
 
@@ -154,6 +175,7 @@ class ExtractorToolExecutor:
         self.lookups: list[ExternalLookupRecord] = []
         self.value_type_proposals: list[ProposedValueType] = []
         self.facet_proposals: list[ProposedFacet] = []
+        self.thesis_type_proposals: list[ProposedThesisType] = []
 
     async def execute(self, call: ToolCall) -> ToolResult:
         """Dispatch one tool call. Unknown tools are an error result, not a raise.
@@ -167,6 +189,8 @@ class ExtractorToolExecutor:
             return self._propose_value_type(call)
         if call.tool_name == TOOL_PROPOSE_FACET:
             return self._propose_facet(call)
+        if call.tool_name == TOOL_PROPOSE_THESIS_TYPE:
+            return self._propose_thesis_type(call)
         return ToolResult(
             call_id=call.call_id,
             content=f"unknown tool {call.tool_name!r}",
@@ -323,10 +347,34 @@ class ExtractorToolExecutor:
             is_error=False,
         )
 
+    # --- propose_thesis_type -----------------------------------------------
+
+    def _propose_thesis_type(self, call: ToolCall) -> ToolResult:
+        try:
+            proposal = ProposedThesisType.model_validate(call.arguments)
+        except ValidationError as exc:
+            # Optional advisory proposal — drop it, never fatal (ADR 0043).
+            return ToolResult(
+                call_id=call.call_id,
+                content=(
+                    f"thesis_type proposal rejected (not recorded): {exc.errors()}. "
+                    "Proposals are optional — correct and re-propose if it matters, or continue."
+                ),
+                is_error=False,
+            )
+        self.thesis_type_proposals.append(proposal)
+        logger.info("extractor proposed thesis_type %s", proposal.name)
+        return ToolResult(
+            call_id=call.call_id,
+            content=f"thesis_type proposal '{proposal.name}' recorded for jury/user review",
+            is_error=False,
+        )
+
 
 __all__ = [
     "TOOL_EXTERNAL_LOOKUP",
     "TOOL_PROPOSE_FACET",
+    "TOOL_PROPOSE_THESIS_TYPE",
     "TOOL_PROPOSE_VALUE_TYPE",
     "ExternalLookupRecord",
     "ExtractorToolExecutor",

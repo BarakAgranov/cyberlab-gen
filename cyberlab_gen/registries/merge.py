@@ -39,6 +39,8 @@ from cyberlab_gen.schemas.registries import (
     LabCredentialsRegistry,
     StaticCatalogEntry,
     StaticCatalogsRegistry,
+    ThesisTypeEntry,
+    ThesisTypesRegistry,
     ValueTypeEntry,
     ValueTypesRegistry,
 )
@@ -91,12 +93,14 @@ class MergedRegistries(BaseModel):
     static_catalogs: StaticCatalogsRegistry
     execution_contexts: ExecutionContextsRegistry
     lab_credentials: LabCredentialsRegistry
+    thesis_types: ThesisTypesRegistry
 
     _value_type_index: dict[str, ValueTypeEntry] = PrivateAttr(default_factory=dict)
     _facet_index: dict[str, FacetEntry] = PrivateAttr(default_factory=dict)
     _external_source_index: dict[str, ExternalDataSourceEntry] = PrivateAttr(default_factory=dict)
     _static_catalog_index: dict[str, StaticCatalogEntry] = PrivateAttr(default_factory=dict)
     _execution_context_index: dict[str, ExecutionContextEntry] = PrivateAttr(default_factory=dict)
+    _thesis_type_index: dict[str, ThesisTypeEntry] = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="after")
     def _build_indices(self) -> Self:
@@ -105,6 +109,7 @@ class MergedRegistries(BaseModel):
         self._external_source_index = {e.id: e for e in self.external_data_sources.entries}
         self._static_catalog_index = {e.id: e for e in self.static_catalogs.entries}
         self._execution_context_index = {e.name: e for e in self.execution_contexts.entries}
+        self._thesis_type_index = {e.name: e for e in self.thesis_types.entries}
         # lab_credentials uses a list-with-filter accessor rather than a
         # single-key dict; Layer 5 scans the catalog and a per-platform
         # bucket would be premature for ~7 v1 entries.
@@ -124,6 +129,9 @@ class MergedRegistries(BaseModel):
 
     def execution_context(self, name: str) -> ExecutionContextEntry | None:
         return self._execution_context_index.get(name)
+
+    def thesis_type(self, name: str) -> ThesisTypeEntry | None:
+        return self._thesis_type_index.get(name)
 
     def lab_credential_patterns(self, platform: str | None = None) -> list[LabCredentialEntry]:
         """Return lab-credential patterns, optionally filtered by ``platform``.
@@ -174,6 +182,12 @@ def merge_layers(bundled: LoadedRegistryLayer, overlay: LoadedRegistryLayer) -> 
             entries=_merge_entries(
                 bundled.lab_credentials_file.entries,
                 overlay.lab_credentials_file.entries,
+            )
+        ),
+        thesis_types=ThesisTypesRegistry(
+            entries=_merge_entries(
+                bundled.thesis_types_file.entries,
+                overlay.thesis_types_file.entries,
             )
         ),
     )

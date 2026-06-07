@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from cyberlab_gen.agents.extractor.tools import (
     TOOL_EXTERNAL_LOOKUP,
     TOOL_PROPOSE_FACET,
+    TOOL_PROPOSE_THESIS_TYPE,
     TOOL_PROPOSE_VALUE_TYPE,
     ExtractorToolExecutor,
 )
@@ -142,6 +143,23 @@ async def test_propose_target_facet_collected() -> None:
     assert not result.is_error
     assert len(ex.facet_proposals) == 1
     assert ex.facet_proposals[0].category == "target"
+
+
+async def test_propose_thesis_type_collected() -> None:
+    ex = _executor()
+    result = await ex.execute(
+        _call(
+            TOOL_PROPOSE_THESIS_TYPE,
+            {
+                "name": "ci_cd_compromise",
+                "description": "Compromise of a CI/CD build pipeline.",
+                "reasoning": "blog's thesis is a CI/CD pipeline takeover, no matching type",
+            },
+        )
+    )
+    assert not result.is_error
+    assert len(ex.thesis_type_proposals) == 1
+    assert ex.thesis_type_proposals[0].name == "ci_cd_compromise"
 
 
 async def test_propose_runtime_facet_rejected_at_boundary() -> None:

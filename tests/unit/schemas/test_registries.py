@@ -31,6 +31,8 @@ from cyberlab_gen.schemas import (
     RateLimit,
     StaticCatalogEntry,
     StaticCatalogsRegistry,
+    ThesisTypeEntry,
+    ThesisTypesRegistry,
     ValueTypeEntry,
     ValueTypesRegistry,
 )
@@ -648,6 +650,38 @@ def test_bundled_rejects_proposals_block() -> None:
     with pytest.raises(ValidationError) as exc:
         BundledRegistryFile[ValueTypeEntry].model_validate({"entries": [], "proposals": {}})
     assert "proposals" in str(exc.value)
+
+
+# --- ThesisTypeEntry (now a runtime-proposable registry, ADR 0045) ---------
+
+
+def test_thesis_type_entry_constructs_with_default_proposed_by() -> None:
+    entry = ThesisTypeEntry(name="ttp_chain", description="A TTP chain blog.")
+    assert entry.name == "ttp_chain"
+    assert entry.proposed_by == "maintainer"  # bundled default
+
+
+def test_thesis_type_entry_accepts_arbitrary_snake_name() -> None:
+    """``thesis_types`` is open-set (no enum), so a new snake name is valid (ADR 0045)."""
+    entry = ThesisTypeEntry(
+        name="ci_cd_compromise", description="A novel thesis type.", proposed_by="extractor"
+    )
+    assert entry.name == "ci_cd_compromise"
+    assert entry.proposed_by == "extractor"
+
+
+def test_thesis_type_entry_rejects_non_snake_name() -> None:
+    with pytest.raises(ValidationError):
+        ThesisTypeEntry(name="Not Snake Case", description="x")
+
+
+def test_thesis_type_entry_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError):
+        ThesisTypeEntry.model_validate({"name": "ttp_chain", "description": "x", "bogus": 1})
+
+
+def test_thesis_types_registry_accepts_empty() -> None:
+    assert ThesisTypesRegistry.model_validate({"entries": []}).entries == []
 
 
 # --- ProposalAuditBlock ----------------------------------------------------

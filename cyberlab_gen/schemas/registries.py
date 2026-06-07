@@ -241,6 +241,25 @@ class ExecutionContextEntry(ArtifactModel):
     proposed_by: Literal["planner", "maintainer"] = "maintainer"
 
 
+class ThesisTypeEntry(ArtifactModel):
+    """Entry in the ``thesis_types`` registry (``schema.md §4.8``, §4.16; ADR 0045).
+
+    Open-set and **runtime-proposable** like ``value_types`` / ``facets`` — ADR 0045
+    reverses ADR 0016's closed-catalog treatment of ``thesis_types`` (the Wiz-CodeBuild
+    run proved the bundled set cannot enumerate every valid thesis type, e.g.
+    ``credential_theft`` / ``ci_cd_compromise``). ``name`` is a snake-case identifier;
+    a thesis may carry several types. ``proposed_by`` / ``proposed_in_run`` are
+    framework-stamped at accept time (``maintainer`` for bundled entries).
+    """
+
+    ENTRY_KEY_FIELD: ClassVar[str] = "name"
+
+    name: SnakeName
+    description: NonEmptyString
+    proposed_by: Literal["extractor", "planner", "maintainer"] = "maintainer"
+    proposed_in_run: str | None = None
+
+
 class LabCredentialEntry(ArtifactModel):
     """Entry in the ``lab_credentials`` registry.
 
@@ -296,6 +315,12 @@ class LabCredentialsRegistry(ArtifactModel):
     """The ``lab_credentials`` registry as a list of entries."""
 
     entries: list[LabCredentialEntry] = Field(default_factory=list[LabCredentialEntry])
+
+
+class ThesisTypesRegistry(ArtifactModel):
+    """The ``thesis_types`` registry as a list of entries (ADR 0045)."""
+
+    entries: list[ThesisTypeEntry] = Field(default_factory=list[ThesisTypeEntry])
 
 
 # --- Per-file shapes (bundled vs overlay) ----------------------------------

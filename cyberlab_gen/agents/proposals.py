@@ -25,7 +25,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from cyberlab_gen.schemas.base import InternalModel
-from cyberlab_gen.schemas.registries import FacetEntry, ValueTypeEntry
+from cyberlab_gen.schemas.registries import FacetEntry, ThesisTypeEntry, ValueTypeEntry
 
 #: Facet categories the Extractor is allowed to propose (``schema.md §4.16``).
 #: ``runtime`` and lab-derived ``lab_class_signal`` belong to the Planner.
@@ -98,8 +98,31 @@ class ProposedFacet(InternalModel):
         )
 
 
+class ProposedThesisType(InternalModel):
+    """An Extractor-proposed ``thesis_types`` registry entry (in flight).
+
+    ``thesis_types`` is runtime-proposable since ADR 0045 (it reverses ADR 0016's
+    closed-catalog treatment). Mirrors the content fields of ``ThesisTypeEntry``;
+    ``proposed_by`` / ``proposed_in_run`` are framework-stamped at accept time.
+    """
+
+    name: str
+    description: str
+    reasoning: str
+
+    def to_entry(self, *, proposed_in_run: str | None = None) -> ThesisTypeEntry:
+        """Convert this in-flight proposal to a ``thesis_types`` overlay entry (ADR 0045)."""
+        return ThesisTypeEntry(
+            name=self.name,
+            description=self.description,
+            proposed_by="extractor",
+            proposed_in_run=proposed_in_run,
+        )
+
+
 __all__ = [
     "EXTRACTOR_FACET_CATEGORIES",
     "ProposedFacet",
+    "ProposedThesisType",
     "ProposedValueType",
 ]

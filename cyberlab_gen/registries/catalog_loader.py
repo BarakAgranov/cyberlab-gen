@@ -4,9 +4,9 @@ Architectural source: ``registry-details.md §7`` (the closed catalogs);
 ``schema.md §4.5`` / §4.7 (where the enum-valued fields they back are consumed);
 ADR 0016.
 
-These five catalogs (``detection_components``, ``severity_levels``,
-``detection_formats``, ``provisioning_mechanisms``, ``thesis_types``) are *not*
-runtime registries (``catalogs.py`` docstring): they never participate in the
+These four catalogs (``detection_components``, ``severity_levels``,
+``detection_formats``, ``provisioning_mechanisms``) are *not* runtime registries
+(``catalogs.py`` docstring): they never participate in the
 proposal lifecycle and are deliberately not part of ``MergedRegistries``. They
 are read on demand by specific consumers — Validator Layer 1 reads them for
 reference resolution / catalog-drift detection (``validation.md §6.4``), Layer 3
@@ -32,7 +32,6 @@ from cyberlab_gen.schemas.catalogs import (
     DetectionFormatsCatalog,
     ProvisioningMechanismsCatalog,
     SeverityLevelsCatalog,
-    ThesisTypesCatalog,
 )
 
 if TYPE_CHECKING:
@@ -100,15 +99,9 @@ def load_provisioning_mechanisms() -> ProvisioningMechanismsCatalog:
     return _load_catalog("provisioning_mechanisms", ProvisioningMechanismsCatalog)
 
 
-def load_thesis_types() -> ThesisTypesCatalog:
-    """Load the bundled ``thesis_types`` catalog (``registry-details.md §7.6``)."""
-    return _load_catalog("thesis_types", ThesisTypesCatalog)
-
-
 __all__ = [
     "load_detection_components",
     "load_detection_formats",
     "load_provisioning_mechanisms",
     "load_severity_levels",
-    "load_thesis_types",
 ]

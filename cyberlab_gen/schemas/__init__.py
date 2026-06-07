@@ -49,8 +49,6 @@ from cyberlab_gen.schemas.catalogs import (
     ProvisioningMechanismsCatalog,
     SeverityLevelEntry,
     SeverityLevelsCatalog,
-    ThesisTypeEntry,
-    ThesisTypesCatalog,
 )
 from cyberlab_gen.schemas.enums import (
     CitationKind,
@@ -121,6 +119,8 @@ from cyberlab_gen.schemas.registries import (
     RateLimit,
     StaticCatalogEntry,
     StaticCatalogsRegistry,
+    ThesisTypeEntry,
+    ThesisTypesRegistry,
     ValueTypeEntry,
     ValueTypesRegistry,
 )
@@ -223,7 +223,7 @@ __all__ = [
     "ThesisBlock",
     "ThesisType",
     "ThesisTypeEntry",
-    "ThesisTypesCatalog",
+    "ThesisTypesRegistry",
     "TradecraftName",
     "TradecraftNote",
     "ValueTypeEntry",

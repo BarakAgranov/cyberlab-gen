@@ -584,6 +584,7 @@ def _pending_from_extraction(extraction: ExtractionResult | None) -> PendingProp
     return PendingProposals(
         facets=frozenset(p.name for p in extraction.facet_proposals),
         value_types=frozenset(p.name for p in extraction.value_type_proposals),
+        thesis_types=frozenset(p.name for p in extraction.thesis_type_proposals),
     )
 
 

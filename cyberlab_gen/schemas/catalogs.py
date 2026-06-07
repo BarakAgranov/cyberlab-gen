@@ -5,22 +5,26 @@ catalogs); ``schema.md`` §4.5 / §4.7 (where the enum-valued fields these
 catalogs back are consumed); ADR 0016.
 
 These are *not* registries in the proposal-flow sense (``registry-details.md``
-§1): they are enumerated closed sets the architecture pins, plus -- for
-``thesis_types`` -- one open-set-in-spirit catalog that grows only by
-maintainer PR. They never participate in the runtime proposal lifecycle, so
-they live here rather than in ``registries.py``, and they are deliberately
-*not* part of ``MergedRegistries`` (``schema-details.md §6.6``): the merged
-view holds the six runtime-consulted registries, while these catalogs carry
-display/ordinal/extension/validator-support metadata consulted on demand by
-specific consumers (Layer 3 reads ``ordinal``; the Generator reads
-``validator_support``; the Docs Generator reads ``display_name``).
+§1): they are enumerated closed sets the architecture pins. They never
+participate in the runtime proposal lifecycle, so they live here rather than in
+``registries.py``, and they are deliberately *not* part of ``MergedRegistries``
+(``schema-details.md §6.6``): the merged view holds the runtime-consulted
+registries, while these catalogs carry display/ordinal/extension/validator-support
+metadata consulted on demand by specific consumers (Layer 3 reads ``ordinal``;
+the Generator reads ``validator_support``; the Docs Generator reads
+``display_name``).
 
-The catalog *membership* for the four closed enums is owned by the
+The catalog *membership* for these four closed enums is owned by the
 corresponding ``StrEnum`` in ``cyberlab_gen.schemas.enums`` -- that enum is what
 validates the field on the artifact models. The entry models below key on
 those same enum members (so the YAML cannot name a value the enum doesn't
-know) and add only the metadata the enum cannot hold. ``thesis_types`` has no
-enum (it is open-set per §1) and so keys on a plain ``SnakeName``.
+know) and add only the metadata the enum cannot hold.
+
+``thesis_types`` was the fifth catalog here until ADR 0045 reversed ADR 0016 and
+made it a runtime-proposable first-class registry (now in ``registries.py`` /
+``MergedRegistries``): the Wiz-CodeBuild run showed the bundled set cannot
+enumerate every valid thesis type, so it grows by proposal like ``value_types``
+and ``facets``, not by maintainer PR alone.
 """
 
 from typing import Literal
@@ -34,7 +38,7 @@ from cyberlab_gen.schemas.enums import (
     ProvisioningMechanism,
     Severity,
 )
-from cyberlab_gen.schemas.primitives import NonEmptyString, SnakeName
+from cyberlab_gen.schemas.primitives import NonEmptyString
 
 # --- Entry shapes ----------------------------------------------------------
 
@@ -91,19 +95,6 @@ class ProvisioningMechanismEntry(ArtifactModel):
     validator_support: Literal["full", "partial", "minimal", "none", "per-resource"]
 
 
-class ThesisTypeEntry(ArtifactModel):
-    """One entry in the ``thesis_types`` catalog. ``registry-details.md §7.6``.
-
-    Unlike the four catalogs above, ``thesis_types`` is open-set in spirit
-    (``registry-details.md §1``): it has no closed enum and grows by maintainer
-    PR informed by telemetry. ``name`` is therefore a plain ``SnakeName``, not
-    an enum member. A thesis may carry multiple types (``schema.md §4.8``).
-    """
-
-    name: SnakeName
-    description: NonEmptyString
-
-
 # --- Per-catalog containers (`{entries: [...]}` shape) ---------------------
 
 
@@ -131,9 +122,3 @@ class ProvisioningMechanismsCatalog(ArtifactModel):
     entries: list[ProvisioningMechanismEntry] = Field(
         default_factory=list[ProvisioningMechanismEntry]
     )
-
-
-class ThesisTypesCatalog(ArtifactModel):
-    """The ``thesis_types`` catalog as a list of entries."""
-
-    entries: list[ThesisTypeEntry] = Field(default_factory=list[ThesisTypeEntry])

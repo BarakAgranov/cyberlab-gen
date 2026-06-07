@@ -7,8 +7,8 @@ acceptance the framework converts them to the real entry (stamping
 
 from __future__ import annotations
 
-from cyberlab_gen.agents.proposals import ProposedFacet, ProposedValueType
-from cyberlab_gen.schemas.registries import FacetEntry, ValueTypeEntry
+from cyberlab_gen.agents.proposals import ProposedFacet, ProposedThesisType, ProposedValueType
+from cyberlab_gen.schemas.registries import FacetEntry, ThesisTypeEntry, ValueTypeEntry
 
 
 def test_proposed_facet_to_entry() -> None:
@@ -47,3 +47,16 @@ def test_proposed_value_type_to_entry() -> None:
     assert entry.platforms == ["kubernetes"]
     assert entry.proposed_by == "extractor"
     assert entry.proposed_in_run == "run-123"
+
+
+def test_proposed_thesis_type_to_entry() -> None:
+    proposal = ProposedThesisType(
+        name="ci_cd_compromise",
+        description="Compromise of a CI/CD build pipeline.",
+        reasoning="the bundled registry has no thesis type for CI/CD compromise",
+    )
+    entry = proposal.to_entry(proposed_in_run="run-456")
+    assert isinstance(entry, ThesisTypeEntry)
+    assert entry.name == "ci_cd_compromise"
+    assert entry.proposed_by == "extractor"
+    assert entry.proposed_in_run == "run-456"

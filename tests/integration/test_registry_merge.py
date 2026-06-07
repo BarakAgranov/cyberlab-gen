@@ -33,6 +33,11 @@ def _write_overlay_value_types(overlay_dir: Path, body: str) -> None:
     (overlay_dir / "value_types.yaml").write_text(body, encoding="utf-8")
 
 
+def _write_overlay_thesis_types(overlay_dir: Path, body: str) -> None:
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    (overlay_dir / "thesis_types.yaml").write_text(body, encoding="utf-8")
+
+
 # --- Baseline: no overlay --------------------------------------------------
 
 
@@ -47,6 +52,38 @@ def test_load_merged_registries_with_no_overlay_yields_bundled_only(
     assert merged.static_catalog("aws_iam_catalog") is not None
     assert merged.execution_context("attacker_local") is not None
     assert len(merged.lab_credential_patterns()) == 1
+
+
+def test_bundled_thesis_type_resolves_via_merged_registry(tmp_path: Path) -> None:
+    """thesis_types is now a first-class registry (ADR 0045), resolved like the rest."""
+    merged = load_merged_registries(overlay_dir=tmp_path / "missing")
+    assert merged.thesis_type("vulnerability_chain") is not None
+    assert merged.thesis_type("totally_made_up") is None
+
+
+def test_overlay_thesis_type_merges_and_resolves(tmp_path: Path) -> None:
+    """An overlay-proposed thesis type resolves in the merged registry (ADR 0044/0045)."""
+    _write_overlay_thesis_types(
+        tmp_path,
+        """entries:
+  - name: ci_cd_compromise
+    description: "Compromise of a CI/CD build pipeline."
+    proposed_by: extractor
+    proposed_in_run: run-1
+proposals:
+  ci_cd_compromise:
+    proposal_origin: llm_during_extraction
+    source_blog: "https://example.com/blog"
+    proposed_by_model: claude-opus-4-8
+    proposed_at: 2026-06-07T00:00:00Z
+    reasoning: "the bundled set has no CI/CD compromise thesis type"
+    approval: auto
+""",
+    )
+    merged = load_merged_registries(overlay_dir=tmp_path)
+    entry = merged.thesis_type("ci_cd_compromise")
+    assert entry is not None
+    assert entry.proposed_by == "extractor"
 
 
 # --- Overlay-wins ----------------------------------------------------------
@@ -239,6 +276,7 @@ def test_merged_registries_construct_directly_is_valid() -> None:
         FacetsRegistry,
         LabCredentialsRegistry,
         StaticCatalogsRegistry,
+        ThesisTypesRegistry,
         ValueTypesRegistry,
     )
 
@@ -249,6 +287,8 @@ def test_merged_registries_construct_directly_is_valid() -> None:
         static_catalogs=StaticCatalogsRegistry(),
         execution_contexts=ExecutionContextsRegistry(),
         lab_credentials=LabCredentialsRegistry(),
+        thesis_types=ThesisTypesRegistry(),
     )
     assert merged.value_type("anything") is None
+    assert merged.thesis_type("anything") is None
     assert merged.lab_credential_patterns() == []

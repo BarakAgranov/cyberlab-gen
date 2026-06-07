@@ -35,7 +35,7 @@ from pydantic import Field
 from ruamel.yaml import YAML
 from ruamel.yaml.compat import StringIO
 
-from cyberlab_gen.agents.proposals import ProposedFacet, ProposedValueType
+from cyberlab_gen.agents.proposals import ProposedFacet, ProposedThesisType, ProposedValueType
 from cyberlab_gen.cli import output
 from cyberlab_gen.framework.orchestrator import (
     PipelineStatus,
@@ -44,6 +44,7 @@ from cyberlab_gen.framework.orchestrator import (
 from cyberlab_gen.framework.proposal_acceptance import (
     AcceptanceContext,
     accept_facet,
+    accept_thesis_type,
     accept_value_type,
     auto_accept_to_overlay,
 )
@@ -100,6 +101,9 @@ class RunResult(InternalModel):
     spec: AttackSpec
     value_type_proposals: list[ProposedValueType] = Field(default_factory=list[ProposedValueType])
     facet_proposals: list[ProposedFacet] = Field(default_factory=list[ProposedFacet])
+    thesis_type_proposals: list[ProposedThesisType] = Field(
+        default_factory=list[ProposedThesisType]
+    )
     material_discrepancies: list[MaterialDiscrepancy] = Field(
         default_factory=list[MaterialDiscrepancy]
     )
@@ -292,6 +296,7 @@ def _state_to_run_result(state: object) -> RunResult:
         spec=state.spec,
         value_type_proposals=extraction.value_type_proposals if extraction is not None else [],
         facet_proposals=extraction.facet_proposals if extraction is not None else [],
+        thesis_type_proposals=extraction.thesis_type_proposals if extraction is not None else [],
         material_discrepancies=list(state.spec.material_discrepancies),
         status=state.status or PipelineStatus.SHIPPED,
         low_jury_confidence=state.status is PipelineStatus.SHIPPED_LOW_CONFIDENCE,
@@ -386,6 +391,7 @@ def _format_spec_summary(result: RunResult) -> str:
         f"gaps: {len(spec.gaps)}",
         f"value-type proposals: {len(result.value_type_proposals)}",
         f"facet proposals: {len(result.facet_proposals)}",
+        f"thesis-type proposals: {len(result.thesis_type_proposals)}",
         f"material discrepancies (report-only): {len(result.material_discrepancies)}",
     ]
     if result.low_jury_confidence:
@@ -481,13 +487,22 @@ def _review_proposals_interactive(
         )
         accept_facet(reviewed, ctx, approval="human")
         output.print_info(f"  + accepted facet {reviewed.name!r} into the overlay")
+    for thesis in result.thesis_type_proposals:
+        reviewed = _review_one_proposal(
+            label=f"thesis_type proposal {thesis.name!r}",
+            model=thesis,
+            parse=ProposedThesisType.model_validate,
+            editor=editor,
+        )
+        accept_thesis_type(reviewed, ctx, approval="human")
+        output.print_info(f"  + accepted thesis_type {reviewed.name!r} into the overlay")
 
 
 def _default_proposal_choice_reader() -> str:
     return typer.prompt("proposal action ([a]ccept / [e]dit)", default="a")
 
 
-def _review_one_proposal[T: (ProposedValueType, ProposedFacet)](
+def _review_one_proposal[T: (ProposedValueType, ProposedFacet, ProposedThesisType)](
     *,
     label: str,
     model: T,
@@ -521,7 +536,7 @@ def _review_one_proposal[T: (ProposedValueType, ProposedFacet)](
             text = f"{_errors_as_comments(exc)}\n{edited}"
 
 
-def _proposal_to_yaml(model: ProposedValueType | ProposedFacet) -> str:
+def _proposal_to_yaml(model: ProposedValueType | ProposedFacet | ProposedThesisType) -> str:
     buf = StringIO()
     _yaml().dump(model.model_dump(mode="json"), buf)
     return buf.getvalue()
@@ -770,13 +785,19 @@ def _auto_accept_proposals(
     happens only when the run is within the cap, so the halt leaves the overlay
     untouched and no ``attack-spec.yaml`` is produced.
     """
-    total = len(result.value_type_proposals) + len(result.facet_proposals)
+    total = (
+        len(result.value_type_proposals)
+        + len(result.facet_proposals)
+        + len(result.thesis_type_proposals)
+    )
     if total > DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP:
         from cyberlab_gen.errors import ProposalCapExceeded
 
-        labels = [f"value_type {vt.name!r}" for vt in result.value_type_proposals] + [
-            f"facet {f.name!r}" for f in result.facet_proposals
-        ]
+        labels = (
+            [f"value_type {vt.name!r}" for vt in result.value_type_proposals]
+            + [f"facet {f.name!r}" for f in result.facet_proposals]
+            + [f"thesis_type {t.name!r}" for t in result.thesis_type_proposals]
+        )
         raise ProposalCapExceeded(
             f"--auto produced {total} registry proposals, over the per-run cap of "
             f"{DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP}; halting for review (no overlay or "
@@ -787,6 +808,7 @@ def _auto_accept_proposals(
     accepted = auto_accept_to_overlay(
         value_type_proposals=result.value_type_proposals,
         facet_proposals=result.facet_proposals,
+        thesis_type_proposals=result.thesis_type_proposals,
         ctx=ctx,
         cap=DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP,
     )

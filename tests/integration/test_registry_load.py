@@ -26,6 +26,7 @@ from cyberlab_gen.schemas.registries import (
     FacetEntry,
     LabCredentialEntry,
     StaticCatalogEntry,
+    ThesisTypeEntry,
     ValueTypeEntry,
 )
 
@@ -76,8 +77,16 @@ def test_lab_credentials_yaml_loads_through_bundled_schema() -> None:
     assert loaded.entries[0].id == "aws_test_access_key"
 
 
+def test_thesis_types_yaml_loads_through_bundled_schema() -> None:
+    # thesis_types became a runtime-proposable registry in ADR 0045 (was a catalog).
+    path = bundled_registry_dir() / "thesis_types.yaml"
+    loaded = load_bundled_file(path, ThesisTypeEntry)
+    assert len(loaded.entries) >= 1
+    assert loaded.entries[0].name == "ttp_chain"
+
+
 def test_load_bundled_yields_complete_layer() -> None:
-    """Top-level loader returns six populated registry files."""
+    """Top-level loader returns seven populated registry files."""
     layer = load_bundled()
     assert len(layer.value_types_file.entries) >= 1
     assert len(layer.facets_file.entries) >= 1
@@ -85,9 +94,10 @@ def test_load_bundled_yields_complete_layer() -> None:
     assert len(layer.static_catalogs_file.entries) >= 1
     assert len(layer.execution_contexts_file.entries) >= 1
     assert len(layer.lab_credentials_file.entries) >= 1
+    assert len(layer.thesis_types_file.entries) >= 1
 
 
-def test_registry_file_names_covers_six_canonical_registries() -> None:
+def test_registry_file_names_covers_seven_canonical_registries() -> None:
     assert set(REGISTRY_FILE_NAMES) == {
         "value_types",
         "facets",
@@ -95,6 +105,7 @@ def test_registry_file_names_covers_six_canonical_registries() -> None:
         "static_catalogs",
         "execution_contexts",
         "lab_credentials",
+        "thesis_types",
     }
 
 

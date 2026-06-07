@@ -11,14 +11,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from cyberlab_gen.agents.proposals import ProposedFacet, ProposedValueType
+from cyberlab_gen.agents.proposals import ProposedFacet, ProposedThesisType, ProposedValueType
 from cyberlab_gen.framework.proposal_acceptance import (
     AcceptanceContext,
     accept_facet,
+    accept_thesis_type,
     auto_accept_to_overlay,
 )
 from cyberlab_gen.registries.loader import load_overlay_file
-from cyberlab_gen.schemas.registries import FacetEntry, ValueTypeEntry
+from cyberlab_gen.schemas.registries import FacetEntry, ThesisTypeEntry, ValueTypeEntry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -71,6 +72,7 @@ def test_auto_accept_writes_both_vocabularies(tmp_path: Path) -> None:
     result = auto_accept_to_overlay(
         value_type_proposals=[_vt()],
         facet_proposals=[_facet()],
+        thesis_type_proposals=[],
         ctx=_ctx(overlay),
         cap=5,
     )
@@ -84,11 +86,26 @@ def test_auto_accept_writes_both_vocabularies(tmp_path: Path) -> None:
     assert vts.entries[0].proposed_in_run == "run-xyz"
 
 
+def test_accept_thesis_type_writes_overlay(tmp_path: Path) -> None:
+    overlay = tmp_path / "registry-overlay"
+    proposal = ProposedThesisType(
+        name="ci_cd_compromise",
+        description="Compromise of a CI/CD build pipeline.",
+        reasoning="seen in blog",
+    )
+    accept_thesis_type(proposal, _ctx(overlay), approval="auto")
+    loaded = load_overlay_file(overlay / "thesis_types.yaml", ThesisTypeEntry)
+    assert [e.name for e in loaded.entries] == ["ci_cd_compromise"]
+    assert loaded.entries[0].proposed_by == "extractor"
+    assert loaded.proposals["ci_cd_compromise"].approval == "auto"
+
+
 def test_auto_accept_respects_cap(tmp_path: Path) -> None:
     overlay = tmp_path / "registry-overlay"
     result = auto_accept_to_overlay(
         value_type_proposals=[_vt("vt_a"), _vt("vt_b")],
         facet_proposals=[_facet("target:facet_c")],
+        thesis_type_proposals=[],
         ctx=_ctx(overlay),
         cap=2,
     )

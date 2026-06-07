@@ -131,7 +131,11 @@ def _spec(*, facets: list[str] | None = None) -> AttackSpec:
 
 def _result(spec: AttackSpec) -> ExtractionResult:
     return ExtractionResult(
-        attack_spec=spec, value_type_proposals=[], facet_proposals=[], lookups=[]
+        attack_spec=spec,
+        value_type_proposals=[],
+        facet_proposals=[],
+        thesis_type_proposals=[],
+        lookups=[],
     )
 
 

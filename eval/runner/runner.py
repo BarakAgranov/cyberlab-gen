@@ -308,6 +308,7 @@ class ProviderBackedEvalRunner:
             pending = PendingProposals(
                 facets=frozenset(p.name for p in result.facet_proposals),
                 value_types=frozenset(p.name for p in result.value_type_proposals),
+                thesis_types=frozenset(p.name for p in result.thesis_type_proposals),
             )
             layer1 = self._validator.validate(result.spec, pending=pending)
             self._write_spec(blog_id, run_index, result.spec)

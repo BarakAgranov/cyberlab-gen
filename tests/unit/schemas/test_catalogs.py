@@ -19,8 +19,6 @@ from cyberlab_gen.schemas.catalogs import (
     ProvisioningMechanismsCatalog,
     SeverityLevelEntry,
     SeverityLevelsCatalog,
-    ThesisTypeEntry,
-    ThesisTypesCatalog,
 )
 from cyberlab_gen.schemas.enums import (
     DetectionComponent,
@@ -67,11 +65,6 @@ def test_provisioning_mechanism_entry_constructs() -> None:
     )
     assert entry.name is ProvisioningMechanism.TERRAFORM
     assert entry.validator_support == "full"
-
-
-def test_thesis_type_entry_constructs() -> None:
-    entry = ThesisTypeEntry(name="ttp_chain", description="A TTP chain blog.")
-    assert entry.name == "ttp_chain"
 
 
 # --- Enum membership is owned by the enum, not the catalog -----------------
@@ -134,21 +127,6 @@ def test_provisioning_mechanism_rejects_unknown_validator_support() -> None:
         )
 
 
-def test_thesis_type_accepts_arbitrary_snake_name() -> None:
-    """``thesis_types`` is open-set (no enum), so a new snake name is valid.
-
-    Contrast with the four closed catalogs above whose ``name`` is enum-bound.
-    ``registry-details.md §1`` classes ``thesis_types`` as open-set-in-spirit.
-    """
-    entry = ThesisTypeEntry(name="brand_new_thesis", description="A novel thesis type.")
-    assert entry.name == "brand_new_thesis"
-
-
-def test_thesis_type_rejects_non_snake_name() -> None:
-    with pytest.raises(ValidationError):
-        ThesisTypeEntry(name="Not Snake Case", description="x")
-
-
 # --- extra='forbid' inherited from ArtifactModel ---------------------------
 
 
@@ -157,12 +135,6 @@ def test_detection_component_entry_rejects_unknown_field() -> None:
         DetectionComponentEntry.model_validate(
             {"name": "CSPM", "display_name": "x", "description": "y", "bogus": 1}
         )
-    assert "bogus" in str(exc.value)
-
-
-def test_thesis_type_entry_rejects_unknown_field() -> None:
-    with pytest.raises(ValidationError) as exc:
-        ThesisTypeEntry.model_validate({"name": "ttp_chain", "description": "x", "bogus": 1})
     assert "bogus" in str(exc.value)
 
 
@@ -176,7 +148,6 @@ def test_thesis_type_entry_rejects_unknown_field() -> None:
         SeverityLevelsCatalog,
         DetectionFormatsCatalog,
         ProvisioningMechanismsCatalog,
-        ThesisTypesCatalog,
     ],
 )
 def test_catalog_accepts_empty_entries(catalog_cls: type[BaseModel]) -> None:
@@ -190,7 +161,7 @@ def test_catalog_rejects_proposals_block() -> None:
     The inherited ``extra='forbid'`` rejects a stray overlay-style block.
     """
     with pytest.raises(ValidationError) as exc:
-        ThesisTypesCatalog.model_validate({"entries": [], "proposals": {}})
+        DetectionComponentsCatalog.model_validate({"entries": [], "proposals": {}})
     assert "proposals" in str(exc.value)
 
 
@@ -211,7 +182,6 @@ _CLOSED_CATALOGS: list[tuple[str, type[BaseModel], int]] = [
     ("severity_levels", SeverityLevelsCatalog, 4),
     ("detection_formats", DetectionFormatsCatalog, 4),
     ("provisioning_mechanisms", ProvisioningMechanismsCatalog, 7),
-    ("thesis_types", ThesisTypesCatalog, 10),
 ]
 
 

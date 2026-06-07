@@ -49,6 +49,7 @@ from cyberlab_gen.schemas.registries import (
     OverlayRegistryFile,
     StaticCatalogEntry,
     StaticCatalogsRegistry,
+    ThesisTypeEntry,
     ValueTypeEntry,
 )
 
@@ -61,6 +62,7 @@ REGISTRY_FILE_NAMES: Final[Sequence[str]] = (
     "static_catalogs",
     "execution_contexts",
     "lab_credentials",
+    "thesis_types",
 )
 
 
@@ -88,6 +90,7 @@ class LoadedRegistryLayer:
     lab_credentials_file: (
         BundledRegistryFile[LabCredentialEntry] | OverlayRegistryFile[LabCredentialEntry]
     )
+    thesis_types_file: BundledRegistryFile[ThesisTypeEntry] | OverlayRegistryFile[ThesisTypeEntry]
 
 
 def bundled_registry_dir() -> Path:
@@ -255,6 +258,7 @@ def load_bundled() -> LoadedRegistryLayer:
             base / "execution_contexts.yaml", ExecutionContextEntry
         ),
         lab_credentials_file=load_bundled_file(base / "lab_credentials.yaml", LabCredentialEntry),
+        thesis_types_file=load_bundled_file(base / "thesis_types.yaml", ThesisTypeEntry),
     )
 
 
@@ -272,4 +276,5 @@ def load_overlay(overlay_dir: Path | None = None) -> LoadedRegistryLayer:
             base / "execution_contexts.yaml", ExecutionContextEntry
         ),
         lab_credentials_file=load_overlay_file(base / "lab_credentials.yaml", LabCredentialEntry),
+        thesis_types_file=load_overlay_file(base / "thesis_types.yaml", ThesisTypeEntry),
     )

@@ -28,14 +28,24 @@ from typing import TYPE_CHECKING, Literal
 
 from cyberlab_gen.registries.overlay_writer import write_overlay_entry
 from cyberlab_gen.schemas.base import InternalModel
-from cyberlab_gen.schemas.registries import FacetEntry, ProposalAuditBlock, ValueTypeEntry
+from cyberlab_gen.schemas.registries import (
+    FacetEntry,
+    ProposalAuditBlock,
+    ThesisTypeEntry,
+    ValueTypeEntry,
+)
 
 if TYPE_CHECKING:
-    from cyberlab_gen.agents.proposals import ProposedFacet, ProposedValueType
+    from cyberlab_gen.agents.proposals import (
+        ProposedFacet,
+        ProposedThesisType,
+        ProposedValueType,
+    )
 
 #: Registry filenames the acceptance layer writes (the overlay-extensible vocabs).
 _VALUE_TYPES_FILE = "value_types"
 _FACETS_FILE = "facets"
+_THESIS_TYPES_FILE = "thesis_types"
 
 
 class AcceptanceContext(InternalModel):
@@ -102,19 +112,33 @@ def accept_facet(
     )
 
 
+def accept_thesis_type(
+    proposal: ProposedThesisType, ctx: AcceptanceContext, *, approval: Literal["auto", "human"]
+) -> Path:
+    """Write one accepted thesis-type proposal to the overlay; return the file path (ADR 0045)."""
+    return write_overlay_entry(
+        overlay_dir=ctx.overlay_dir,
+        registry_filename=_THESIS_TYPES_FILE,
+        entry_type=ThesisTypeEntry,
+        entry=proposal.to_entry(proposed_in_run=ctx.run_id),
+        audit=_audit(ctx, reasoning=proposal.reasoning, approval=approval),
+    )
+
+
 def auto_accept_to_overlay(
     *,
     value_type_proposals: list[ProposedValueType],
     facet_proposals: list[ProposedFacet],
+    thesis_type_proposals: list[ProposedThesisType],
     ctx: AcceptanceContext,
     cap: int,
 ) -> AcceptanceResult:
     """Auto-accept proposals into the overlay up to ``cap`` total (``--auto``).
 
-    Value-type proposals are accepted first, then facets (a stable order so the same
-    proposals are accepted across re-runs). Each accepted entry is marked
-    ``approval='auto'``. Proposals beyond the cap are *not* written and returned in
-    ``deferred`` for the caller's over-cap halt policy (ADR 0044).
+    Value-type proposals are accepted first, then facets, then thesis types (a stable
+    order so the same proposals are accepted across re-runs). Each accepted entry is
+    marked ``approval='auto'``. Proposals beyond the cap are *not* written and returned
+    in ``deferred`` for the caller's over-cap halt policy (ADR 0044).
     """
     accepted: list[str] = []
     deferred: list[str] = []
@@ -132,6 +156,13 @@ def auto_accept_to_overlay(
             accepted.append(label)
         else:
             deferred.append(label)
+    for thesis in thesis_type_proposals:
+        label = f"thesis_type {thesis.name!r}"
+        if len(accepted) < cap:
+            accept_thesis_type(thesis, ctx, approval="auto")
+            accepted.append(label)
+        else:
+            deferred.append(label)
     return AcceptanceResult(accepted=accepted, deferred=deferred)
 
 
@@ -139,6 +170,7 @@ __all__ = [
     "AcceptanceContext",
     "AcceptanceResult",
     "accept_facet",
+    "accept_thesis_type",
     "accept_value_type",
     "auto_accept_to_overlay",
 ]

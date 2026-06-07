@@ -22,9 +22,10 @@ checks, in order:
 3. **Registry reference resolution** — every registry/catalog reference in the
    spec resolves against the merged registry (bundled + overlay) and the closed
    bundled-only catalogs (ADR 0016): facets (``FacetName`` → merged ``facets``
-   registry), thesis types (``ThesisType`` → ``thesis_types`` catalog), CVE/
-   advisory ``source_of_record`` / ``source`` (→ merged ``external_data_sources``
-   registry). The closed *enums* (``Severity``, ``DetectionComponent``,
+   registry), thesis types (``ThesisType`` → merged ``thesis_types`` registry —
+   runtime-proposable since ADR 0045), CVE/advisory ``source_of_record`` /
+   ``source`` (→ merged ``external_data_sources`` registry). The closed *enums*
+   (``Severity``, ``DetectionComponent``,
    ``DetectionFormat``, ``ProvisioningMechanism``) are already validated by
    Pydantic at construction, so Layer 1 does not re-check them — but it confirms
    each appears in its closed catalog so a catalog/enum drift is caught.
@@ -65,7 +66,6 @@ if TYPE_CHECKING:
         DetectionFormatsCatalog,
         ProvisioningMechanismsCatalog,
         SeverityLevelsCatalog,
-        ThesisTypesCatalog,
     )
 
 logger = logging.getLogger(__name__)
@@ -143,14 +143,12 @@ class StaticSchemaValidator:
         self,
         *,
         registries: MergedRegistries,
-        thesis_types: ThesisTypesCatalog | None = None,
         severity_levels: SeverityLevelsCatalog | None = None,
         detection_components: DetectionComponentsCatalog | None = None,
         detection_formats: DetectionFormatsCatalog | None = None,
         provisioning_mechanisms: ProvisioningMechanismsCatalog | None = None,
     ) -> None:
         self._registries = registries
-        self._thesis_types = thesis_types
         self._severity_levels = severity_levels
         self._detection_components = detection_components
         self._detection_formats = detection_formats
@@ -256,18 +254,18 @@ class StaticSchemaValidator:
     def _check_thesis_types(
         self, spec: AttackSpec, pending: PendingProposals
     ) -> list[StaticSchemaFinding]:
-        """Every thesis type must resolve in the ``thesis_types`` catalog (ADR 0016).
+        """Every thesis type must resolve in the merged ``thesis_types`` registry.
 
-        A thesis type carrying an in-flight proposal this run is a provisional pass
+        ADR 0045: ``thesis_types`` is a runtime-proposable registry (bundled +
+        overlay), no longer a closed bundled-only catalog (reversing ADR 0016). A
+        thesis type carrying an in-flight proposal this run is a provisional pass
         (ADR 0044): logged, not a finding.
         """
         if spec.thesis is None:
             return []
-        catalog = self._get_thesis_types()
-        known = {e.name for e in catalog.entries}
         findings: list[StaticSchemaFinding] = []
         for i, thesis_type in enumerate(spec.thesis.types):
-            if thesis_type not in known:
+            if self._registries.thesis_type(thesis_type) is None:
                 if thesis_type in pending.thesis_types:
                     logger.info(
                         "thesis type %r provisionally resolved by an in-flight proposal",
@@ -279,8 +277,8 @@ class StaticSchemaValidator:
                         code=StaticSchemaCode.UNKNOWN_THESIS_TYPE,
                         location=f"thesis.types[{i}]",
                         detail=(
-                            f"thesis type {thesis_type!r} is not in the bundled thesis_types "
-                            "catalog"
+                            f"thesis type {thesis_type!r} does not resolve in the merged "
+                            "thesis_types registry (bundled + overlay)"
                         ),
                     )
                 )
@@ -421,13 +419,6 @@ class StaticSchemaValidator:
         return findings
 
     # --- lazy catalog loaders ---------------------------------------------
-
-    def _get_thesis_types(self) -> ThesisTypesCatalog:
-        if self._thesis_types is None:
-            from cyberlab_gen.registries.catalog_loader import load_thesis_types
-
-            self._thesis_types = load_thesis_types()
-        return self._thesis_types
 
     def _get_severity_levels(self) -> SeverityLevelsCatalog:
         if self._severity_levels is None:
