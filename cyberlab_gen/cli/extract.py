@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -39,6 +40,12 @@ from cyberlab_gen.cli import output
 from cyberlab_gen.framework.orchestrator import (
     PipelineStatus,
     reject_interactive_when_headless,
+)
+from cyberlab_gen.framework.proposal_acceptance import (
+    AcceptanceContext,
+    accept_facet,
+    accept_value_type,
+    auto_accept_to_overlay,
 )
 from cyberlab_gen.schemas.attack_spec import AttackSpec, MaterialDiscrepancy
 from cyberlab_gen.schemas.base import InternalModel
@@ -445,29 +452,35 @@ def _errors_as_comments(exc: Exception) -> str:
     return "\n".join(lines)
 
 
-def _review_proposals_interactive(result: RunResult, *, editor: EditorFn) -> None:
-    """Per-proposal Accept/Edit loop (``pipeline.md §3.2.5``).
+def _review_proposals_interactive(
+    result: RunResult, *, editor: EditorFn, ctx: AcceptanceContext
+) -> None:
+    """Per-proposal Accept/Edit loop, writing each accepted entry to the overlay.
 
-    Each value-type and facet proposal is reviewed individually: Accept (the
-    framework would write the overlay entry; Phase 1 records it in the report) or
-    Edit (the proposal is re-opened, edited, and structurally revalidated; an
-    invalid edit reopens the editor with error comments). No Reject — see
-    :class:`ProposalChoice`.
+    ``pipeline.md §3.2.5`` / ADR 0044: each value-type and facet proposal is reviewed
+    individually — Accept (write the entry to the overlay, marked human-approved) or
+    Edit (re-open, edit, structurally revalidate, then write; an invalid edit reopens
+    the editor with error comments). No Reject — see :class:`ProposalChoice`. No cap in
+    interactive mode: the user acts on every proposal.
     """
     for vt in result.value_type_proposals:
-        _review_one_proposal(
+        reviewed = _review_one_proposal(
             label=f"value_type proposal {vt.name!r}",
             model=vt,
             parse=ProposedValueType.model_validate,
             editor=editor,
         )
+        accept_value_type(reviewed, ctx, approval="human")
+        output.print_info(f"  + accepted value_type {reviewed.name!r} into the overlay")
     for facet in result.facet_proposals:
-        _review_one_proposal(
+        reviewed = _review_one_proposal(
             label=f"facet proposal {facet.name!r} (category={facet.category})",
             model=facet,
             parse=ProposedFacet.model_validate,
             editor=editor,
         )
+        accept_facet(reviewed, ctx, approval="human")
+        output.print_info(f"  + accepted facet {reviewed.name!r} into the overlay")
 
 
 def _default_proposal_choice_reader() -> str:
@@ -597,6 +610,7 @@ def run_extract(
     editor: EditorFn = click.edit,
     out_dir: Path | None = None,
     run_store: RunStore | None = None,
+    overlay_dir: Path | None = None,
 ) -> Path | None:
     """Run the ``extract`` pipeline and the post-Extractor interrupt.
 
@@ -622,6 +636,9 @@ def run_extract(
     reject_interactive_when_headless(interactive=mode_interactive, stdin_is_tty=stdin_is_tty)
 
     target_dir = out_dir if out_dir is not None else Path.cwd()
+    from cyberlab_gen.registries.loader import default_overlay_dir
+
+    overlay = overlay_dir if overlay_dir is not None else default_overlay_dir()
 
     if run_store is None:
         result = runner.run(url, ledger=ledger)
@@ -633,6 +650,7 @@ def run_extract(
             target_dir=target_dir,
             mode_interactive=mode_interactive,
             handle=None,
+            overlay_dir=overlay,
         )
 
     handle = run_store.start(
@@ -658,6 +676,7 @@ def run_extract(
             target_dir=target_dir,
             mode_interactive=mode_interactive,
             handle=handle,
+            overlay_dir=overlay,
         )
         return path
     finally:
@@ -675,6 +694,7 @@ def _drive_result(
     target_dir: Path,
     mode_interactive: bool,
     handle: RunHandle | None,
+    overlay_dir: Path,
 ) -> Path | None:
     """Dispatch to the interactive or auto post-Extractor flow."""
     if mode_interactive:
@@ -685,12 +705,38 @@ def _drive_result(
             editor=editor,
             target_dir=target_dir,
             handle=handle,
+            overlay_dir=overlay_dir,
         )
-    return _drive_auto(result=result, ledger=ledger, target_dir=target_dir, handle=handle)
+    return _drive_auto(
+        result=result, ledger=ledger, target_dir=target_dir, handle=handle, overlay_dir=overlay_dir
+    )
+
+
+def _acceptance_context(
+    result: RunResult, *, overlay_dir: Path, handle: RunHandle | None
+) -> AcceptanceContext:
+    """Assemble the framework-known audit context for accepting this run's proposals.
+
+    ``source_blog`` and ``proposed_by_model`` come off the shipped spec; ``run_id``
+    (the proposal's ``proposed_in_run``) comes from the run store when present. No
+    ``source_lab`` — the lab does not exist at extraction time (ADR 0044).
+    """
+    return AcceptanceContext(
+        overlay_dir=overlay_dir,
+        source_blog=str(result.spec.source.url),
+        proposed_by_model=str(result.spec.extraction_metadata.model),
+        proposed_at=datetime.now(UTC),
+        run_id=handle.record.run_id if handle is not None else None,
+    )
 
 
 def _drive_auto(
-    *, result: RunResult, ledger: CostLedger, target_dir: Path, handle: RunHandle | None
+    *,
+    result: RunResult,
+    ledger: CostLedger,
+    target_dir: Path,
+    handle: RunHandle | None,
+    overlay_dir: Path,
 ) -> Path | None:
     """``--auto``: no interrupts except budget-overrun; out-of-scope halts (§3.1.1)."""
     if result.is_out_of_scope():
@@ -704,7 +750,9 @@ def _drive_auto(
         result, ledger, interactive=False
     ):
         return None
-    _auto_accept_proposals(result)
+    # Over-cap proposals halt for inspection (schema.md §4.16 (c), ADR 0044) — raises
+    # ProposalCapExceeded before any overlay or spec write, so it is never a silent drop.
+    _auto_accept_proposals(result, overlay_dir=overlay_dir, handle=handle)
     _emit_run_report(result)
     path = write_attack_spec(result.spec, directory=target_dir)
     _mirror_spec(handle, result.spec)
@@ -712,24 +760,43 @@ def _drive_auto(
     return path
 
 
-def _auto_accept_proposals(result: RunResult) -> None:
-    """Auto-accept proposals up to the per-run cap (``implementation-plan.md §4.2``)."""
-    proposals: list[str] = [f"value_type {vt.name!r}" for vt in result.value_type_proposals] + [
-        f"facet {f.name!r}" for f in result.facet_proposals
-    ]
-    accepted = proposals[:DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP]
-    deferred = proposals[DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP:]
-    if accepted:
-        output.print_info(f"\nauto-accepted {len(accepted)} proposal(s) into the overlay:")
-        for p in accepted:
-            output.print_info(f"  + {p}")
-    if deferred:
-        output.print_info(
-            f"{len(deferred)} proposal(s) over the auto-accept cap "
-            f"({DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP}); not accepted, listed for review:"
+def _auto_accept_proposals(
+    result: RunResult, *, overlay_dir: Path, handle: RunHandle | None
+) -> None:
+    """Auto-accept proposals into the overlay up to the per-run cap (ADR 0044).
+
+    Beyond the cap the run **halts** with :class:`ProposalCapExceeded` (``schema.md
+    §4.16`` option (c)) — a clear report for inspection, not a silent drop. Writing
+    happens only when the run is within the cap, so the halt leaves the overlay
+    untouched and no ``attack-spec.yaml`` is produced.
+    """
+    total = len(result.value_type_proposals) + len(result.facet_proposals)
+    if total > DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP:
+        from cyberlab_gen.errors import ProposalCapExceeded
+
+        labels = [f"value_type {vt.name!r}" for vt in result.value_type_proposals] + [
+            f"facet {f.name!r}" for f in result.facet_proposals
+        ]
+        raise ProposalCapExceeded(
+            f"--auto produced {total} registry proposals, over the per-run cap of "
+            f"{DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP}; halting for review (no overlay or "
+            "attack-spec.yaml written). Re-run with --interactive to review each. "
+            f"Proposals: {', '.join(labels)}"
         )
-        for p in deferred:
-            output.print_info(f"  ? {p}")
+    ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle)
+    accepted = auto_accept_to_overlay(
+        value_type_proposals=result.value_type_proposals,
+        facet_proposals=result.facet_proposals,
+        ctx=ctx,
+        cap=DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP,
+    )
+    if accepted.accepted:
+        output.print_info(
+            f"\nauto-accepted {len(accepted.accepted)} proposal(s) into the overlay "
+            f"({overlay_dir}):"
+        )
+        for label in accepted.accepted:
+            output.print_info(f"  + {label}")
 
 
 def _drive_interactive(
@@ -740,6 +807,7 @@ def _drive_interactive(
     editor: EditorFn,
     target_dir: Path,
     handle: RunHandle | None,
+    overlay_dir: Path,
 ) -> Path | None:
     """``--interactive``: the four-option menu + per-proposal review + budget check."""
     while True:
@@ -765,8 +833,10 @@ def _drive_interactive(
                 update={"spec": _edit_spec_with_revalidation(result.spec, editor=editor)}
             )
             continue  # re-show the menu against the edited spec
-        # APPROVE: review proposals, check budget, write.
-        _review_proposals_interactive(result, editor=editor)
+        # APPROVE: review proposals (writing each accepted one to the overlay),
+        # check budget, write.
+        ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle)
+        _review_proposals_interactive(result, editor=editor, ctx=ctx)
         if _would_overrun(result, ledger) and not _handle_budget_overrun(
             result, ledger, interactive=True
         ):

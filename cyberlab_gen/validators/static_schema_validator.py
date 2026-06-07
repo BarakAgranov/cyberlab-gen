@@ -71,6 +71,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class PendingProposals(InternalModel):
+    """In-flight registry proposals this run, for provisional reference resolution.
+
+    A reference that is absent from the merged registry / closed catalog but whose
+    name appears here is a **provisional pass** (logged, not a finding): the
+    Extractor proposed it this run and the framework will write it to the overlay at
+    the acceptance point (ADR 0044), so the term becomes durably resolvable next run
+    and for ``cyberlab-gen validate``. Empty by default — with no proposals Layer 1
+    resolves strictly, exactly as before. ``value_types`` / ``execution_contexts``
+    are carried for forward-compatibility; Phase-1 Layer 1 has no reference check for
+    them yet, so populating them is currently a no-op.
+    """
+
+    facets: frozenset[str] = frozenset()
+    thesis_types: frozenset[str] = frozenset()
+    value_types: frozenset[str] = frozenset()
+    execution_contexts: frozenset[str] = frozenset()
+
+
 class StaticSchemaCode(StrEnum):
     """The kinds of structural violation Layer 1 can report (``validation.md §6.4``)."""
 
@@ -139,7 +158,9 @@ class StaticSchemaValidator:
 
     # --- public surface ----------------------------------------------------
 
-    def validate(self, spec: AttackSpec) -> StaticSchemaResult:
+    def validate(
+        self, spec: AttackSpec, *, pending: PendingProposals | None = None
+    ) -> StaticSchemaResult:
         """Validate ``spec`` and return a ``StaticSchemaResult``.
 
         Runs the three Layer-1 checks in cost order: schema (cheapest, and a
@@ -147,15 +168,21 @@ class StaticSchemaValidator:
         read malformed data), then the ``spec_kind`` discriminator, then registry
         reference resolution. Never raises on a *structural* problem — those are
         findings; the orchestrator decides routing.
+
+        ``pending`` carries the run's in-flight registry proposals: a reference
+        absent from the registry but named in ``pending`` is a provisional pass
+        (logged, not a finding) so the proposal survives to the overlay-write
+        acceptance point (ADR 0044). ``None`` resolves strictly.
         """
+        pending = pending or PendingProposals()
         schema_findings = self._check_schema(spec)
         if schema_findings:
             return StaticSchemaResult(passed=False, findings=schema_findings)
 
         findings: list[StaticSchemaFinding] = []
         findings.extend(self._check_spec_kind(spec))
-        findings.extend(self._check_facets(spec))
-        findings.extend(self._check_thesis_types(spec))
+        findings.extend(self._check_facets(spec, pending))
+        findings.extend(self._check_thesis_types(spec, pending))
         findings.extend(self._check_external_sources(spec))
         findings.extend(self._check_closed_catalog_membership(spec))
 
@@ -200,11 +227,20 @@ class StaticSchemaValidator:
 
     # --- check 3: registry reference resolution ---------------------------
 
-    def _check_facets(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
-        """Every declared facet must resolve in the merged ``facets`` registry."""
+    def _check_facets(
+        self, spec: AttackSpec, pending: PendingProposals
+    ) -> list[StaticSchemaFinding]:
+        """Every declared facet must resolve in the merged ``facets`` registry.
+
+        A facet absent from the registry but carrying an in-flight proposal this run
+        is a provisional pass (ADR 0044): logged, not a finding.
+        """
         findings: list[StaticSchemaFinding] = []
         for i, facet in enumerate(spec.facets):
             if self._registries.facet(facet) is None:
+                if facet in pending.facets:
+                    logger.info("facet %r provisionally resolved by an in-flight proposal", facet)
+                    continue
                 findings.append(
                     StaticSchemaFinding(
                         code=StaticSchemaCode.UNKNOWN_FACET,
@@ -217,8 +253,14 @@ class StaticSchemaValidator:
                 )
         return findings
 
-    def _check_thesis_types(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
-        """Every thesis type must resolve in the ``thesis_types`` catalog (ADR 0016)."""
+    def _check_thesis_types(
+        self, spec: AttackSpec, pending: PendingProposals
+    ) -> list[StaticSchemaFinding]:
+        """Every thesis type must resolve in the ``thesis_types`` catalog (ADR 0016).
+
+        A thesis type carrying an in-flight proposal this run is a provisional pass
+        (ADR 0044): logged, not a finding.
+        """
         if spec.thesis is None:
             return []
         catalog = self._get_thesis_types()
@@ -226,6 +268,12 @@ class StaticSchemaValidator:
         findings: list[StaticSchemaFinding] = []
         for i, thesis_type in enumerate(spec.thesis.types):
             if thesis_type not in known:
+                if thesis_type in pending.thesis_types:
+                    logger.info(
+                        "thesis type %r provisionally resolved by an in-flight proposal",
+                        thesis_type,
+                    )
+                    continue
                 findings.append(
                     StaticSchemaFinding(
                         code=StaticSchemaCode.UNKNOWN_THESIS_TYPE,
@@ -411,6 +459,7 @@ class StaticSchemaValidator:
 
 
 __all__ = [
+    "PendingProposals",
     "StaticSchemaCode",
     "StaticSchemaFinding",
     "StaticSchemaResult",

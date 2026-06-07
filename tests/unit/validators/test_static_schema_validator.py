@@ -40,7 +40,11 @@ from cyberlab_gen.schemas.enums import (
     ReproducibilityTier,
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
-from cyberlab_gen.validators.static_schema_validator import StaticSchemaCode, StaticSchemaValidator
+from cyberlab_gen.validators.static_schema_validator import (
+    PendingProposals,
+    StaticSchemaCode,
+    StaticSchemaValidator,
+)
 
 _HASH = "a" * 64
 
@@ -146,6 +150,32 @@ def test_unknown_thesis_type_fails() -> None:
     result = _validator().validate(spec)
     assert not result.passed
     assert any(f.code is StaticSchemaCode.UNKNOWN_THESIS_TYPE for f in result.findings)
+
+
+def test_unknown_facet_with_pending_proposal_provisionally_passes() -> None:
+    # The Wiz-run case: the facet isn't in the registry yet, but the Extractor
+    # proposed it this run. Provisional resolution lets it pass so the proposal
+    # survives to the acceptance point (ADR 0044), rather than halting Layer 1.
+    spec = _spec(facets=["target:aws_codebuild"])
+    pending = PendingProposals(facets=frozenset({"target:aws_codebuild"}))
+    result = _validator().validate(spec, pending=pending)
+    assert result.passed
+    assert result.findings == []
+
+
+def test_unknown_facet_without_matching_pending_still_fails() -> None:
+    spec = _spec(facets=["target:aws_codebuild"])
+    pending = PendingProposals(facets=frozenset({"target:some_other_facet"}))
+    result = _validator().validate(spec, pending=pending)
+    assert not result.passed
+    assert any(f.code is StaticSchemaCode.UNKNOWN_FACET for f in result.findings)
+
+
+def test_unknown_thesis_type_with_pending_proposal_provisionally_passes() -> None:
+    spec = _spec(thesis_type="ci_cd_compromise")
+    pending = PendingProposals(thesis_types=frozenset({"ci_cd_compromise"}))
+    result = _validator().validate(spec, pending=pending)
+    assert result.passed
 
 
 def test_unknown_external_source_in_cve_fails() -> None:

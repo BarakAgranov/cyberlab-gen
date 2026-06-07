@@ -25,6 +25,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from cyberlab_gen.schemas.base import InternalModel
+from cyberlab_gen.schemas.registries import FacetEntry, ValueTypeEntry
 
 #: Facet categories the Extractor is allowed to propose (``schema.md §4.16``).
 #: ``runtime`` and lab-derived ``lab_class_signal`` belong to the Planner.
@@ -49,6 +50,23 @@ class ProposedValueType(InternalModel):
     # The agent's justification — becomes the audit block's ``reasoning`` at accept.
     reasoning: str
 
+    def to_entry(self, *, proposed_in_run: str | None = None) -> ValueTypeEntry:
+        """Convert this in-flight proposal to a ``value_types`` overlay entry (ADR 0044).
+
+        The framework stamps ``proposed_by='extractor'`` (the only value-type
+        proposer) and the run id; the agent never authors those.
+        """
+        return ValueTypeEntry(
+            name=self.name,
+            description=self.description,
+            schema=self.value_schema,  # ValueTypeEntry aliases ``schema_`` to ``schema``
+            sensitive=self.sensitive,
+            notes_for_generator=self.notes_for_generator,
+            platforms=self.platforms,
+            proposed_by="extractor",
+            proposed_in_run=proposed_in_run,
+        )
+
 
 class ProposedFacet(InternalModel):
     """An Extractor-proposed ``facets`` registry entry (in flight).
@@ -63,6 +81,21 @@ class ProposedFacet(InternalModel):
     description: str
     applies_at_levels: list[Literal["lab", "phase", "step"]] = Field(min_length=1)
     reasoning: str
+
+    def to_entry(self) -> FacetEntry:
+        """Convert this in-flight proposal to a ``facets`` overlay entry (ADR 0044).
+
+        The framework stamps ``proposed_by='extractor'``; the agent never authors it.
+        The category was already gated to the Extractor's authority at the tool
+        boundary (``extractor.tools``), so it is carried through unchanged.
+        """
+        return FacetEntry(
+            name=self.name,
+            category=self.category,
+            proposed_by="extractor",
+            description=self.description,
+            applies_at_levels=self.applies_at_levels,
+        )
 
 
 __all__ = [

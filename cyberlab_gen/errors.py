@@ -346,6 +346,19 @@ class ExtractionError(CyberlabGenError):
         super().__init__(message, stage="extraction", run_id=run_id, cause=cause)
 
 
+class ProposalCapExceeded(ExtractionError):  # noqa: N818 — parallels BudgetExceeded; "Exceeded" reads better than an "Error" suffix here
+    """``--auto`` produced more registry proposals than the per-run cap (``schema.md §4.16``).
+
+    The cap protects the user overlay from a single runaway run polluting it. Rather
+    than silently dropping the over-cap proposals and shipping (which would lose the
+    Extractor's typed-value coverage with no record), the run **halts** with a clear
+    report so the user can inspect and re-run with ``--interactive`` to review each
+    proposal individually (``schema.md §4.16`` option (c); ADR 0044). No overlay
+    entries and no ``attack-spec.yaml`` are written on this halt; the partial run is
+    still persisted by the run store. Pins ``stage='extraction'`` via the parent.
+    """
+
+
 class ValidationError(CyberlabGenError):
     """A mechanical Validator layer halted the pipeline (``validation.md §6.4``).
 

@@ -181,7 +181,7 @@ def _lab_credential(cred_id: str = "aws_test_access_key") -> LabCredentialEntry:
     )
 
 
-def _proposal_audit() -> ProposalAuditBlock:
+def _proposal_audit(approval: str = "auto") -> ProposalAuditBlock:
     return ProposalAuditBlock(
         proposal_origin="llm_during_extraction",
         source_lab="example_lab",
@@ -189,6 +189,7 @@ def _proposal_audit() -> ProposalAuditBlock:
         proposed_by_model="claude-opus-4-7",
         proposed_at=datetime(2026, 5, 18, tzinfo=UTC),
         reasoning="Blog describes harvesting JWT tokens.",
+        approval=approval,  # type: ignore[arg-type]
     )
 
 
@@ -668,6 +669,40 @@ def test_proposal_audit_block_rejects_invalid_origin() -> None:
                 "proposed_by_model": "x",
                 "proposed_at": "2026-05-18T00:00:00Z",
                 "reasoning": "x",
+                "approval": "auto",
+            }
+        )
+
+
+def test_proposal_audit_block_source_lab_optional_at_extraction() -> None:
+    """No lab exists at extraction time, so source_lab is optional (ADR 0044)."""
+    block = ProposalAuditBlock(
+        proposal_origin="llm_during_extraction",
+        source_blog="https://example.com/blog",  # type: ignore[arg-type]
+        proposed_by_model="claude-opus-4-8",
+        proposed_at=datetime(2026, 6, 7, tzinfo=UTC),
+        reasoning="Blog describes a new facet not in the registry.",
+        approval="auto",
+    )
+    assert block.source_lab is None
+
+
+def test_proposal_audit_block_records_approval_mode() -> None:
+    """The audit block distinguishes auto- from human-approved entries (ADR 0044)."""
+    assert _proposal_audit(approval="auto").approval == "auto"
+    assert _proposal_audit(approval="human").approval == "human"
+
+
+def test_proposal_audit_block_rejects_unknown_approval() -> None:
+    with pytest.raises(ValidationError):
+        ProposalAuditBlock.model_validate(
+            {
+                "proposal_origin": "llm_during_extraction",
+                "source_blog": "https://example.com",
+                "proposed_by_model": "x",
+                "proposed_at": "2026-05-18T00:00:00Z",
+                "reasoning": "x",
+                "approval": "maybe",
             }
         )
 

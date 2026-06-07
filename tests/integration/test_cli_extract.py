@@ -37,7 +37,9 @@ from cyberlab_gen.cli.extract import (
     spec_to_yaml,
 )
 from cyberlab_gen.cli.main import app
+from cyberlab_gen.errors import ProposalCapExceeded
 from cyberlab_gen.providers.cost_ledger import CostLedger
+from cyberlab_gen.registries.loader import load_overlay_file
 from cyberlab_gen.schemas.attack_spec import (
     AttackSpec,
     ChainBlock,
@@ -58,6 +60,7 @@ from cyberlab_gen.schemas.enums import (
     ReproducibilityTier,
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
+from cyberlab_gen.schemas.registries import FacetEntry, ValueTypeEntry
 from cyberlab_gen.state.run_store import (
     COST_FILENAME,
     ENRICHMENT_FILENAME,
@@ -277,21 +280,33 @@ def test_extract_interactive_feedback_reruns_extractor(
 def test_extract_interactive_proposal_accept_menu(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """After Approve, the per-proposal Accept menu fires once per proposal."""
+    """After Approve, the per-proposal Accept menu fires once per proposal and writes."""
     rr = RunResult(
         spec=_in_scope_spec(),
         value_type_proposals=[_proposal_vt()],
         facet_proposals=[_proposal_facet()],
     )
     _install_runner(monkeypatch, _FakeRunner([rr]))
+    state_dir = tmp_path / "state"
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli_main, "stdin_tty_override", True)
     # approve artifact -> accept vt proposal -> accept facet proposal
-    result = runner.invoke(app, ["extract", "https://example.com/blog"], input="a\na\na\n")
+    result = runner.invoke(
+        app,
+        ["--state-dir", str(state_dir), "extract", "https://example.com/blog"],
+        input="a\na\na\n",
+    )
     assert result.exit_code == 0, result.output
     assert "s3_bucket_arn" in result.output
     assert "target:fastly" in result.output
     assert (tmp_path / ATTACK_SPEC_FILENAME).exists()
+    # Accept wrote both proposals into the overlay, marked human-approved (ADR 0044).
+    overlay = state_dir / "registry-overlay"
+    facets = load_overlay_file(overlay / "facets.yaml", FacetEntry)
+    vts = load_overlay_file(overlay / "value_types.yaml", ValueTypeEntry)
+    assert [e.name for e in facets.entries] == ["target:fastly"]
+    assert [e.name for e in vts.entries] == ["s3_bucket_arn"]
+    assert facets.proposals["target:fastly"].approval == "human"
 
 
 # --- headless guard --------------------------------------------------------
@@ -472,14 +487,39 @@ def test_budget_overrun_proceeds_in_auto_when_under_cap(tmp_path: Path) -> None:
     assert written.exists()
 
 
-def test_auto_accept_caps_proposals(tmp_path: Path) -> None:
-    """``--auto`` auto-accepts up to the cap; the rest are listed as deferred."""
+def test_auto_over_cap_halts_without_writing(tmp_path: Path) -> None:
+    """Over the per-run cap, ``--auto`` halts (ADR 0044) — no overlay, no spec."""
+    overlay = tmp_path / "overlay"
     n = DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP + 2
     rr = RunResult(
         spec=_in_scope_spec(),
         value_type_proposals=[
             ProposedValueType(name=f"vt_{i}", description="d", reasoning="r") for i in range(n)
         ],
+    )
+    fake = _FakeRunner([rr])
+    with pytest.raises(ProposalCapExceeded):
+        run_extract(
+            url="u",
+            interactive=False,
+            auto=True,
+            runner=fake,
+            ledger=_ledger(None),
+            stdin_is_tty=False,
+            out_dir=tmp_path,
+            overlay_dir=overlay,
+        )
+    assert not (tmp_path / ATTACK_SPEC_FILENAME).exists()
+    assert not overlay.exists()
+
+
+def test_auto_accepts_under_cap_writes_overlay(tmp_path: Path) -> None:
+    """Under the cap, ``--auto`` writes accepted proposals to the overlay (ADR 0044)."""
+    overlay = tmp_path / "overlay"
+    rr = RunResult(
+        spec=_in_scope_spec(),
+        value_type_proposals=[_proposal_vt()],
+        facet_proposals=[_proposal_facet()],
     )
     fake = _FakeRunner([rr])
     written = run_extract(
@@ -490,9 +530,15 @@ def test_auto_accept_caps_proposals(tmp_path: Path) -> None:
         ledger=_ledger(None),
         stdin_is_tty=False,
         out_dir=tmp_path,
+        overlay_dir=overlay,
     )
-    assert written is not None
-    assert written.exists()
+    assert written is not None and written.exists()
+    facets = load_overlay_file(overlay / "facets.yaml", FacetEntry)
+    vts = load_overlay_file(overlay / "value_types.yaml", ValueTypeEntry)
+    assert [e.name for e in facets.entries] == ["target:fastly"]
+    assert [e.name for e in vts.entries] == ["s3_bucket_arn"]
+    assert facets.proposals["target:fastly"].approval == "auto"
+    assert facets.proposals["target:fastly"].source_lab is None
 
 
 # --- run-store persistence on every exit path (ADR 0039) -------------------

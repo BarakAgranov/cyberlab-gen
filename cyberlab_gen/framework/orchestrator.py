@@ -56,7 +56,7 @@ from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.tracing_setup import stage_span
-from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult
+from cyberlab_gen.validators.static_schema_validator import PendingProposals, StaticSchemaResult
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -353,7 +353,11 @@ def build_pipeline(
         structural feedback, never the refinement coordinator.
         """
         assert state.spec is not None  # extract_node always sets it
-        state.layer1 = validator.validate(state.spec)
+        # Provisional resolution (ADR 0044): a facet/thesis-type reference absent from
+        # the registry but proposed by the Extractor this run is a provisional pass, so
+        # the proposal survives Layer 1 to the overlay-write acceptance point.
+        pending = _pending_from_extraction(state.extraction)
+        state.layer1 = validator.validate(state.spec, pending=pending)
         if state.layer1.passed:
             state.route = _Node.JURY.value
             return state
@@ -565,6 +569,21 @@ def _finalize(state: PipelineState) -> PipelineOutcome:
         structural_attempts=state.structural_attempts,
         refinement_iterations=state.refinement_iterations,
         verdict_history=state.verdict_history,
+    )
+
+
+def _pending_from_extraction(extraction: ExtractionResult | None) -> PendingProposals:
+    """Build the Layer-1 provisional-resolution set from this run's proposals (ADR 0044).
+
+    A facet / value-type the Extractor proposed this run is carried so Layer 1
+    provisionally resolves a reference to it (the overlay write happens later, at the
+    acceptance point). ``None`` extraction (first node not yet run) → empty set.
+    """
+    if extraction is None:
+        return PendingProposals()
+    return PendingProposals(
+        facets=frozenset(p.name for p in extraction.facet_proposals),
+        value_types=frozenset(p.name for p in extraction.value_type_proposals),
     )
 
 

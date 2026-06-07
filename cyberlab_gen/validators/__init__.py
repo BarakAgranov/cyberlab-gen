@@ -17,6 +17,7 @@ land in Phase 2 beside it as one descriptively-named module per layer. Each laye
 """
 
 from cyberlab_gen.validators.static_schema_validator import (
+    PendingProposals,
     StaticSchemaCode,
     StaticSchemaFinding,
     StaticSchemaResult,
@@ -24,6 +25,7 @@ from cyberlab_gen.validators.static_schema_validator import (
 )
 
 __all__ = [
+    "PendingProposals",
     "StaticSchemaCode",
     "StaticSchemaFinding",
     "StaticSchemaResult",

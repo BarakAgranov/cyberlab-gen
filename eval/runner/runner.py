@@ -299,7 +299,17 @@ class ProviderBackedEvalRunner:
                 return self._halt_record(
                     blog_id, run_index, ledger, exc, failure_kind=_classify_pipeline_failure(exc)
                 )
-            layer1 = self._validator.validate(result.spec)
+            # Provisional resolution (ADR 0044): the in-pipeline Layer 1 already
+            # provisionally resolved references covered by this run's proposals; this
+            # measurement re-validation must apply the same set or it would record a
+            # false Layer-1 failure for a spec the pipeline shipped.
+            from cyberlab_gen.validators.static_schema_validator import PendingProposals
+
+            pending = PendingProposals(
+                facets=frozenset(p.name for p in result.facet_proposals),
+                value_types=frozenset(p.name for p in result.value_type_proposals),
+            )
+            layer1 = self._validator.validate(result.spec, pending=pending)
             self._write_spec(blog_id, run_index, result.spec)
             record = record_from_run(
                 blog_id=blog_id,

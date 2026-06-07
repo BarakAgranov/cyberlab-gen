@@ -312,6 +312,7 @@ def extract(
                 ledger=cli_ctx.cost_ledger,
                 stdin_is_tty=stdin_is_tty,
                 run_store=run_store,
+                overlay_dir=cli_ctx.state.registry_overlay_dir,
             )
     except KeyboardInterrupt as exc:  # Ctrl-C / SIGINT / (converted) SIGTERM
         output.print_error("interrupted; the partial run was saved to the run store", exc=exc)

@@ -308,14 +308,24 @@ class ProposalAuditBlock(ArtifactModel):
     (``schema.md §4.16``). Lives in the overlay file's ``proposals:`` map
     keyed by entry name; dropped when the entry is promoted to bundled
     (history is preserved in git). Not part of the registry-entry shape.
+
+    ``source_lab`` is ``None`` for an Extractor-stage proposal: the lab does
+    not exist yet at extraction time (it is the Planner's Phase-2 product), so
+    there is no lab id to record. A Planner-stage proposal fills it in. ADR 0044.
+
+    ``approval`` records whether the entry was auto-accepted (``--auto``) or
+    human-accepted (``--interactive``). Telemetry-driven overlay→bundled
+    promotion (``schema.md §4.16`` step 4) can weight human-approved entries
+    more heavily. Framework-authored, never agent-authored. ADR 0044.
     """
 
     proposal_origin: Literal["llm_during_extraction", "llm_during_planning"]
-    source_lab: NonEmptyString
+    source_lab: NonEmptyString | None = None
     source_blog: HttpUrl
     proposed_by_model: NonEmptyString
     proposed_at: datetime
     reasoning: NonEmptyString
+    approval: Literal["auto", "human"]
 
 
 class OverlayRegistryFile[E: BaseModel](ArtifactModel):

@@ -61,10 +61,10 @@ class _FakeExtractRunner:
 class _PassValidator:
     """A duck-typed validator whose Layer-1 result always passes."""
 
-    def validate(self, spec: object) -> object:
+    def validate(self, spec: object, *, pending: object = None) -> object:
         from types import SimpleNamespace
 
-        del spec
+        del spec, pending  # provisional-resolution set ignored by this always-pass fake
         return SimpleNamespace(passed=True)  # shipped path reads only `.passed`
 
 

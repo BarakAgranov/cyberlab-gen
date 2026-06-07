@@ -139,6 +139,7 @@ proposals:
     proposed_by_model: claude-opus
     proposed_at: 2026-05-01T00:00:00Z
     reasoning: "Encountered an unknown credential pair in the blog."
+    approval: auto
 """,
     )
     merged = load_merged_registries(overlay_dir=tmp_path)
@@ -160,6 +161,7 @@ proposals:
     proposed_by_model: claude-opus
     proposed_at: 2026-05-01T00:00:00Z
     reasoning: "no matching entry"
+    approval: auto
 """,
     )
     with pytest.raises(RegistryLoadError) as excinfo:
