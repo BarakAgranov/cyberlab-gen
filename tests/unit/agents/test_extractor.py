@@ -16,11 +16,14 @@ framework's re-prompt text to return a clean spec on the second attempt.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 
 from cyberlab_gen.agents.extractor import Extractor
+from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback
 from cyberlab_gen.errors import ExtractionError
+from cyberlab_gen.framework.refinement import FieldPatch, RefinementPatch
 from cyberlab_gen.providers import (
     AgentLabel,
     CapabilityHint,
@@ -56,6 +59,9 @@ from cyberlab_gen.schemas.provenance import (
     Provenance,
     ProvenanceString,
 )
+
+if TYPE_CHECKING:
+    from pydantic import JsonValue
 
 # --- builders --------------------------------------------------------------
 
@@ -313,3 +319,108 @@ async def test_blog_explicit_cve_with_nvd_client_unverified_is_rejected() -> Non
     extractor = _extractor(provider, nvd_client=_NvdMiss(), hallucination_retry_attempts=0)
     with pytest.raises(ExtractionError, match="cve_hallucination"):
         await extractor.extract(blog_content="blog", source_summary="url=...")
+
+
+# --- refinement: targeted patch (ADR 0048 A1, ADR 0054) --------------------
+
+
+def _prov_dump(value: str) -> JsonValue:
+    """A fresh valid Provenance[str] sub-tree, as a refinement patch would carry it."""
+    return _pstr(value).model_dump(mode="json", by_alias=True)
+
+
+def _register_patch(provider: MockProvider, patch: RefinementPatch, **kw: object) -> None:
+    provider.register(
+        capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        agent_label=AgentLabel.EXTRACTOR,
+        response=patch,
+        **kw,  # type: ignore[arg-type]
+    )
+
+
+_FEEDBACK = [
+    JuryFieldFeedback(field_path="thesis.summary", problem="too vague", suggested_fix="cite §2")
+]
+
+
+async def test_refine_applies_a_clean_patch_and_leaves_other_fields_untouched() -> None:
+    provider = MockProvider()
+    _register_patch(
+        provider,
+        RefinementPatch(
+            patches=[
+                FieldPatch(field_path="thesis.summary", new_value=_prov_dump("a precise summary"))
+            ]
+        ),
+    )
+    prior = _spec()
+    result = await _extractor(provider).refine(
+        prior_spec=prior, feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
+    )
+    assert result.attack_spec.thesis.summary.value == "a precise summary"  # type: ignore[union-attr]
+    assert result.reprompts == 0
+    # the unflagged step description is byte-identical to the prior (convergence at the stage)
+    assert (
+        result.attack_spec.chain.chain_steps[0].description.value  # type: ignore[union-attr]
+        == prior.chain.chain_steps[0].description.value  # type: ignore[union-attr]
+    )
+
+
+async def test_refine_reprompts_on_an_unapplyable_patch_then_succeeds() -> None:
+    provider = MockProvider()
+    bad = RefinementPatch(patches=[FieldPatch(field_path="thesis.no_such_field", new_value="x")])
+    good = RefinementPatch(
+        patches=[FieldPatch(field_path="thesis.summary", new_value=_prov_dump("fixed"))]
+    )
+
+    def is_reprompt(messages: list[Message]) -> bool:
+        return any("PATCH REJECTED" in m.content for m in messages)
+
+    def is_first(messages: list[Message]) -> bool:
+        return not is_reprompt(messages)
+
+    _register_patch(provider, bad, message_matcher=is_first)
+    _register_patch(provider, good, message_matcher=is_reprompt)
+
+    result = await _extractor(provider).refine(
+        prior_spec=_spec(), feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
+    )
+    assert result.reprompts == 1
+    assert result.attack_spec.thesis.summary.value == "fixed"  # type: ignore[union-attr]
+
+
+async def test_refine_exhausts_budget_on_a_persistently_unapplyable_patch() -> None:
+    # R1 (inner bound): a patch that can never apply must NOT spin — refine()'s own
+    # re-prompt loop is bounded and raises ExtractionError on exhaustion.
+    provider = MockProvider()
+    _register_patch(
+        provider,
+        RefinementPatch(patches=[FieldPatch(field_path="thesis.no_such_field", new_value="x")]),
+    )
+    extractor = _extractor(provider, hallucination_retry_attempts=1)  # 2 attempts total
+    with pytest.raises(ExtractionError):
+        await extractor.refine(
+            prior_spec=_spec(), feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
+        )
+
+
+async def test_refine_runs_mechanical_checks_whole_spec_and_catches_hallucinated_mitre() -> None:
+    # R2: the search-before-claim / MITRE / CVE checks run over the WHOLE patched spec,
+    # so a patch that introduces a hallucinated technique in the patched field is caught.
+    provider = MockProvider()
+    _register_patch(
+        provider,
+        RefinementPatch(
+            patches=[
+                FieldPatch(
+                    field_path="chain.chain_steps[0].techniques.mitre",
+                    new_value=[_HALLUCINATED_TECH],
+                )
+            ]
+        ),
+    )
+    extractor = _extractor(provider, hallucination_retry_attempts=0)  # 1 attempt
+    with pytest.raises(ExtractionError, match="mitre_hallucination"):
+        await extractor.refine(
+            prior_spec=_spec(), feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
+        )

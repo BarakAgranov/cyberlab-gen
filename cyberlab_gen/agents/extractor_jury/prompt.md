@@ -46,7 +46,10 @@ Choose exactly one verdict:
   items.
 - **revise** — 1 to 3 specific content fields have citation/provenance problems.
   Name each field (`field_path`) with the problem and a suggested fix. The
-  Extractor re-runs targeting those fields.
+  Extractor re-runs as a **targeted patch** of exactly those field paths, so make
+  each `field_path` a precise, resolvable locator: dotted field names with
+  **integer** list indices, e.g. `thesis.summary`, `chain.chain_steps[0].description`,
+  `external_references.cves[0].severity` (not a step id like `[step-1]`).
 - **reject** — systematic failure: more than ~30% of content fields have
   mismatched citations (cascading hallucination). Name representative fields. The
   pipeline halts.

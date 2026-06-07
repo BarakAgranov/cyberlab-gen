@@ -1725,3 +1725,50 @@ not stringified text, so the A1 patch coordinator can address by field path.
 - No divergence from the doc design — the typed-contents contract survived contact with the code.
   `just verify` green (ruff, ruff format, pyright strict 0 errors, 617 passed / 1 skipped). No ADR
   (A2 implements ADR 0048; no new decision). No tag.
+
+## Code work-stream (A1-G1 spine) — Step A1: targeted-patch refinement (ADR 0054) — 2026-06-08
+
+The spine. Replaces blind full re-extraction on a jury `revise` with a targeted patch, so the
+refinement loop converges + ships instead of re-rolling every field (the 9→6→9→10 bounce) and burning
+to the cost ceiling. Gated the mechanism for sign-off first (the design choice the docs didn't pin);
+implemented the approved design plus the two added correctness requirements (R1/R2). Recorded as
+ADR 0054.
+
+- **`framework/refinement.py` (new, pure framework).** `FieldPatch{field_path, new_value:
+  JsonValue}` / `RefinementPatch{patches}`; `apply_field_patch` deep-sets each `new_value` onto
+  `prior.model_dump(mode="json", by_alias=True)` and re-validates the **whole** spec via
+  `AttackSpec.model_validate`. Path resolver: dotted + integer index; a non-integer `[id]`, malformed,
+  out-of-range, or absent-key segment → `RefinementPathError` (invented-path guard — replace only,
+  never create). Convergent by construction: only flagged paths are written, so every unflagged field
+  (value + inline provenance) is byte-identical to the prior dump.
+- **`Extractor.refine`.** Force-emits a `RefinementPatch` (same tool inventory as `extract`), applies
+  it, re-runs the mechanical checks **whole-spec** (R2), and re-prompts on an unapplyable/invalid patch
+  bounded by the same content-retry budget as `extract` (R1 inner bound); raises `ExtractionError` on
+  exhaustion. Lazy-imports `framework.refinement` to avoid the agents↔framework load cycle.
+- **Orchestrator `extract_node` routing.** `REFINEMENT` feedback (+ prior spec) → `refine`;
+  first-run and `STRUCTURAL_RETRY` → `extract` (full re-extraction — `validation.md §6.10` kept
+  exactly). `_ExtractorLike` gained `refine`. R1 outer bound is the existing `refinement_cap` in
+  `jury_node`: a never-satisfied flagged field terminates at the cap as ship-low-confidence, not a spin.
+- **Boundary (Option A, confirmed):** patch the jury-revise path ONLY; static-schema retry and the
+  NL-feedback path stay full re-extraction. Jury prompt note added pinning the dotted+integer
+  `field_path` convention.
+- **Tests (TDD, red-first):** convergence/non-regression (pure, shallow + deep paths, incl.
+  provenance); R2 whole-spec catches a cross-field invariant break (bad provenance, non-monotonic
+  steps) and a hallucinated MITRE in a patched field; R1 inner bound (`refine` exhausts → raises) and
+  outer bound (revise loop terminates at cap → ship-low-confidence, never spins); path discipline
+  (non-resolving / non-integer / out-of-range); routing (refine vs extract; structural-retry +
+  clean-approve never patch). 631 passed / 1 skipped.
+- **Evidence vs judgment.** Convergence/R1/R2/routing/path-discipline are *evidenced* by the pure +
+  fake-provider tests (no money). *Not* verified here (needs the user's provider-backed eval): that the
+  live `RefinementPatch`/`JsonValue` forced emit behaves, and that the loop empirically converges +
+  ships on the codebuild blog. Contingency on record: emit `new_value` as a parsed string if the
+  recursive `JsonValue` schema misbehaves with the provider.
+- **Doc design survived contact with the code** — one accommodation, surfaced not silent: `new_value`
+  is `JsonValue` (untyped per-path at emit, strict at `model_validate`), because the type at a path
+  varies; this is the patch-emit shape the gate proposed and you approved, not a fallback to full
+  re-extraction. One pyright narrowing quirk (a subscript write corrupts narrowing of a later
+  subscript read on a `dict | list`) forced splitting traversal-read and leaf-write into separate
+  helpers — behaviour-neutral.
+- `just verify` green (ruff, ruff format, pyright strict 0 errors, 631 passed / 1 skipped). No tag.
+
+Next ADR number: **0055**.

@@ -274,6 +274,15 @@ def reject_interactive_when_headless(*, interactive: bool, stdin_is_tty: bool) -
 class _ExtractorLike(Protocol):
     async def extract(self, *, blog_content: str, source_summary: str) -> ExtractionResult: ...
 
+    async def refine(
+        self,
+        *,
+        prior_spec: AttackSpec,
+        feedback: list[JuryFieldFeedback],
+        blog_content: str,
+        source_summary: str,
+    ) -> ExtractionResult: ...
+
 
 class _JuryLike(Protocol):
     async def review(
@@ -379,11 +388,37 @@ def build_pipeline(
     enrich_cfg = enrichment_config
 
     async def extract_node(state: PipelineState) -> PipelineState:
-        """Run (or re-run) the Extractor, folding any pending feedback into the prompt."""
-        summary = state.source_summary
-        if state.pending_feedback is not None:
-            summary = f"{summary}\n\n{state.pending_feedback.render()}"
-        result = await extractor.extract(blog_content=state.blog_content, source_summary=summary)
+        """Run (or re-run) the Extractor: full extract, structural retry, or targeted patch.
+
+        Three entry conditions (``architecture.md §1.7``, ADR 0048/0054):
+
+        * **first run** (no pending feedback) → full ``extract``;
+        * **structural retry** (a static-schema ``STRUCTURAL_RETRY`` feedback) → full
+          ``extract`` with the structural findings folded into the prompt — *never* a
+          patch (``validation.md §6.10``, the non-negotiable discipline);
+        * **jury ``revise``** (a ``REFINEMENT`` feedback, with a prior spec to patch) →
+          targeted ``refine``: the structured field-level feedback drives a patch of only
+          the flagged paths, convergent by construction.
+        """
+        pending = state.pending_feedback
+        if (
+            pending is not None
+            and pending.kind is FeedbackKind.REFINEMENT
+            and state.spec is not None
+        ):
+            result = await extractor.refine(
+                prior_spec=state.spec,
+                feedback=pending.jury_feedback,
+                blog_content=state.blog_content,
+                source_summary=state.source_summary,
+            )
+        else:
+            summary = state.source_summary
+            if pending is not None:
+                summary = f"{summary}\n\n{pending.render()}"
+            result = await extractor.extract(
+                blog_content=state.blog_content, source_summary=summary
+            )
         state.structural_attempts += 1
         state.extraction = result
         state.spec = result.attack_spec

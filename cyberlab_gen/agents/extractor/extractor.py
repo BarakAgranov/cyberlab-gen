@@ -29,6 +29,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError as PydanticValidationError
+
 from cyberlab_gen.agents.call_surface import AgentRunner
 from cyberlab_gen.agents.extractor.tools import (
     ExternalLookupRecord,
@@ -51,6 +53,7 @@ from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.schemas.enums import ProvenanceSource
 
 if TYPE_CHECKING:
+    from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback
     from cyberlab_gen.framework.enrichment import NvdClient
     from cyberlab_gen.providers.base import Provider
     from cyberlab_gen.providers.ranking import ProviderRegistry
@@ -208,6 +211,113 @@ class Extractor:
             + "; ".join(f"{f.kind}@{f.field_path}: {f.detail}" for f in last_findings)
         )
 
+    async def refine(
+        self,
+        *,
+        prior_spec: AttackSpec,
+        feedback: list[JuryFieldFeedback],
+        blog_content: str,
+        source_summary: str,
+    ) -> ExtractionResult:
+        """Re-run the Extractor as a *targeted patch* on a jury ``revise`` (ADR 0048 A1, ADR 0054).
+
+        Hands the model the prior ``AttackSpec`` plus the jury's structured field-level
+        feedback and forces a small :class:`~cyberlab_gen.framework.refinement.RefinementPatch`
+        emit covering **only** the flagged field paths; the framework deep-sets it onto the
+        prior spec and re-validates the **whole** spec
+        (:func:`~cyberlab_gen.framework.refinement.apply_field_patch`). Refinement is
+        convergent by construction — every unflagged field stays byte-identical, so a patch
+        cannot regress a field nobody flagged (the field-rerolling bounce of full
+        re-extraction). Reserved for the jury-``revise`` refinement path; the static-schema
+        structural retry and the interactive natural-language-feedback path still re-extract
+        from scratch (``architecture.md §1.7``, ``validation.md §6.10``).
+
+        The mechanical content checks (search-before-claim / MITRE / CVE) run over the
+        **whole** patched spec, so a patch can't introduce an undetected cross-field problem
+        (R2). The re-prompt loop on an unapplyable or framework-rejected patch is bounded by
+        the same content-retry budget as :meth:`extract` (R1); on exhaustion it raises
+        ``ExtractionError`` (a clean halt, never an unbounded spin).
+        """
+        # Lazy import: ``cyberlab_gen.framework`` imports this module (the orchestrator needs
+        # ``ExtractionResult``), so a top-level framework import here would be a load-time
+        # cycle. By call time the framework package is fully initialised. (ADR 0054.)
+        from cyberlab_gen.framework.refinement import (
+            RefinementPatch,
+            RefinementPathError,
+            apply_field_patch,
+        )
+        from cyberlab_gen.registries.merge import MergedRegistries
+
+        if not isinstance(self._registries, MergedRegistries):  # pragma: no cover - guard
+            raise TypeError("Extractor.registries must be a MergedRegistries")
+
+        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
+        base_user = self._build_refine_turn(
+            prior_spec=prior_spec,
+            feedback=feedback,
+            blog_content=blog_content,
+            source_summary=source_summary,
+        )
+        max_attempts = 1 + self._hallucination_retry_attempts
+        extra = ""
+        last_problem = "no patch produced"
+
+        for attempt in range(1, max_attempts + 1):
+            executor = ExtractorToolExecutor(
+                registries=self._registries, nvd_client=self._nvd_client
+            )
+            user_content = base_user if not extra else f"{base_user}\n\n{extra}"
+            messages = self._runner.build_messages(
+                capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+                user_content=user_content,
+            )
+            response = await self._runner.run_with_tools(
+                messages,
+                output_schema=RefinementPatch,
+                capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+                tools=extractor_tool_definitions(registered_source_ids=source_ids),
+                tool_executor=executor,
+                max_iterations=self._max_tool_iterations,
+                max_tokens=self._max_output_tokens,
+            )
+            try:
+                patched = apply_field_patch(prior_spec, response.output)
+            except (RefinementPathError, PydanticValidationError) as exc:
+                # A bad path or a mis-shaped/invalid patch: re-prompt with the error, bounded
+                # by the same budget as a content rejection (R1) — never an unbounded retry.
+                last_problem = f"patch did not apply/validate: {exc}"
+                extra = self._patch_rejected_feedback(str(exc))
+                logger.warning(
+                    "extractor refine: patch did not apply/validate on attempt %d/%d: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                continue
+            findings = self._run_checks(patched, executor.lookups)  # whole-spec re-check (R2)
+            if not findings:
+                return ExtractionResult(
+                    attack_spec=patched,
+                    value_type_proposals=executor.value_type_proposals,
+                    facet_proposals=executor.facet_proposals,
+                    thesis_type_proposals=executor.thesis_type_proposals,
+                    lookups=executor.lookups,
+                    reprompts=attempt - 1,
+                )
+            last_problem = "; ".join(f"{f.kind}@{f.field_path}: {f.detail}" for f in findings)
+            extra = self._feedback_for(findings)
+            logger.warning(
+                "extractor refine: framework-check rejection on attempt %d/%d: %d finding(s)",
+                attempt,
+                max_attempts,
+                len(findings),
+            )
+
+        raise ExtractionError(
+            "Extractor refine exhausted its patch retry budget "
+            f"({max_attempts} attempts); unresolved: {last_problem}"
+        )
+
     # --- prompt assembly ---------------------------------------------------
 
     def _build_user_turn(self, *, blog_content: str, source_summary: str) -> str:
@@ -216,6 +326,47 @@ class Extractor:
             f"{source_summary}\n\n"
             "BLOG CONTENT (verbatim; cite passages by quoting them in blog_excerpt):\n"
             f"{blog_content}"
+        )
+
+    def _build_refine_turn(
+        self,
+        *,
+        prior_spec: AttackSpec,
+        feedback: list[JuryFieldFeedback],
+        blog_content: str,
+        source_summary: str,
+    ) -> str:
+        """The refinement user turn: prior spec + flagged fields + emit-a-RefinementPatch."""
+        lines: list[str] = []
+        for item in feedback:
+            line = f"- field_path: {item.field_path}\n  problem: {item.problem}"
+            if item.suggested_fix:
+                line += f"\n  suggested_fix: {item.suggested_fix}"
+            lines.append(line)
+        flagged = "\n".join(lines)
+        return (
+            "REFINEMENT — the Extractor-Jury reviewed your prior AttackSpec and flagged the "
+            "fields below. Emit a RefinementPatch that fixes ONLY these field paths and "
+            "nothing else. For each, return a FieldPatch{field_path, new_value} where "
+            "new_value is the corrected sub-tree with the SAME shape that path has in the "
+            "prior spec — for a content field that is the whole Provenance object "
+            "{value, source, citations, ...}. Use dotted paths with integer list indices "
+            "(e.g. chain.chain_steps[0].description). Re-ground every fix in the blog; do "
+            "not touch any unflagged field.\n\n"
+            f"FLAGGED FIELDS:\n{flagged}\n\n"
+            "PRIOR ATTACKSPEC (YAML):\n"
+            f"{prior_spec.to_yaml()}\n\n"
+            "SOURCE METADATA:\n"
+            f"{source_summary}\n\n"
+            "BLOG CONTENT (verbatim; cite passages by quoting them):\n"
+            f"{blog_content}"
+        )
+
+    def _patch_rejected_feedback(self, detail: str) -> str:
+        return (
+            "PATCH REJECTED — the previous RefinementPatch did not apply or did not validate. "
+            "Re-emit a RefinementPatch addressing only the flagged paths; fix this:\n"
+            f"{detail}"
         )
 
     def _feedback_for(self, findings: list[CheckFinding]) -> str:

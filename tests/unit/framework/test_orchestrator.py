@@ -175,11 +175,22 @@ def _ingestion() -> IngestionResult:
 
 
 class _FakeExtractor:
-    """Records every extract() call and returns scripted specs in sequence."""
+    """Records extract() and refine() calls and returns scripted specs in sequence.
 
-    def __init__(self, specs: list[AttackSpec]) -> None:
+    A jury ``revise`` routes to :meth:`refine` (targeted patch, ADR 0054); a structural
+    retry and the first run route to :meth:`extract`. ``refine`` records the prior spec and
+    the *structured* jury feedback it received so the routing + the typed boundary are both
+    asserted directly. By default ``refine`` echoes the prior spec (a no-op patch — valid,
+    so the jury re-reviews it); pass ``refine_specs`` to script distinct patched outputs.
+    """
+
+    def __init__(
+        self, specs: list[AttackSpec], *, refine_specs: list[AttackSpec] | None = None
+    ) -> None:
         self._specs = specs
-        self.calls: list[str] = []  # the source_summary each call received
+        self._refine_specs = refine_specs
+        self.calls: list[str] = []  # the source_summary each extract() call received
+        self.refine_calls: list[tuple[AttackSpec, list[JuryFieldFeedback]]] = []
 
     async def extract(self, *, blog_content: str, source_summary: str) -> ExtractionResult:
         del blog_content
@@ -187,6 +198,21 @@ class _FakeExtractor:
         # return the next scripted spec; repeat the last one once exhausted
         idx = min(len(self.calls) - 1, len(self._specs) - 1)
         return _result(self._specs[idx])
+
+    async def refine(
+        self,
+        *,
+        prior_spec: AttackSpec,
+        feedback: list[JuryFieldFeedback],
+        blog_content: str,
+        source_summary: str,
+    ) -> ExtractionResult:
+        del blog_content, source_summary
+        self.refine_calls.append((prior_spec, list(feedback)))
+        if self._refine_specs is not None:
+            idx = min(len(self.refine_calls) - 1, len(self._refine_specs) - 1)
+            return _result(self._refine_specs[idx])
+        return _result(prior_spec)  # default: echo the prior spec (a no-op, valid patch)
 
 
 class _FakeJury:
@@ -228,6 +254,7 @@ async def test_clean_approve_runs_end_to_end_and_enriches() -> None:
     assert state.structural_attempts == 1
     assert state.refinement_iterations == 0
     assert jury.calls == 1
+    assert not ext.refine_calls  # a clean first-run approve never patches
 
 
 async def test_run_pipeline_returns_outcome_for_clean_approve() -> None:
@@ -262,6 +289,8 @@ async def test_static_schema_failure_routes_to_retry_not_refinement() -> None:
     assert state.status is PipelineStatus.HALTED_VALIDATION
     # retry path: the Extractor was re-run up to the budget...
     assert len(ext.calls) == 3
+    # ...via FULL extraction (structural retry), never the targeted-patch path (refine)...
+    assert not ext.refine_calls
     # ...and the re-runs carried STRUCTURAL feedback (not refinement)...
     assert "STRUCTURAL VALIDATION FAILURE" in ext.calls[1]
     assert "STRUCTURAL VALIDATION FAILURE" in ext.calls[2]
@@ -302,9 +331,10 @@ async def test_static_schema_exhaustion_raises_validation_error_via_run_pipeline
 
 
 async def test_jury_revise_bounded_then_ships_low_confidence() -> None:
-    # The Jury always returns revise; the spec is always static-schema-valid. The
-    # refinement coordinator re-runs the Extractor up to the cap, then ships the
-    # last spec with low_jury_confidence and the unresolved feedback.
+    # The Jury always returns revise; the patched spec is always static-schema-valid. The
+    # refinement coordinator re-runs the Extractor via TARGETED PATCH (refine) up to the cap,
+    # then ships the last spec with low_jury_confidence and the unresolved feedback. R1: the
+    # flagged field never gets satisfied, so termination comes from the cap, never a spin.
     good = _spec(facets=["target:aws"])
     ext = _FakeExtractor([good])
     revise = _verdict(
@@ -317,11 +347,12 @@ async def test_jury_revise_bounded_then_ships_low_confidence() -> None:
 
     assert state.status is PipelineStatus.SHIPPED_LOW_CONFIDENCE
     assert state.enrichment is not None  # still ships → enrichment ran
-    # 1 initial extract + 3 refinement re-runs = 4 extract calls
-    assert len(ext.calls) == 4
+    # 1 initial full extract; the 3 refinement iterations are targeted PATCHES, not extracts
+    assert len(ext.calls) == 1
+    assert len(ext.refine_calls) == 3
     assert state.refinement_iterations == 3
-    # the refinement re-runs carried JURY (refinement) feedback, not structural
-    assert "JURY REVISION REQUESTED" in ext.calls[1]
+    # the patch path received the structured jury feedback (field path intact)
+    assert ext.refine_calls[0][1][0].field_path == "thesis.summary"
     assert state.unresolved_feedback
     assert any("thesis.summary" in item for item in state.unresolved_feedback)
 
@@ -340,6 +371,9 @@ async def test_jury_revise_then_approve_ships_clean() -> None:
     assert state.status is PipelineStatus.SHIPPED
     assert state.refinement_iterations == 1
     assert jury.calls == 2
+    # the single re-run was a targeted patch, not a second full extract
+    assert len(ext.calls) == 1
+    assert len(ext.refine_calls) == 1
 
 
 async def test_jury_reject_halts() -> None:
@@ -594,9 +628,11 @@ def test_refinement_feedback_rejects_empty_matching_payload() -> None:
         RefinementFeedback(kind=FeedbackKind.REFINEMENT)
 
 
-async def test_jury_revise_rerun_prompt_carries_suggested_fix() -> None:
-    # The structured suggested_fix must survive to the Extractor re-run prompt. With the
-    # old stringified `list[str]` boundary this was dropped; this is the regression test.
+async def test_jury_revise_routes_structured_feedback_to_refine() -> None:
+    # A1: a jury revise routes to the targeted-patch path (refine), which receives the
+    # structured JuryFieldFeedback directly — incl. suggested_fix — rather than a stringified
+    # addendum folded into a full re-extract prompt. (Replaces the A2-era prompt-render check,
+    # which pinned the now-superseded full-re-extraction behaviour.)
     good = _spec(facets=["target:aws"])
     ext = _FakeExtractor([good])
     revise = _verdict(
@@ -613,9 +649,13 @@ async def test_jury_revise_rerun_prompt_carries_suggested_fix() -> None:
     run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
     await run(PipelineState(blog_content="blog", source_summary="url=..."))
 
-    assert "JURY REVISION REQUESTED" in ext.calls[1]
-    assert "thesis.summary: too vague" in ext.calls[1]
-    assert "quote the blog's privilege-escalation paragraph" in ext.calls[1]
+    # the re-run was a patch, not a full extract; refine got the prior spec + typed feedback
+    assert len(ext.calls) == 1
+    assert len(ext.refine_calls) == 1
+    prior, fb = ext.refine_calls[0]
+    assert prior.facets == ["target:aws"]
+    assert fb[0].field_path == "thesis.summary"
+    assert fb[0].suggested_fix == "quote the blog's privilege-escalation paragraph"
 
 
 async def test_unresolved_feedback_preserves_suggested_fix() -> None:
