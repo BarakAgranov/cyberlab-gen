@@ -1,7 +1,7 @@
 """Integration tests for the bundled + overlay merge.
 
 Pins overlay-wins semantics (``schema.md §4.11``), accessor coverage
-(``schema-details.md §6.6``), the orphan-proposal Layer-1 guarantee,
+(``schema-details.md §6.6``), the orphan-proposal static-schema guarantee,
 ``MergedRegistries`` immutability, and the ``lab_credential_patterns``
 filter behavior.
 """
@@ -186,7 +186,7 @@ proposals:
 
 
 def test_overlay_proposals_block_orphan_rejected(tmp_path: Path) -> None:
-    """Orphan proposals (no matching entry) fail Layer 1."""
+    """Orphan proposals (no matching entry) fail static schema validation."""
     _write_overlay_value_types(
         tmp_path,
         """entries: []

@@ -364,7 +364,10 @@ def test_classify_pipeline_failure_maps_each_error_to_its_scope() -> None:
     )
     assert _classify_pipeline_failure(EmitTruncated("truncated")) == FAILURE_BLOG_FATAL
     assert _classify_pipeline_failure(MalformedOutput("bad spec")) == FAILURE_BLOG_FATAL
-    assert _classify_pipeline_failure(ValidationError("layer 1 halt")) == FAILURE_BLOG_FATAL
+    assert (
+        _classify_pipeline_failure(ValidationError("static schema validation halt"))
+        == FAILURE_BLOG_FATAL
+    )
 
 
 # --- CostRecordingProvider --------------------------------------------------

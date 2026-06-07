@@ -29,7 +29,7 @@ class UserConfig(ArtifactModel):
 
     Phase 0: no fields. ``extra='forbid'`` (inherited from
     ``ArtifactModel``) means a user-edited ``config.yaml`` with stray
-    keys fails Layer-1 validation cleanly rather than silently
+    keys fails static-schema validation cleanly rather than silently
     dropping. Phase 1+ adds fields per ``pipeline.md §3.6`` (the config
     table around line 500: provider API keys, cost cap, telemetry
     toggle) as the pipeline begins consuming them.

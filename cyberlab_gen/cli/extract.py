@@ -14,7 +14,7 @@ tests inject a fake :class:`ExtractRunner` returning a scripted
 session.
 
 Two failure mechanisms cross into this layer from the orchestrator (ADR 0023):
-they raise (``ValidationError`` on Layer-1 exhaustion, ``JuryRejectionError`` on a
+they raise (``ValidationError`` on static-schema exhaustion, ``JuryRejectionError`` on a
 jury ``reject``); the verb surfaces those as clean errors. Everything reaching
 the interrupt is a *shipped* (clean or low-confidence) ``RunResult``.
 """
@@ -282,9 +282,11 @@ def _state_to_run_result(state: object) -> RunResult:
     if state.status is PipelineStatus.HALTED_VALIDATION:
         from cyberlab_gen.errors import ValidationError
 
-        findings = state.layer1.rendered_findings() if state.layer1 is not None else []
+        findings = (
+            state.static_schema.rendered_findings() if state.static_schema is not None else []
+        )
         raise ValidationError(
-            state.halt_reason or "Validator Layer 1 failed past the retry budget",
+            state.halt_reason or "Static schema validation failed past the retry budget",
             findings=findings,
         )
     if state.status is PipelineStatus.HALTED_REJECT:

@@ -125,7 +125,7 @@ class _ExternalSourceEntryBase(ArtifactModel):
     the enrichment-only fields; ``StaticCatalogEntry`` adds
     ``notes_for_generator``. Both inherit ``extra='forbid'``, which makes
     the type split structural: a YAML entry under ``static_catalogs:`` with
-    an ``enrichment_triggers`` field fails Layer 1.
+    an ``enrichment_triggers`` field fails static schema validation.
 
     Carries the ``_auth_rules`` validator so both subclasses inherit it.
     """
@@ -407,7 +407,7 @@ class BundledRegistryFile[E: BaseModel](ArtifactModel):
 
     Only an ``entries:`` block — bundled files never carry proposal audit
     context (it lives in git history once promoted). A bundled file that
-    accidentally includes a ``proposals:`` block fails Layer 1 via the
+    accidentally includes a ``proposals:`` block fails static schema validation via the
     inherited ``extra='forbid'``.
     """
 

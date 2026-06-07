@@ -221,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     print(  # noqa: T201 # pragma: no cover
         f"eval: ran {report.runs_per_blog} run(s) x {len(report.blog_ids)} blog(s)"
         f"{f' ({len(report.skipped)} skipped)' if report.skipped else ''}; "
-        f"Layer-1 pass rate {report.overall_layer1_pass_rate():.0%}; "
+        f"static-schema pass rate {report.overall_static_schema_pass_rate():.0%}; "
         f"valid-spec blogs {report.blogs_with_valid_spec()}/{len(report.blog_ids)}; "
         f"archived to {path}"
     )
@@ -237,7 +237,7 @@ def _build_provider_backed_runner(
 
     Reuses the *same* production construction as the ``extract`` verb
     (``cyberlab_gen.cli.main._build_extract_runner``): Ingestion + Extractor +
-    Jury + Validator-Layer-1 on the orchestrator. Heavy imports are deferred so
+    Jury + Validator-static-schema on the orchestrator. Heavy imports are deferred so
     this module imports cleanly with no provider configured. Not exercised in CI;
     the metric mapping it relies on is tested via :func:`record_from_run`.
 

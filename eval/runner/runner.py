@@ -75,7 +75,7 @@ DEFAULT_ABORT_AFTER_CONSECUTIVE_FAILURES = 2
 #: * ``FAILURE_RETRYABLE`` — a persistent ``TransientFailure`` (timeout/429/5xx/
 #:   connection after retries). A blip: never aborts or skips; resets the counter.
 #: * ``FAILURE_BLOG_FATAL`` — tied to *this* blog's content/size/URL (truncation,
-#:   malformed/won't-validate, hallucination budget, tool loop, jury/Layer-1
+#:   malformed/won't-validate, hallucination budget, tool loop, jury/static-schema
 #:   reject, unreachable/paywalled/bot-blocked URL, a content/size 4xx). Skips this
 #:   blog's remaining runs and moves to the next blog.
 #: * ``FAILURE_GLOBAL_FATAL`` — the next blog will fail identically (no served
@@ -218,7 +218,7 @@ class ProviderBackedEvalRunner:
 
     Wraps a Task-7 ``ExtractRunner`` (which drives Ingestion → the LangGraph
     pipeline) plus the Task-6 ``StaticSchemaValidator`` so the per-run record carries
-    the Layer-1 pass/fail the ``RunResult`` omits (ADR 0024 left it off the CLI
+    the static-schema pass/fail the ``RunResult`` omits (ADR 0024 left it off the CLI
     type). Requires a configured provider behind the runner; absent one the agents
     raise at resolve time (``provider-interface.md §6.3``) — the harness CLI guards
     against that before constructing this.
@@ -284,7 +284,7 @@ class ProviderBackedEvalRunner:
                 result = runner.run(url, ledger=ledger)
             except CyberlabGenError as exc:
                 # Classify the halt so the run loop knows whether to skip just this
-                # blog (blog-fatal: truncation, malformed, jury/Layer-1 reject, bad
+                # blog (blog-fatal: truncation, malformed, jury/static-schema reject, bad
                 # URL), abort the whole run (global: no served model, auth/quota/
                 # config), or treat it as a transient blip. See
                 # _classify_pipeline_failure.
@@ -299,10 +299,10 @@ class ProviderBackedEvalRunner:
                 return self._halt_record(
                     blog_id, run_index, ledger, exc, failure_kind=_classify_pipeline_failure(exc)
                 )
-            # Provisional resolution (ADR 0044): the in-pipeline Layer 1 already
+            # Provisional resolution (ADR 0044): the in-pipeline static schema validation already
             # provisionally resolved references covered by this run's proposals; this
             # measurement re-validation must apply the same set or it would record a
-            # false Layer-1 failure for a spec the pipeline shipped.
+            # false static-schema failure for a spec the pipeline shipped.
             from cyberlab_gen.validators.static_schema_validator import PendingProposals
 
             pending = PendingProposals(
@@ -310,13 +310,13 @@ class ProviderBackedEvalRunner:
                 value_types=frozenset(p.name for p in result.value_type_proposals),
                 thesis_types=frozenset(p.name for p in result.thesis_type_proposals),
             )
-            layer1 = self._validator.validate(result.spec, pending=pending)
+            static_schema = self._validator.validate(result.spec, pending=pending)
             self._write_spec(blog_id, run_index, result.spec)
             record = record_from_run(
                 blog_id=blog_id,
                 run_index=run_index,
                 shipped=True,
-                layer1_passed=layer1.passed,
+                static_schema_passed=static_schema.passed,
                 cost_usd=ledger.total_usd,
                 spec=result.spec,
                 value_type_proposals=len(result.value_type_proposals),
@@ -443,7 +443,7 @@ class ProviderBackedEvalRunner:
             blog_id=blog_id,
             run_index=run_index,
             shipped=False,
-            layer1_passed=False,
+            static_schema_passed=False,
             cost_usd=ledger.total_usd,
             completeness_score=0.0,
             structural_completeness=0.0,
@@ -476,7 +476,7 @@ def record_from_run(
     blog_id: str,
     run_index: int,
     shipped: bool,
-    layer1_passed: bool,
+    static_schema_passed: bool,
     cost_usd: Decimal,
     spec: object,
     value_type_proposals: int,
@@ -501,7 +501,7 @@ def record_from_run(
         blog_id=blog_id,
         run_index=run_index,
         shipped=shipped,
-        layer1_passed=layer1_passed,
+        static_schema_passed=static_schema_passed,
         cost_usd=cost_usd,
         completeness_score=spec.extraction_metadata.completeness_score,
         structural_completeness=structural_completeness(spec),
@@ -549,7 +549,7 @@ def run_blog_set(
 
     * **blog-fatal → skip this blog** — a failure tied to one blog's content/size/
       URL (truncation, malformed/won't-validate, hallucination budget, tool loop,
-      jury/Layer-1 reject, bad URL). ``abort_after_consecutive_failures`` consecutive
+      jury/static-schema reject, bad URL). ``abort_after_consecutive_failures`` consecutive
       runs of *this blog* failing with the same (normalized) blog-fatal error stop
       that blog's remaining runs; the run then **continues to the next blog** (its
       size/content problem says nothing about other blogs).

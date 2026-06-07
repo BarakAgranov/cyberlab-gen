@@ -9,7 +9,7 @@ cleanly to `eval/reports/`".
 Each report records whether it was **provider-backed**:
 
 - `provider_backed: true` — a real run against a configured LLM provider
-  (`ANTHROPIC_API_KEY` set). These carry real Layer-1 pass rates, cost, and
+  (`ANTHROPIC_API_KEY` set). These carry real static-schema pass rates, cost, and
   completeness numbers.
 - `provider_backed: false` — an **offline / fixture** run with no live model
   (the harness never fabricates model output; `eval.md §7.2` honest framing).
@@ -19,6 +19,6 @@ Each report records whether it was **provider-backed**:
 
 `gen0-20260601T120000Z.yaml` is a committed **offline demonstration** report
 (`provider_backed: false`) showing the archive shape and the exit-criterion
-helpers (`overall_layer1_pass_rate`, `blogs_with_valid_spec`). The first
+helpers (`overall_static_schema_pass_rate`, `blogs_with_valid_spec`). The first
 provider-backed run replaces the demonstration value of these numbers with real
 ones; see `CALIBRATION.md` for what those numbers will calibrate.

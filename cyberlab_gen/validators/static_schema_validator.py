@@ -1,10 +1,10 @@
-"""Validator Layer 1 — static schema validation + registry reference resolution.
+"""the static schema validator — static schema validation + registry reference resolution.
 
-Architectural source: ``validation.md §6.4`` (what Layer 1 checks),
-``validation.md §6.10`` (failure routing — Layer 1 → the responsible agent's
+Architectural source: ``validation.md §6.4`` (what static schema validation checks),
+``validation.md §6.10`` (failure routing — static schema validation → the responsible agent's
 *retry* mechanism, never refinement), ADR 0022 (this module's location).
 
-Layer 1 is the cheapest, highest-coverage mechanical layer. It runs deterministic
+static schema validation is the cheapest, highest-coverage mechanical layer. It runs deterministic
 checks — **no LLM, no network** (``validation.md §6.1``, ``architecture.md
 §1.6``). For Phase 1 (AttackSpec only; the LabManifest path lands in Phase 2) it
 checks, in order:
@@ -12,7 +12,7 @@ checks, in order:
 1. **Static schema validation** — the AttackSpec round-trips through its own
    Pydantic model (``model_validate(model_dump())``). Pydantic *is* the JSON
    Schema validator here (``schema-details.md §1``: ``extra="forbid"`` makes
-   unknown fields a Layer-1 error). A spec handed in already-typed is structurally
+   unknown fields a static-schema error). A spec handed in already-typed is structurally
    valid by construction, but a spec that arrived from a user edit or a refinement
    re-run is re-validated so a smuggled-in bad value surfaces as a finding rather
    than a crash later.
@@ -27,7 +27,7 @@ checks, in order:
    ``source`` (→ merged ``external_data_sources`` registry). The closed *enums*
    (``Severity``, ``DetectionComponent``,
    ``DetectionFormat``, ``ProvisioningMechanism``) are already validated by
-   Pydantic at construction, so Layer 1 does not re-check them — but it confirms
+   Pydantic at construction, so static schema validation does not re-check them — but it confirms
    each appears in its closed catalog so a catalog/enum drift is caught.
 
 The validator **never mutates** the spec and **never routes**: it returns a
@@ -78,9 +78,9 @@ class PendingProposals(InternalModel):
     name appears here is a **provisional pass** (logged, not a finding): the
     Extractor proposed it this run and the framework will write it to the overlay at
     the acceptance point (ADR 0044), so the term becomes durably resolvable next run
-    and for ``cyberlab-gen validate``. Empty by default — with no proposals Layer 1
+    and for ``cyberlab-gen validate``. Empty by default — with no proposals static schema validation
     resolves strictly, exactly as before. ``value_types`` / ``execution_contexts``
-    are carried for forward-compatibility; Phase-1 Layer 1 has no reference check for
+    are carried for forward-compatibility; Phase-1 static schema validation has no reference check for
     them yet, so populating them is currently a no-op.
     """
 
@@ -91,7 +91,7 @@ class PendingProposals(InternalModel):
 
 
 class StaticSchemaCode(StrEnum):
-    """The kinds of structural violation Layer 1 can report (``validation.md §6.4``)."""
+    """The kinds of structural violation static schema validation can report (``validation.md §6.4``)."""
 
     SCHEMA_INVALID = "schema_invalid"
     SPEC_KIND_MISMATCH = "spec_kind_mismatch"
@@ -102,7 +102,7 @@ class StaticSchemaCode(StrEnum):
 
 
 class StaticSchemaFinding(InternalModel):
-    """One Layer-1 violation: a code, a field locator, and a human-readable detail.
+    """One static-schema violation: a code, a field locator, and a human-readable detail.
 
     ``location`` uses the JSONPath-like convention shared with ``GapEntry`` so a
     retry can target the offending field. ``InternalModel`` because the finding is
@@ -120,7 +120,7 @@ class StaticSchemaFinding(InternalModel):
 
 
 class StaticSchemaResult(InternalModel):
-    """The Layer-1 verdict: a pass/fail plus the findings list (``validation.md §6.9``)."""
+    """The static-schema verdict: a pass/fail plus the findings list (``validation.md §6.9``)."""
 
     passed: bool
     findings: list[StaticSchemaFinding] = Field(default_factory=list[StaticSchemaFinding])
@@ -131,7 +131,7 @@ class StaticSchemaResult(InternalModel):
 
 
 class StaticSchemaValidator:
-    """Runs Validator Layer 1 over an ``AttackSpec`` (``validation.md §6.4``).
+    """Runs the static schema validator over an ``AttackSpec`` (``validation.md §6.4``).
 
     Constructed with the merged registries (bundled + overlay) and, optionally,
     the closed bundled-only catalogs; the catalogs default to the bundled ones
@@ -161,7 +161,7 @@ class StaticSchemaValidator:
     ) -> StaticSchemaResult:
         """Validate ``spec`` and return a ``StaticSchemaResult``.
 
-        Runs the three Layer-1 checks in cost order: schema (cheapest, and a
+        Runs the three static-schema checks in cost order: schema (cheapest, and a
         schema failure short-circuits the rest because reference resolution would
         read malformed data), then the ``spec_kind`` discriminator, then registry
         reference resolution. Never raises on a *structural* problem — those are
@@ -186,7 +186,7 @@ class StaticSchemaValidator:
 
         passed = not findings
         if not passed:
-            logger.info("layer 1 failed with %d finding(s)", len(findings))
+            logger.info("static schema validation failed with %d finding(s)", len(findings))
         return StaticSchemaResult(passed=passed, findings=findings)
 
     # --- check 1: static schema -------------------------------------------
@@ -323,7 +323,7 @@ class StaticSchemaValidator:
         The enum already constrains the field at Pydantic-construction time; this
         check guards against *catalog/enum drift* (a value the enum admits but the
         bundled catalog omits) so the two stay in lockstep — a ``CATALOG_DRIFT``
-        finding here means a bundled catalog is stale, which Layer 1 surfaces
+        finding here means a bundled catalog is stale, which static schema validation surfaces
         rather than silently tolerating.
         """
         findings: list[StaticSchemaFinding] = []

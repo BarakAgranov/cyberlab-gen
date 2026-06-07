@@ -100,7 +100,7 @@ class ThesisBlock(ArtifactModel):
     """The attack's central thesis. schema.md §4.8.
 
     ``types`` is multi-valued and open-set (``ThesisType`` is registry-validated
-    at Layer 1, ADR 0016).
+    at static schema validation, ADR 0016).
     """
 
     types: list[ThesisType] = Field(min_length=1)

@@ -363,11 +363,11 @@ class ValidationError(CyberlabGenError):
     """A mechanical Validator layer halted the pipeline (``validation.md §6.4``).
 
     Pins ``stage='validation'``. Raised by the orchestrator
-    (``cyberlab_gen.framework.orchestrator``) when Validator Layer 1 reports
+    (``cyberlab_gen.framework.orchestrator``) when the static schema validator reports
     structural violations that the responsible agent could not resolve within its
     *structural-retry* budget (``validation.md §6.10``, ``architecture.md §1.7``).
 
-    Layer 1 failures route to the agent's **retry** mechanism, never to the
+    static schema validation failures route to the agent's **retry** mechanism, never to the
     refinement coordinator (``validation.md §6.10`` — the discipline this error
     enforces): when retry is exhausted the pipeline halts with this error rather
     than escalating to refinement. The unresolved findings are carried as

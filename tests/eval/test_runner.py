@@ -59,7 +59,7 @@ class _FakeExtractRunner:
 
 
 class _PassValidator:
-    """A duck-typed validator whose Layer-1 result always passes."""
+    """A duck-typed validator whose static-schema result always passes."""
 
     def validate(self, spec: object, *, pending: object = None) -> object:
         from types import SimpleNamespace
@@ -252,8 +252,8 @@ def test_scripted_records_flow_through_aggregates() -> None:
     target = manifest.curated[0].id
     scripted = {
         target: [
-            make_record(target, 0, layer1_passed=True),
-            make_record(target, 1, layer1_passed=False),
+            make_record(target, 0, static_schema_passed=True),
+            make_record(target, 1, static_schema_passed=False),
         ]
     }
     runner = FakeEvalRunner(scripted)
@@ -262,4 +262,4 @@ def test_scripted_records_flow_through_aggregates() -> None:
     )
     agg = report.aggregates[0]
     assert agg.blog_id == target
-    assert agg.layer1_pass_rate == 0.5
+    assert agg.static_schema_pass_rate == 0.5

@@ -2,10 +2,10 @@
 
 Covers the Task-6 exit criteria:
 
-- a Layer-1-invalid AttackSpec routes to the Extractor's *retry*, **not** the
+- a static-schema-invalid AttackSpec routes to the Extractor's *retry*, **not** the
   refinement coordinator (``validation.md §6.10``) — asserted by the call path:
   the Extractor is re-run on the same input feedback-kind=structural_retry, and
-  the Jury is *never* invoked while Layer 1 is red;
+  the Jury is *never* invoked while static schema validation is red;
 - a Jury ``revise`` triggers a bounded re-run that stops at the refinement cap and
   ships the last AttackSpec with ``low_jury_confidence=true`` and the unresolved
   feedback in the outcome (``pipeline.md §3.2.3`` (b));
@@ -240,8 +240,8 @@ async def test_run_pipeline_returns_outcome_for_clean_approve() -> None:
     assert any("example.com" in c for c in ext.calls)
 
 
-async def test_layer1_failure_routes_to_retry_not_refinement() -> None:
-    # The Extractor keeps producing a Layer-1-invalid spec (unknown facet). The
+async def test_static_schema_failure_routes_to_retry_not_refinement() -> None:
+    # The Extractor keeps producing a static-schema-invalid spec (unknown facet). The
     # orchestrator must re-run the EXTRACTOR (retry), never call the Jury
     # (refinement), and finally HALT with ValidationError on retry exhaustion.
     bad = _spec(facets=["target:bogus_unknown_cloud"])
@@ -262,8 +262,8 @@ async def test_layer1_failure_routes_to_retry_not_refinement() -> None:
     assert jury.calls == 0
 
 
-async def test_layer1_retry_then_recovers() -> None:
-    # First spec is Layer-1-invalid; the retry produces a valid one → proceeds.
+async def test_static_schema_retry_then_recovers() -> None:
+    # First spec is static-schema-invalid; the retry produces a valid one → proceeds.
     bad = _spec(facets=["target:bogus_unknown_cloud"])
     good = _spec(facets=["target:aws"])
     ext = _FakeExtractor([bad, good])
@@ -276,7 +276,7 @@ async def test_layer1_retry_then_recovers() -> None:
     assert jury.calls == 1
 
 
-async def test_layer1_exhaustion_raises_validation_error_via_run_pipeline() -> None:
+async def test_static_schema_exhaustion_raises_validation_error_via_run_pipeline() -> None:
     bad = _spec(facets=["target:bogus_unknown_cloud"])
     ext = _FakeExtractor([bad])
     jury = _FakeJury([_verdict(Verdict.APPROVE)])
@@ -288,14 +288,14 @@ async def test_layer1_exhaustion_raises_validation_error_via_run_pipeline() -> N
             validator=_validator(),
             jury=jury,  # type: ignore[arg-type]
         )
-    # the unresolved Layer-1 findings ride along for the run report
+    # the unresolved static-schema findings ride along for the run report
     assert exc_info.value.findings
     assert any("unknown_facet" in f for f in exc_info.value.findings)
     assert not isinstance(exc_info.value, JuryRejectionError)
 
 
 async def test_jury_revise_bounded_then_ships_low_confidence() -> None:
-    # The Jury always returns revise; the spec is always Layer-1-valid. The
+    # The Jury always returns revise; the spec is always static-schema-valid. The
     # refinement coordinator re-runs the Extractor up to the cap, then ships the
     # last spec with low_jury_confidence and the unresolved feedback.
     good = _spec(facets=["target:aws"])

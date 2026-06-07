@@ -1,6 +1,6 @@
-"""Tests for Validator Layer 1 (``validation.md §6.4``, ADR 0022).
+"""Tests for the static schema validator (``validation.md §6.4``, ADR 0022).
 
-Covers the Task-6 exit criteria for Layer 1:
+Covers the Task-6 exit criteria for static schema validation:
 - a structurally-valid AttackSpec with all references resolving → passes;
 - an unknown facet → ``UNKNOWN_FACET`` finding;
 - an unknown thesis type → ``UNKNOWN_THESIS_TYPE`` finding (closed catalog, ADR 0016);
@@ -8,7 +8,7 @@ Covers the Task-6 exit criteria for Layer 1:
 - the ``spec_kind`` discriminator is enforced;
 - the validator never mutates the spec.
 
-The orchestration test (``test_orchestrator.py``) asserts that a Layer-1 failure
+The orchestration test (``test_orchestrator.py``) asserts that a static-schema failure
 routes to the Extractor's *retry*, not refinement (``validation.md §6.10``); this
 file pins the layer's own behavior.
 """
@@ -155,7 +155,7 @@ def test_unknown_thesis_type_fails() -> None:
 def test_unknown_facet_with_pending_proposal_provisionally_passes() -> None:
     # The Wiz-run case: the facet isn't in the registry yet, but the Extractor
     # proposed it this run. Provisional resolution lets it pass so the proposal
-    # survives to the acceptance point (ADR 0044), rather than halting Layer 1.
+    # survives to the acceptance point (ADR 0044), rather than halting static schema validation.
     spec = _spec(facets=["target:aws_codebuild"])
     pending = PendingProposals(facets=frozenset({"target:aws_codebuild"}))
     result = _validator().validate(spec, pending=pending)

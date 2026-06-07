@@ -121,7 +121,7 @@ def test_stderr_progress_emits_one_line_per_event(capsys: pytest.CaptureFixture[
     err = captured.err
     assert "starting" in err
     assert "run 1/3" in err  # 1-based run counter
-    assert "verdict=" in err and "layer1=" in err
+    assert "verdict=" in err and "static_schema=" in err
     assert "SKIP c" in err and "synthetic fixture" in err
     assert "archived" in err and "gen0-x.yaml" in err
 

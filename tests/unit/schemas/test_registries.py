@@ -646,7 +646,7 @@ def test_bundled_empty_entries_is_valid() -> None:
 
 
 def test_bundled_rejects_proposals_block() -> None:
-    """A bundled file accidentally carrying overlay-only audit fails Layer 1."""
+    """A bundled file accidentally carrying overlay-only audit fails static schema validation."""
     with pytest.raises(ValidationError) as exc:
         BundledRegistryFile[ValueTypeEntry].model_validate({"entries": [], "proposals": {}})
     assert "proposals" in str(exc.value)

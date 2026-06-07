@@ -3,7 +3,7 @@
 Bundled files validate through ``BundledRegistryFile[E]``; overlay files
 through ``OverlayRegistryFile[E]``. The two are deliberately distinct
 shapes (``schema-details.md §6.6`` lines 1433-1434): a bundled file
-accidentally containing a ``proposals:`` block fails Layer 1 via
+accidentally containing a ``proposals:`` block fails static schema validation via
 ``extra='forbid'`` on the bundled shape, while overlay files require
 that block when they carry proposed entries. Sharing one shape would
 erase that structural guarantee.
@@ -199,7 +199,7 @@ def load_bundled_file[E: BaseModel](path: Path, entry_type: type[E]) -> BundledR
     """Load a bundled registry YAML and validate as ``BundledRegistryFile[E]``.
 
     Bundled files carry only ``entries:``. A ``proposals:`` block is
-    rejected by the inherited ``extra='forbid'`` (the Layer 1
+    rejected by the inherited ``extra='forbid'`` (the static schema validation
     structural guarantee). Missing files are a hard error.
     """
     if not path.exists():

@@ -61,7 +61,7 @@ NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 ThesisType = SnakeName
 """Open-set thesis-type name (snake_case). schema-details.md §2.3.
 
-Validated against the thesis-types catalog at Layer 1 rather than as a Pydantic
+Validated against the thesis-types catalog at static schema validation rather than as a Pydantic
 enum constraint, because the valid set depends on which registries are loaded
 (ADR 0016). Structurally it is just a ``SnakeName``.
 """
@@ -69,7 +69,7 @@ enum constraint, because the valid set depends on which registries are loaded
 ExternalDataSourceId = SnakeName
 """Open-set external-data-source id (snake_case). schema-details.md §2.3.
 
-Validated against the ``external_data_sources`` registry at Layer 1. Structurally
+Validated against the ``external_data_sources`` registry at static schema validation. Structurally
 just a ``SnakeName`` (e.g. ``nvd``, ``mitre_attack``).
 """
 

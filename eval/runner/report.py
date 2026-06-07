@@ -69,18 +69,18 @@ class EvalReport(ArtifactModel):
     #: pre-existing archived reports (which omit it) still load (ADR 0028).
     skipped: list[SkippedBlog] = Field(default_factory=list[SkippedBlog])
 
-    def overall_layer1_pass_rate(self) -> float:
-        """Layer-1 pass rate across every run in the report (``implementation-plan.md §4.5``)."""
+    def overall_static_schema_pass_rate(self) -> float:
+        """static-schema pass rate across every run in the report (``implementation-plan.md §4.5``)."""
         if not self.records:
             return 0.0
-        return sum(1 for r in self.records if r.layer1_passed) / len(self.records)
+        return sum(1 for r in self.records if r.static_schema_passed) / len(self.records)
 
     def blogs_with_valid_spec(self) -> int:
         """Count of blogs that shipped a valid AttackSpec in *every* run.
 
         The headline exit criterion (``implementation-plan.md §4.5``) is ">=4 of 5
         curated blogs produce a valid AttackSpec in N=3 runs"; a blog counts when
-        all its runs shipped and passed Layer 1.
+        all its runs shipped and passed static schema validation.
         """
         by_blog: dict[str, list[BlogRunRecord]] = {}
         for r in self.records:
@@ -88,7 +88,7 @@ class EvalReport(ArtifactModel):
         return sum(
             1
             for runs in by_blog.values()
-            if runs and all(r.shipped and r.layer1_passed for r in runs)
+            if runs and all(r.shipped and r.static_schema_passed for r in runs)
         )
 
     def total_cost_usd(self) -> Decimal:

@@ -8,7 +8,7 @@ These four catalogs (``detection_components``, ``severity_levels``,
 ``detection_formats``, ``provisioning_mechanisms``) are *not* runtime registries
 (``catalogs.py`` docstring): they never participate in the
 proposal lifecycle and are deliberately not part of ``MergedRegistries``. They
-are read on demand by specific consumers — Validator Layer 1 reads them for
+are read on demand by specific consumers — the static schema validator reads them for
 reference resolution / catalog-drift detection (``validation.md §6.4``), Layer 3
 reads ``ordinal``, the Generator reads ``validator_support``.
 

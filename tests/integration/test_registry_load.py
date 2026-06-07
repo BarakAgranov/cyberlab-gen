@@ -113,7 +113,7 @@ def test_registry_file_names_covers_seven_canonical_registries() -> None:
 
 
 def test_bundled_file_with_proposals_block_rejected(tmp_path: Path) -> None:
-    """A bundled file accidentally containing `proposals:` fails Layer 1.
+    """A bundled file accidentally containing `proposals:` fails static schema validation.
 
     The whole point of the separate ``BundledRegistryFile`` shape
     (``schema-details.md §6.6`` lines 1433-1434).

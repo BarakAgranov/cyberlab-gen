@@ -60,7 +60,7 @@ class StderrEvalProgress:
         cost_so_far: Decimal,
         cost_cap_usd: Decimal | None = None,
     ) -> None:
-        layer1 = "pass" if record.layer1_passed else "FAIL"
+        static_schema = "pass" if record.static_schema_passed else "FAIL"
         if cost_cap_usd is not None:
             spend = (
                 f"${cost_so_far:.4f}/${cost_cap_usd} (headroom ${cost_cap_usd - cost_so_far:.4f})"
@@ -69,7 +69,7 @@ class StderrEvalProgress:
             spend = f"${cost_so_far:.4f}"
         self._emit(
             f"      {record.blog_id} run {record.run_index + 1}/{n} done: "
-            f"verdict={record.verdict}, layer1={layer1}, "
+            f"verdict={record.verdict}, static_schema={static_schema}, "
             f"shipped={record.shipped}, cost so far {spend}"
         )
 

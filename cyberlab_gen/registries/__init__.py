@@ -5,7 +5,7 @@ per ``docs/schema.md §4.11``, with overlay-wins semantics. The loader
 validates bundled files through ``BundledRegistryFile[E]`` and overlay
 files through ``OverlayRegistryFile[E]`` so the structural guarantee
 (``schema-details.md §6.6``: a bundled file containing ``proposals:``
-fails Layer 1) is preserved.
+fails static schema validation) is preserved.
 
 Public surface re-exported here per the project's cross-subpackage
 import convention; intra-subpackage modules import from siblings

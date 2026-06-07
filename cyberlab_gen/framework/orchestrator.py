@@ -3,18 +3,18 @@
 Architectural source: ``pipeline.md §3.1`` (deterministic state machine, typed
 cross-stage boundaries, ``--auto`` / ``--interactive`` modes, headless
 rejection), ``pipeline.md §3.2.1`` through §3.2.4 (the stages), ``pipeline.md §3.3`` (the
-typed cross-stage contracts), ``validation.md §6.10`` (Layer-1 → retry, never
+typed cross-stage contracts), ``validation.md §6.10`` (static-schema → retry, never
 refinement), ``architecture.md §1.5`` (the orchestrator routes; agents never do),
 ``architecture.md §1.7`` (retry vs refinement), ADR 0023.
 
 The Phase-1 pipeline wires:
 
-    Ingestion → Extractor → Validator-Layer-1 → Extractor-Jury → enrichment
+    Ingestion → Extractor → Validator-static-schema → Extractor-Jury → enrichment
 
 as a LangGraph ``StateGraph`` over a single typed ``PipelineState`` channel. Two
 distinct failure mechanisms are encoded **explicitly** (ADR 0023):
 
-* **Layer-1 (structural) failures → the Extractor's *retry* mechanism.** A
+* **static-schema (structural) failures → the Extractor's *retry* mechanism.** A
   failing ``StaticSchemaResult`` re-runs the Extractor with the findings as structural
   feedback, bounded by a per-stage structural-retry budget
   (``DEFAULT_STRUCTURAL_RETRY_ATTEMPTS``). On exhaustion the pipeline **halts**
@@ -73,7 +73,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Total Extractor attempts on a Layer-1 (structural) failure, including the
+#: Total Extractor attempts on a static-schema (structural) failure, including the
 #: first. ``architecture.md §1.7``: retry budget is stage-local, default 3.
 DEFAULT_STRUCTURAL_RETRY_ATTEMPTS = 3
 
@@ -100,7 +100,7 @@ class RefinementFeedback(InternalModel):
     The ``UserFeedback``-like object ``pipeline.md §3.3`` requires: no free text
     crosses the stage boundary untyped — this typed object *is* the contract, and
     ``render`` produces its prompt rendering inside the Extractor stage. ``kind``
-    records whether the re-run is a structural retry (Layer-1 findings) or a
+    records whether the re-run is a structural retry (static-schema findings) or a
     quality refinement (Jury feedback) so the run report can distinguish them.
     """
 
@@ -111,7 +111,7 @@ class RefinementFeedback(InternalModel):
         """Render the feedback as the prompt addendum the Extractor re-run sees."""
         header = (
             "STRUCTURAL VALIDATION FAILURE — the previous AttackSpec failed Validator "
-            "Layer 1. Fix every item before resubmitting:"
+            "static schema validation. Fix every item before resubmitting:"
             if self.kind is FeedbackKind.STRUCTURAL_RETRY
             else (
                 "JURY REVISION REQUESTED — the previous AttackSpec was reviewed and needs "
@@ -152,7 +152,7 @@ class PipelineState(BaseModel):
     # in-flight artifacts (None until the producing node runs)
     extraction: ExtractionResult | None = None
     spec: AttackSpec | None = None
-    layer1: StaticSchemaResult | None = None
+    static_schema: StaticSchemaResult | None = None
     verdict: JuryVerdict | None = None
     enrichment: EnrichmentResult | None = None
 
@@ -242,7 +242,7 @@ class _JuryLike(Protocol):
 
 class _Node(StrEnum):
     EXTRACT = "extract"
-    VALIDATE = "validate_layer1"
+    VALIDATE = "validate_static_schema"
     JURY = "jury"
     ENRICH = "enrich"
 
@@ -313,7 +313,7 @@ def build_pipeline(
     the retry-vs-refinement-vs-halt routing (ADR 0023). Agents are captured here
     so ``PipelineState`` stays pure data.
 
-    ``structural_retry_attempts`` is the *total* Extractor attempts on Layer-1
+    ``structural_retry_attempts`` is the *total* Extractor attempts on static-schema
     failure (>=1). ``refinement_cap`` is the per-agent refinement-iteration cap on
     ``revise`` (>=0; 0 ships the first ``revise`` immediately as low-confidence).
 
@@ -344,31 +344,31 @@ def build_pipeline(
         return state
 
     def validate_node(state: PipelineState) -> PipelineState:
-        """Run Validator Layer 1 and decide the next destination (framework, never LLM).
+        """Run the static schema validator and decide the next destination (framework, never LLM).
 
         All routing bookkeeping happens here, in a *node*, because LangGraph
         discards mutations made inside conditional-edge functions (the edge below
-        is a pure reader of ``state.route``). The Layer-1 → *retry* discipline
+        is a pure reader of ``state.route``). The static-schema → *retry* discipline
         (``validation.md §6.10``) lives here: a failure re-runs the Extractor with
         structural feedback, never the refinement coordinator.
         """
         assert state.spec is not None  # extract_node always sets it
         # Provisional resolution (ADR 0044): a facet/thesis-type reference absent from
         # the registry but proposed by the Extractor this run is a provisional pass, so
-        # the proposal survives Layer 1 to the overlay-write acceptance point.
+        # the proposal survives static schema validation to the overlay-write acceptance point.
         pending = _pending_from_extraction(state.extraction)
-        state.layer1 = validator.validate(state.spec, pending=pending)
-        if state.layer1.passed:
+        state.static_schema = validator.validate(state.spec, pending=pending)
+        if state.static_schema.passed:
             state.route = _Node.JURY.value
             return state
         if state.structural_attempts < structural_retry_attempts:
             state.pending_feedback = RefinementFeedback(
                 kind=FeedbackKind.STRUCTURAL_RETRY,
-                items=state.layer1.rendered_findings(),
+                items=state.static_schema.rendered_findings(),
             )
             state.route = _Node.EXTRACT.value
             logger.info(
-                "layer 1 failed; routing to Extractor RETRY (attempt %d/%d)",
+                "static schema validation failed; routing to Extractor RETRY (attempt %d/%d)",
                 state.structural_attempts + 1,
                 structural_retry_attempts,
             )
@@ -376,8 +376,8 @@ def build_pipeline(
         # retry budget exhausted — halt, never escalate to refinement.
         state.status = PipelineStatus.HALTED_VALIDATION
         state.halt_reason = (
-            f"Validator Layer 1 still failing after {structural_retry_attempts} Extractor "
-            f"attempts: {'; '.join(state.layer1.rendered_findings())}"
+            f"Static schema validation still failing after {structural_retry_attempts} Extractor "
+            f"attempts: {'; '.join(state.static_schema.rendered_findings())}"
         )
         state.route = END
         return state
@@ -520,10 +520,10 @@ async def run_pipeline(
 
     The two halt paths both raise (no outcome is returned on a halt):
 
-    * **Layer-1 stays red past the structural-retry budget** → ``ValidationError``
-      carrying the unresolved Layer-1 findings (``validation.md §6.10``).
+    * **static-schema stays red past the structural-retry budget** → ``ValidationError``
+      carrying the unresolved static-schema findings (``validation.md §6.10``).
     * **Jury ``reject``** → ``JuryRejectionError`` (a ``ValidationError`` subclass
-      that carries no Layer-1 findings — a *quality* halt, ``pipeline.md §3.2.3``).
+      that carries no static-schema findings — a *quality* halt, ``pipeline.md §3.2.3``).
 
     The two ship paths return an outcome: a clean ``approve`` ships with
     ``low_jury_confidence=False``; a ``revise`` that exhausts the refinement cap
@@ -546,9 +546,11 @@ async def run_pipeline(
 def _finalize(state: PipelineState) -> PipelineOutcome:
     """Map a terminal ``PipelineState`` onto a ``PipelineOutcome`` (or raise on halt)."""
     if state.status is PipelineStatus.HALTED_VALIDATION:
-        findings = state.layer1.rendered_findings() if state.layer1 is not None else []
+        findings = (
+            state.static_schema.rendered_findings() if state.static_schema is not None else []
+        )
         raise ValidationError(
-            state.halt_reason or "Validator Layer 1 failed past the retry budget",
+            state.halt_reason or "Static schema validation failed past the retry budget",
             findings=findings,
         )
     if state.status is PipelineStatus.HALTED_REJECT:
@@ -573,9 +575,9 @@ def _finalize(state: PipelineState) -> PipelineOutcome:
 
 
 def _pending_from_extraction(extraction: ExtractionResult | None) -> PendingProposals:
-    """Build the Layer-1 provisional-resolution set from this run's proposals (ADR 0044).
+    """Build the static-schema provisional-resolution set from this run's proposals (ADR 0044).
 
-    A facet / value-type the Extractor proposed this run is carried so Layer 1
+    A facet / value-type the Extractor proposed this run is carried so static schema validation
     provisionally resolves a reference to it (the overlay write happens later, at the
     acceptance point). ``None`` extraction (first node not yet run) → empty set.
     """
@@ -606,7 +608,7 @@ class JuryRejectionError(ValidationError):
 
     ``pipeline.md §3.2.3``: a ``reject`` with a fundamental concern halts the
     pipeline. Subclasses ``ValidationError`` so callers that halt on any
-    structured-halt error catch both, but carries no Layer-1 ``findings`` (it is a
+    structured-halt error catch both, but carries no static-schema ``findings`` (it is a
     *quality* halt, not a structural one — ``architecture.md §1.7``). The
     ``stage`` is still reported as ``'validation'`` via the parent; the message
     names the jury as the source.

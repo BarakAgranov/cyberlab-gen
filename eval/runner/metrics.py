@@ -1,7 +1,7 @@
 """Phase-1 eval metrics: the per-run record, the completeness formula, aggregation.
 
 Architectural source: ``eval.md §7.4`` (mechanical metrics available in Phase 1 —
-Layer 1 pass rate, cost per AttackSpec, structural completeness, registry
+static schema validation pass rate, cost per AttackSpec, structural completeness, registry
 proposals issued, ``extras`` count) and ``eval.md §7.6`` (repeated runs reported
 with mean/median/variance). The completeness formula and the ``BlogRunRecord``
 shape are pinned in ADR 0025.
@@ -76,7 +76,7 @@ class BlogRunRecord(InternalModel):
     blog_id: str
     run_index: int = Field(ge=0)
     shipped: bool
-    layer1_passed: bool
+    static_schema_passed: bool
     cost_usd: Decimal = Decimal("0")
     completeness_score: float = Field(ge=0.0, le=1.0)
     structural_completeness: float = Field(ge=0.0, le=1.0)
@@ -89,7 +89,7 @@ class BlogRunRecord(InternalModel):
     #: For a failed run, the failure's scope (``None`` on a clean run):
     #: ``"retryable"`` (a persistent ``TransientFailure`` — timeout/429/5xx — a
     #: blip), ``"blog_fatal"`` (tied to this blog's content/size/URL: truncation,
-    #: malformed, jury/Layer-1 reject, bad URL — skips this blog, moves on), or
+    #: malformed, jury/static-schema reject, bad URL — skips this blog, moves on), or
     #: ``"global_fatal"`` (next blog fails identically: no served model, auth/quota/
     #: config — aborts the whole run). The harness routes on this (ADR 0030/0034).
     #: Archived reports may carry the older ``"non_retryable"`` value (loads fine).
@@ -123,8 +123,8 @@ class BlogAggregate(ArtifactModel):
     """Per-blog aggregate over the N runs (``eval.md §7.4`` / §7.6).
 
     Reports the spine metrics with mean/median and a high-variance flag (the CV of
-    structural completeness exceeds :data:`HIGH_VARIANCE_CV`). ``layer1_pass_rate``
-    is the share of runs whose AttackSpec passed Validator Layer 1
+    structural completeness exceeds :data:`HIGH_VARIANCE_CV`). ``static_schema_pass_rate``
+    is the share of runs whose AttackSpec passed the static schema validator
     (``implementation-plan.md §4.5`` headline criterion: >=95% on the curated set).
     """
 
@@ -133,7 +133,7 @@ class BlogAggregate(ArtifactModel):
     blog_id: str
     runs: int = Field(ge=0)
     shipped_count: int = Field(ge=0)
-    layer1_pass_rate: float = Field(ge=0.0, le=1.0)
+    static_schema_pass_rate: float = Field(ge=0.0, le=1.0)
     mean_cost_usd: Decimal
     mean_completeness_score: float = Field(ge=0.0, le=1.0)
     mean_structural_completeness: float = Field(ge=0.0, le=1.0)
@@ -156,7 +156,9 @@ class BlogAggregate(ArtifactModel):
             blog_id=blog_id,
             runs=n,
             shipped_count=sum(1 for r in runs if r.shipped),
-            layer1_pass_rate=(sum(1 for r in runs if r.layer1_passed) / n) if n else 0.0,
+            static_schema_pass_rate=(sum(1 for r in runs if r.static_schema_passed) / n)
+            if n
+            else 0.0,
             mean_cost_usd=mean_cost,
             mean_completeness_score=_mean([r.completeness_score for r in runs]),
             mean_structural_completeness=_mean(struct),

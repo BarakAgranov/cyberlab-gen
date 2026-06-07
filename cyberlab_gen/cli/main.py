@@ -222,7 +222,7 @@ def _build_extract_runner(
     The ``extract_runner_factory`` test seam (ADR 0024) lets the CLI tests supply
     a fake runner so the interrupt menus are driven without a live provider. In
     production the factory is ``None`` and this wires Ingestion + the agents +
-    Validator Layer 1 onto the orchestrator; the agents resolve a configured
+    the static schema validator onto the orchestrator; the agents resolve a configured
     provider and raise ``HardFailure`` (``provider-interface.md §6.3``) if none
     is configured.
 

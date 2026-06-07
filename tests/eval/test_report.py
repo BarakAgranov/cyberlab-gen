@@ -1,7 +1,7 @@
 """Tests for the archived eval report (``eval/reports/``, ADR 0025, ``eval.md §7.13``).
 
 Covers the round-trip (write → load equals), the archive filename + directory
-creation, and the exit-criterion helpers (overall Layer-1 pass rate; the
+creation, and the exit-criterion helpers (overall static-schema pass rate; the
 ">=4 of 5 valid-spec blogs" count from ``implementation-plan.md §4.5``).
 """
 
@@ -49,22 +49,22 @@ def test_archive_filename_carries_rotation_generation(tmp_path: Path) -> None:
     assert path.suffix == ".yaml"
 
 
-def test_overall_layer1_pass_rate_and_valid_spec_count() -> None:
+def test_overall_static_schema_pass_rate_and_valid_spec_count() -> None:
     manifest = load_manifest()
-    # 3 curated blogs: make the first blog fail Layer 1 on one of its 3 runs.
+    # 3 curated blogs: make the first blog fail static schema validation on one of its 3 runs.
     first = manifest.curated[0].id
     scripted = {
         first: [
-            make_record(first, 0, layer1_passed=True),
-            make_record(first, 1, layer1_passed=True),
-            make_record(first, 2, layer1_passed=False),
+            make_record(first, 0, static_schema_passed=True),
+            make_record(first, 1, static_schema_passed=True),
+            make_record(first, 2, static_schema_passed=False),
         ]
     }
     report = run_blog_set(
         manifest=manifest, runner=FakeEvalRunner(scripted), n=3, provider_backed=False
     )
-    # 9 runs total, 1 failed Layer 1 → 8/9.
-    assert abs(report.overall_layer1_pass_rate() - 8 / 9) < 1e-9
+    # 9 runs total, 1 failed static schema validation → 8/9.
+    assert abs(report.overall_static_schema_pass_rate() - 8 / 9) < 1e-9
     # the first blog had a failing run → not a clean valid-spec blog; the other 2 are.
     assert report.blogs_with_valid_spec() == len(manifest.curated) - 1
 

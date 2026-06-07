@@ -31,16 +31,16 @@ def test_in_scope_spec_scores_partial_completeness() -> None:
     assert abs(score - 2 / 7) < 1e-9
 
 
-def test_aggregate_layer1_pass_rate_and_means() -> None:
+def test_aggregate_static_schema_pass_rate_and_means() -> None:
     runs = [
-        make_record("b", 0, layer1_passed=True, cost="0.10", extras=1),
-        make_record("b", 1, layer1_passed=True, cost="0.20", extras=3),
-        make_record("b", 2, layer1_passed=False, cost="0.30", extras=2),
+        make_record("b", 0, static_schema_passed=True, cost="0.10", extras=1),
+        make_record("b", 1, static_schema_passed=True, cost="0.20", extras=3),
+        make_record("b", 2, static_schema_passed=False, cost="0.30", extras=2),
     ]
     agg = BlogAggregate.from_runs("b", runs)
     assert agg.runs == 3
     assert agg.shipped_count == 3
-    assert abs(agg.layer1_pass_rate - 2 / 3) < 1e-9
+    assert abs(agg.static_schema_pass_rate - 2 / 3) < 1e-9
     assert agg.mean_cost_usd == Decimal("0.20")
     assert agg.mean_extras_count == 2.0
 

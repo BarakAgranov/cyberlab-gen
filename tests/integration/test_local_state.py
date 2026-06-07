@@ -105,7 +105,7 @@ def test_load_config_rejects_unknown_field(tmp_path: Path) -> None:
     """``extra='forbid'`` (inherited from ``ArtifactModel``) rejects unknown keys.
 
     This is the right Phase-0 posture: a user editing ``config.yaml`` with
-    stray fields (e.g., ``provider_key: ...``) gets a clean Layer-1
+    stray fields (e.g., ``provider_key: ...``) gets a clean static-schema
     validation error rather than silent ignore. Phase 1+ adds fields as
     they are actually consumed.
     """
