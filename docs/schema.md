@@ -903,7 +903,7 @@ Deliberately out of scope for §4, deferred to companion docs or later sections:
 
 The lab manifest and AttackSpec are two distinct structured artifacts with distinct roles: AttackSpec mirrors the blog narrative (chain_steps), manifest describes the implementation (phases with steps inside). Both are versioned, both use the same provenance metadata pattern, both have escape hatches for unmodeled patterns.
 
-The system uses three first-class registries — `value_types`, `facets`, `external_data_sources` — all bundled with the distribution, all evolvable through PR workflow or LLM-proposed entries. Bundled-only catalogs (detection components, severity, formats, lab credentials) are closed in v1 and maintainer-curated. Validation is strict on structure, lenient on content with completeness as a quality signal.
+The system's runtime-proposable vocabulary registries — `value_types`, `facets`, `thesis_types`, `execution_contexts` — are bundled with the distribution and evolvable through PR workflow or LLM-proposed entries. `external_data_sources` is a separate catalog of tool adapters (queried at runtime / pre-Planner enrichment), evolved by maintainer PR only — adding a source needs adapter code, not just a registry row (§4.14, ADR 0055/0058). Bundled-only catalogs (detection components, severity, formats, lab credentials) are closed in v1 and maintainer-curated. Validation is strict on structure, lenient on content with completeness as a quality signal.
 
 Provenance is uniform: every content field carries source, citations, and confidence. The framework — not agents — authors enrichment-driven content (`source: external_api`), enforcing the §1.5 invariant that LLMs don't decide control flow.
 

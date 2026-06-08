@@ -1,16 +1,16 @@
-# Bundled MITRE ATT&CK technique catalog (read locally; not live-fetched).
-# Referenced by `static_catalogs` entry `mitre_attack_techniques`
-# (registry/static_catalogs.yaml -> entries_ref). Source: registry-details.md
-# §5.1 ("MITRE ATT&CK technique catalog ... read locally").
+# Bundled MITRE ATT&CK technique seed (read locally; not live-fetched).
+# Loaded by `load_mitre_techniques()` (cyberlab_gen/registries/loader.py) and consulted by
+# the pre-Planner enrichment pass. It is NOT a `static_catalogs` entry and there is no
+# `entries_ref` — it is a standalone bundled file of external-authority data. Source:
+# registry-details.md §5.1 ("MITRE ATT&CK technique catalog ... read locally").
 #
-# Phase 1 ships a *seed* subset of the ATT&CK Enterprise matrix — enough to
-# exercise the enrichment pass's local technique validation/enrichment (Task 4)
-# and the curated-blog walks. It grows by maintainer PR as the curated set
-# grows; it is NOT a live mirror of the full matrix.
+# Phase 1 ships a *seed* subset of the ATT&CK Enterprise matrix — enough to enrich the
+# technique ids it carries and exercise the curated-blog walks. It is NOT a live mirror and
+# NOT a membership gate: a well-formed id absent from this seed is left unverified, never
+# rejected (ADR 0055/0058). It grows by maintainer PR until a real MITRE adapter is wired.
 #
-# Each entry: name (the technique id, the closed key the enum-less catalog
-# validates against), display_name, tactic (one ATT&CK tactic the technique
-# belongs to), and a short description. `name` matches the MitreTechniqueId
+# Each entry: name (the technique id), display_name, tactic (one ATT&CK tactic the
+# technique belongs to), and a short description. `name` matches the MitreTechniqueId
 # pattern (T#### or T####.###).
 entries:
   - name: T1078

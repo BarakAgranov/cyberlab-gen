@@ -1,5 +1,13 @@
 # 0044 — The propose → approve → overlay-write → validate loop (provisional resolution)
 
+> **Generalized by [ADR 0055](0055-external-sources-are-tools-not-registries.md), implemented
+> by [ADR 0058](0058-implement-external-source-category-error-fixes.md).** The Decision's
+> "`external_data_sources` stays maintainer-PR-only … needs adapter code, not just a registry
+> row" clause is correct and upheld; ADR 0055 settles *why* (external sources are tool
+> adapters, not proposable vocabularies — a different axis from the propose→overlay loop),
+> and ADR 0058 stops the static-schema gate from resolving external-source ids as if they
+> were vocabularies the spec must resolve into.
+
 **Date:** 2026-06-07
 **Phase:** 1 (operational hardening — the Wiz-CodeBuild `--auto` halt)
 **Architecture refs:** `schema.md §4.16` (proposal lifecycle, overlay file shape,

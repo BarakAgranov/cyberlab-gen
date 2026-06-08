@@ -48,7 +48,7 @@ No single mechanism prevents a determined adversary from misusing the tool. The 
 
 ### 6.4 Layer 1: Static schema validation
 
-**What.** Validates the manifest and AttackSpec YAML against their JSON Schemas. Validates that every reference into a registry (value_types, facets, external_data_sources) resolves to an existing entry. Validates that registry-cross-references inside the manifest (e.g., `bind_inputs` types match phase output types) are consistent. Validates that `spec_kind` matches the expected type at the loading point: loading an AttackSpec where a Manifest is expected (or vice versa) fails loudly with structural error.
+**What.** Validates the manifest and AttackSpec YAML against their JSON Schemas. Validates that every reference into a controlled-vocabulary registry (value_types, facets, thesis_types) resolves to an existing entry. External-source ids (`advisory.source`, `cve.source_of_record`) are **not** resolved here — `external_data_sources` is a catalog of tool adapters queried at runtime/enrichment, not a vocabulary the spec resolves into (§4.14, ADR 0055/0058). Validates that registry-cross-references inside the manifest (e.g., `bind_inputs` types match phase output types) are consistent. Validates that `spec_kind` matches the expected type at the loading point: loading an AttackSpec where a Manifest is expected (or vice versa) fails loudly with structural error.
 
 **Inputs.** The manifest, the AttackSpec, the registry files (bundled + overlay merge).
 

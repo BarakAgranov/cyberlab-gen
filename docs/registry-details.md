@@ -1455,13 +1455,14 @@ The full set per `schema.md §4.14`. Each entry is specified concretely below.
   enrichment_triggers:
     - { field: "chain.chain_steps[*].techniques.mitre[*]", action: lookup, endpoint: lookup_technique }
   discrepancy_materiality_rules:
-    - { field_path: technique_id, classification: material, rule_description: "Hallucinated technique IDs fail validation." }
+    - { field_path: technique_id, classification: material, rule_description: "An authoritative source contradicting the technique mapping is material; a well-formed unverifiable id is left unverified, not failed (ADR 0055/0058)." }
     - { field_path: tactic, classification: material, rule_description: "Wrong tactic mapping breaks the kill-chain narrative." }
   cache: { ttl: P30D, scope: global }
   best_effort: false
   notes_for_extractor: |
-    The bundled MITRE reference (`registry/mitre-attack/`) is used at validation time;
-    this entry is for runtime lookup of technique details when MITRE refresh ships.
+    The bundled MITRE seed (`registry/mitre_attack_techniques.yaml`) is consulted by
+    enrichment, not used as a validation gate (ADR 0055/0058); this aspirational entry is
+    for runtime lookup of technique details once a real MITRE adapter ships.
 
 - id: osv_dev
   name: "OSV.dev"
@@ -2075,7 +2076,7 @@ Deliberately out of scope, deferred to other places:
 - **The full universe of value_types.** This is open-set on purpose. The seed represents what ships, not what the system will accumulate.
 - **The exact JSON Schemas of API response shapes** (e.g., `nvd_cve_response_v2`). These belong with the adapter implementation in `cyberlab_gen/external_data_sources/` and are not appropriate for a registry document.
 - **Layer 5 pattern rules beyond `lab_credentials`.** Real-credential pattern matching (the `AKIA...` regex applied to outputs, etc.) lives in `validator-rules.md` (planned).
-- **The MITRE ATT&CK technique catalog itself.** The bundled MITRE reference at `registry/mitre-attack/` is downloaded JSON, not authored content.
+- **The MITRE ATT&CK technique catalog itself.** The bundled MITRE seed at `registry/mitre_attack_techniques.yaml` is downloaded/reference data, not authored content.
 
 ---
 

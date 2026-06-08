@@ -2049,3 +2049,86 @@ source-wide grep confirms zero references to the removed symbol and `just verify
 `just verify` green (644 passed, 1 skipped). No validation-contract change.
 
 Next ADR number: **0058**.
+
+---
+
+## External-source / MITRE category-error fix batch (the NOW fixes — ADR 0055 → ADR 0058)
+
+Sign-off-gated batch implementing the ADR-0055 principle from
+`dev/investigations/0001-external-sources-and-convergence.md`. Goal: stop correct extraction
+from being hard-rejected so a real `--auto` extract can converge and ship. TDD, per-item commits,
+`just verify` green per commit, no tag, no eval run. **This touches the validation contract**
+(`validation.md §6.4`) — what counts as a blocking finding — and was proposed + signed off first.
+
+### Commit 1 — ungate `_check_mitre` (the dominant cost driver)
+
+- The 8-entry MITRE seed was a hard-reject membership gate flagging real, current ATT&CK ids
+  (T1195/T1199/T1593/…) as `mitre_hallucination` — ~⅔ of a real run's $7.40 and the model dropping
+  valid techniques. `_check_mitre` now mirrors `_check_cves`'s skip-when-unwired posture: no
+  membership gate, **no findings**, logs the unverified ids. Removed the dead `mitre_catalog`
+  constructor param + `load_mitre_techniques` import (no caller passed them). Prompt +
+  `external_lookup` tool description corrected (no MITRE/GitHub/packages lookup mandate; no
+  "rejected as hallucination" threat; cite blog-named technique ids).
+- **Correction to the findings doc:** well-formedness is owned by the `MitreTechniqueId` type at
+  AttackSpec construction, so there is NO regex re-check in `_check_mitre` (a malformed id can't
+  reach it); and there is NO soft "unverified finding" — every `_run_checks` finding is blocking,
+  so the unverified status is model-authored provenance (like a `_check_cves`-skipped CVE).
+- **Tests** (`test_extractor.py`): uncatalogued well-formed id passes (0 reprompts, technique
+  preserved); does not hard-fail even at 0 budget; malformed id raises at construction; the refine
+  R2 whole-spec re-check now demonstrated via the surviving search-before-claim check.
+
+### Commit 2 — remove `_check_external_sources` (items 2 + 3)
+
+- Both branches removed: `advisory.source` (a publisher label — the lone unconvergeable
+  ship-blocker) and `cve.source_of_record` (framework-authored by enrichment *after* the gate;
+  Extractor leaves it None). `UNKNOWN_EXTERNAL_SOURCE` retained, reserved for a deferred
+  post-enrichment check. Decisive fact: stage order is Extractor → static-schema → jury → enrich,
+  with no post-enrichment re-validation.
+- **advisory.source typing:** drop-from-check now, retype LATER (it stays `ExternalDataSourceId` =
+  `SnakeName`; nothing in Phase 1 reads it as a tool id). An inline NOTE + ADR 0058 guard against a
+  re-added check.
+- **Tests** (`test_static_schema_validator.py`): `source='aws'` ships; bogus `source_of_record`
+  ships; combined contract-pin test.
+
+### Commit 3 — neutralize enrichment's seed-gate (item 1b)
+
+- `_enrich_techniques` recorded an uncatalogued id as a "contradicting technique"
+  `MaterialDiscrepancy` (report-only/post-jury, but a false positive that would pollute the proof
+  run's report). Now records an honest **unverified `SkippedLookup`** instead; seed-listed ids
+  still enriched; CVE discrepancy handling unchanged.
+- **Test** (`test_enrichment.py`): uncatalogued id → no material discrepancy, an unverified skip.
+
+### Commit 4 — docs + ADRs (item 5)
+
+- De-conflated `external_data_sources` from the proposable-vocabulary framing: `validation.md §6.4`
+  (external-source ids not gate-resolved), `schema.md §4.16` summary (tool-adapter catalog,
+  maintainer-PR-only). Re-classed the MITRE seed as external-authority data: `loader.py` docstring,
+  the seed YAML header (removed the false `static_catalogs`/`entries_ref` claim), `registry-details.md`
+  (path `registry/mitre-attack/` → `registry/mitre_attack_techniques.yaml`; "fail validation" →
+  unverified), `pipeline.md §3.2.2` (MITRE no longer validated against a local list). Annotated ADR
+  0044 (the PR-only clause's reason is "needs adapter code", already correct) and ADR 0050
+  (external_data_sources isn't a proposal-authority registry on any axis). Recorded the
+  implementation as **ADR 0058**.
+- **The findings doc's line refs were partly stale** — schema.md's proposal-authority section was
+  already correct; only the §4.16 summary line and validation.md §6.4 survived. Edited against
+  actual text.
+
+### Reports / caveats folded in
+
+- **`run_pipeline` / `_finalize`:** vestigial, test-only, superseded by
+  `PipelineExtractRunner` + `_state_to_run_result` (production drives `build_pipeline` directly).
+  A locked surface (ADR 0023/0040) — **left in place** per the prior-batch decision; retiring it is
+  an amendment-ADR decision.
+- **Proof-run caveat (F1, acknowledged):** these fixes don't touch the `--auto` auto-accept
+  proposal cap (`DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP = 5`). This blog emits ~8 proposals, so `--auto`
+  may halt with `ProposalCapExceeded` (ADR 0044) — the cap, not a category-error regression. To
+  raise/bypass for the proof run: use `--interactive` (no cap) or raise the constant in
+  `cyberlab_gen/cli/extract.py`; there is no CLI flag today. The cap's real in-loop-steering fix is
+  ADR 0050's held consolidation work.
+- **Out of scope (held for the consolidation run, post-proof, to stay bisectable):** the real
+  adapter builds (NVD/MITRE/OSV), the `advisory.source` retype, the post-enrichment
+  `source_of_record` check, and A3/B1, C1, E1, B2.
+
+`just verify` green per commit (645 passed, 1 skipped). No eval run.
+
+Next ADR number: **0059**.

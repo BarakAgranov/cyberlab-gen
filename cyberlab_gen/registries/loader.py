@@ -183,12 +183,15 @@ def load_static_catalogs() -> StaticCatalogsRegistry:
 
 
 def load_mitre_techniques() -> MitreTechniqueCatalog:
-    """Load and validate the bundled MITRE ATT&CK technique catalog.
+    """Load and validate the bundled MITRE ATT&CK technique seed.
 
-    Read locally (``registry-details.md §5.1``), never live-fetched. Used by the
-    pre-Planner enrichment pass (Task 4, ADR 0020) to validate/enrich technique
-    references without a network call. Not part of ``MergedRegistries`` (read on
-    demand, like the closed catalogs of ADR 0016).
+    Read locally (``registry-details.md §5.1``), never live-fetched. A Phase-1 *stopgap*
+    seed of **external-authority** data — not a project-owned closed catalog like the
+    ADR-0016 enums, and not a live mirror. It enriches the technique ids it happens to
+    carry, but is **not** a membership gate: a well-formed uncatalogued id is left
+    unverified, never rejected (ADR 0055/0058). Not part of ``MergedRegistries`` (read on
+    demand). Wiring a real MITRE adapter (``lookup_by_id`` / ``lookup_by_description``) is
+    LATER work (findings doc 0001 §5).
     """
     return MitreTechniqueCatalog.model_validate(
         _read_yaml(bundled_registry_dir() / "mitre_attack_techniques.yaml")

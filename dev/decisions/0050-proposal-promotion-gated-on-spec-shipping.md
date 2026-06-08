@@ -1,5 +1,14 @@
 # 0050 — Proposal promotion to the global overlay is gated on the spec shipping
 
+> **Amended by [ADR 0055](0055-external-sources-are-tools-not-registries.md) / implemented by
+> [ADR 0058](0058-implement-external-source-category-error-fixes.md).** This ADR's
+> "Proposal authority by registry" framing does not apply to `external_data_sources` at all:
+> it is a tool-adapter catalog, not a proposal-authority registry on any axis. The flagged
+> drift in the Consequences ("the proposal-authority list still lists … external_data_sources")
+> is resolved by removing it from that conceptual list — `external_data_sources` is never
+> LLM-proposable (it needs adapter code). The promotion-on-ship gate for the *vocabulary*
+> registries (value_types / facets / thesis_types / execution_contexts) is unchanged.
+
 **Date:** 2026-06-07
 **Phase:** 1 (design-alignment / docs-revision pass)
 **Architecture refs:** `schema.md §4.16` (rewritten proposal lifecycle + per-run cap),
