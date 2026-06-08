@@ -48,14 +48,12 @@ from cyberlab_gen.providers.ranking import (
     load_model_rankings,
 )
 from cyberlab_gen.providers.retries import (
-    MALFORMED_OUTPUT_RETRIES,
     TRANSIENT_RETRIES,
     RetryStrategy,
 )
 
 __all__ = [
     "DEFAULT_CATASTROPHE_CEILING_USD",
-    "MALFORMED_OUTPUT_RETRIES",
     "TRANSIENT_RETRIES",
     "AgentLabel",
     "AnthropicProvider",

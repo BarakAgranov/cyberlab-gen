@@ -101,8 +101,8 @@ DEFAULT_MAX_TOKENS = 4096
 
 #: Provider-internal malformed-output retry budget (pydantic-ai ``retries={'output': N}``).
 #: This is the within-call re-prompt budget that ADR 0018 places *below* the call
-#: surface's stage-level structural retry; 2 matches the prior adapter
-#: (``MALFORMED_OUTPUT_RETRIES``).
+#: surface's stage-level structural retry (2: initial + 1 retry, to cap the worst-case
+#: call count for a persistently malformed stream).
 DEFAULT_OUTPUT_RETRIES = 2
 
 #: Transient HTTP status codes (429 + 5xx) the injected client retries; on

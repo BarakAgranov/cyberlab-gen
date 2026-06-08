@@ -2016,4 +2016,36 @@ now carries the emitted `static_schema` verdict; the `_PassValidator` test doubl
 
 `just verify` green (644 passed, 1 skipped). No validation-contract change.
 
+### #8 — remove dead code (conservative)
+
+**Removed.** `MALFORMED_OUTPUT_RETRIES` (`providers/retries.py`) — genuinely dead: the
+provider's malformed-output retry moved into the pydantic-ai layer
+(`AnthropicProvider.DEFAULT_OUTPUT_RETRIES`, ADR 0036), leaving this strategy with no
+functional consumer (only a docstring mention + a re-export). Dropped the definition, its
+`providers` re-export + `__all__` entry, and the stale historical reference in the provider
+docstring; refreshed the now-stale `retries.py` module/class docstrings (which still
+described a Phase-0 "scaffold raises NotImplementedError" world).
+
+**Left, with reason (load-bearing).**
+
+- **`run_pipeline` / `_finalize`** (`framework/orchestrator.py`) — the task flagged these as
+  dead, but they are the **ADR-0023-locked** public high-level driver, exercised by four
+  orchestrator tests, and ADR 0040 explicitly guarantees `run_pipeline` is untouched.
+  Removing them would change the locked surface (which needs design sign-off this batch
+  deliberately avoids) and break tests. Per "only remove what's genuinely unreferenced; if
+  load-bearing, leave it and note it" — **left in place, surfaced here**. If they should be
+  retired, that's a locked-surface decision (an ADR + sign-off), not a mechanical cleanup.
+- **`TRANSIENT_RETRIES` / `RetryStrategy`** — live: consumed by `framework/ingestion.py`
+  (the fetcher's transient-retry strategy) and a unit test. Kept.
+- **Retired tool-loop adapter body** — already gone (the pydantic-ai migration removed
+  `_extract_structured` and the manual tool_use/tool_result loop); the surviving
+  `complete_with_tools` + `ToolLoopError` are the *current* pydantic-ai path, not scar
+  tissue. The eval-side `toolu_`/`req_` 400 normalization (the remaining tool-loop scar)
+  was removed under #7.
+
+**Tests.** No new test (removing genuinely-unreferenced code is not a behavior change); a
+source-wide grep confirms zero references to the removed symbol and `just verify` is green.
+
+`just verify` green (644 passed, 1 skipped). No validation-contract change.
+
 Next ADR number: **0058**.
