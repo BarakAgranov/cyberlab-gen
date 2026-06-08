@@ -1772,3 +1772,80 @@ ADR 0054.
 - `just verify` green (ruff, ruff format, pyright strict 0 errors, 631 passed / 1 skipped). No tag.
 
 Next ADR number: **0055**.
+
+## Capture: external-sources investigation + ADR 0055 + pre-Phase-2 status — 2026-06-08
+
+Documentation-only capture of this session's two investigations (the interrupted `--auto`
+run on the Wiz CodeBuild blog; the "external sources are tools, not registries" analysis), so
+the findings survive into future sessions and the upcoming fix-prompts can reference repo
+documents instead of re-deriving. **No code, no validation-contract, no gate changed.**
+
+- **`dev/investigations/0001-external-sources-and-convergence.md` (new).** The grounded
+  findings: the run reconstructed from `checkpoint.sqlite` + Phoenix + `run.json`/`cost.yaml`
+  (structural-retry loop; `structural_attempts` 0→1→1→2→2; findings cleared 8→1; A1/jury never
+  exercised; bounded at cap-3, interrupted one extract before `HALTED_VALIDATION`; cost driver
+  `_check_mitre`, ≈⅔ of $7.40); the two category errors (① MITRE 8-entry hard-reject of real
+  ATT&CK ids incl. T1195/T1199; ② `advisory.source` validated against the `['nvd']` tool
+  catalog); the per-`_check_*` enumeration that narrows the hunt to **one** true mis-build plus
+  one adjacent case and clears the look-alikes; the graceful-vs-hard-fail asymmetry; NOW-vs-LATER
+  fixes; the doc/ADR cleanup list. `[V]`/`[I]` tagged throughout.
+- **`dev/decisions/0055-external-sources-are-tools-not-registries.md` (new ADR).** The settled
+  principle: P1 — `external_data_sources` are tool adapters (queried via `external_lookup` +
+  enrichment), not controlled vocabularies and not proposable; the agent never proposes them. P2
+  — an unverifiable-but-well-formed identifier never hard-fails (the `nvd` + `_check_cves`
+  graceful-skip path is the reference). Amends ADR 0044 and ADR 0050/E1's framing and the
+  MITRE-as-closed-catalog grouping. Implementation is pending and sign-off-gated (touches
+  `validation.md §6.4`).
+
+### Pre-Phase-2 status (consolidated; supersedes the scattered "queued" lists in the entries above)
+
+The canonical Phase-1 done-ness contract is `implementation-plan.md §4` (docs, architect-owned).
+This is the working-memory snapshot of the A1–G1 spine + comprehension-report L-items + the new
+category fixes, as of 2026-06-08.
+
+- **Phase-1 gate (NOT yet met):** a real `--auto` run **ships a good spec, converges, stays
+  cheap, and is persisted**. The Wiz CodeBuild run fails it today — didn't ship (one
+  unconvergeable finding), wasn't cheap ($7.40, ≈⅔ wasted on the MITRE gate). The category fixes
+  below are what move the gate.
+- **Done (code):** **A1** targeted-patch refinement (`9035884`, ADR 0054) · **A2**
+  `RefinementFeedback` typed contents (`f4dd0c8`, ADR 0048) · **L1** catastrophe ceiling on
+  billed failures (`142248c`, ADR 0047) · **L7** pollution/state cleanup · propose→overlay→
+  validate loop (ADR 0044) · `thesis_types` proposable (ADR 0045) · `static_schema` rename
+  (ADR 0046).
+- **Done (docs work-stream — design settled, code pending):** the A1–G1 design-alignment pass is
+  complete and committed — **E1** (ADR 0050), **A3/B1** (ADR 0051), **C1** (ADR 0052), **F1**
+  (doc note), **G1** (ADR 0053), **B2** (ADR 0049), plus the 7a/7c/7d orientation fixes.
+- **Designed (docs) but NOT yet coded:**
+  - **E1** — overlay-write-on-ship + mechanical dedup/overlap merge-check + bounded over-cap
+    steering (ADR 0050).
+  - **A3/B1** — move the mechanical checks into one orchestrator-owned stack; drop the duplicate
+    jury search-before-claim re-run; collapse the Extractor-internal hallucination budget
+    (ADR 0051).
+  - **C1** — run enrichment **before** the jury; re-run after a refinement patch; add the
+    `framework_enriched` provenance field; wire the provenance-structure + jury exemption
+    (ADR 0052).
+  - **F1** — eval reads the pipeline's **emitted** static-schema verdict instead of re-running the
+    validator; drop the retired adapter's `toolu_`/`req_` normalization.
+  - **G1 / L4 (persistence)** — the run store reads the checkpoint (or last-emitted state)
+    directly on every exit path; drop the second partial-run path (ADR 0053).
+  - **B2** — everyday $10 budget + refinement iteration caps + a **live** predictive
+    next-iteration estimate (the estimate is **hardwired to zero** in code today, so the
+    interrupt is inert); the $25 catastrophe ceiling already exists (ADR 0049/0047).
+- **Remaining code backlog (comprehension-report L-items + loose ends):** **L2**, **L3** (from
+  the whole-system comprehension report — not stored in-repo; see that report for scope) · the
+  **`_nvd_lookup` missing-`cve_id` branch** (`tools.py:257-262`, currently `is_error=True`) ·
+  the **structural-retry no-progress bail** (halt when a structural retry yields the same finding
+  set, or a known-non-agent-fixable finding, instead of spending to the cap — finding §5/⑥ of
+  investigation 0001; distinct from ADR 0032's eval-loop bail) · general **cleanup**.
+- **New (this investigation — ADR 0055, findings 0001):** the **MITRE ungate** (NOW: make
+  `_check_mitre` behave like `_check_cves`) and the **`advisory.source` category fix** (NOW: drop
+  it from `_check_external_sources`; retype off `ExternalDataSourceId`), plus `cve.source_of_record`
+  post-enrichment validation and the prompt's GitHub/packages over-promise. LATER: real
+  `external_data_sources/<id>/` adapters (NVD client; MITRE ATT&CK with `lookup_by_id` +
+  `lookup_by_description`; OSV). Sign-off-gated (touches the validation contract).
+- **Deferred:** **D1/D2** (provenance side-map / chunked emit — not needed; A1 works with inline
+  provenance, ADR 0048).
+
+`just verify` green (documentation only — new/edited `dev/*.md`; no `cyberlab_gen/` change).
+
+Next ADR number: **0056**.
