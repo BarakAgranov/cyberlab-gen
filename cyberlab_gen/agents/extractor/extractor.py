@@ -71,23 +71,26 @@ DEFAULT_HALLUCINATION_RETRY_ATTEMPTS = 2
 #: Tool-use loop depth for one Extractor pass (``provider-interface.md §4.1``).
 DEFAULT_MAX_TOOL_ITERATIONS = 12
 
-#: Output-token budget for the AttackSpec emit (ADR 0032). The Extractor emits the
-#: *entire* AttackSpec as one tool call; the provider default (``DEFAULT_MAX_TOKENS``
-#: = 4096) truncates it mid-emit on any non-trivial chain — the bug ADR 0032
-#: diagnosed (alternating ``extraction_metadata``/``chain`` validation failures from a
-#: cut-off emit). The model ceiling for ``claude-opus-4-8`` is 128K output tokens, but
-#: the provider call is **non-streaming**, and the Anthropic SDK refuses a
-#: non-streaming request whose estimated time exceeds 10 minutes — i.e. ``max_tokens``
-#: above ``600/3600 * 128000 ≈ 21_333`` raises ``ValueError``
-#: (``anthropic._base_client._calculate_nonstreaming_timeout``). 16384 is 4x the old
-#: default and sits comfortably below that non-streaming ceiling with margin under the
-#: 10-minute wall. It covers a realistic richly-populated spec but **cannot** bound an
-#: arbitrarily long chain (``chain_steps`` has no schema maximum); reaching toward the
-#: model's true 128K ceiling, or handling specs that exceed any fixed cap, requires
-#: converting the tool loop to streaming + a chunked/continuation emit — neither
-#: exists yet (the long-blog risk is flagged but unhandled, ``implementation-plan.md
-#: §4.6``).
-DEFAULT_EXTRACTOR_MAX_TOKENS = 16384
+#: Output-token budget for the AttackSpec emit (ADR 0032, recalibrated by
+#: ``dev/investigations/0002``). The Extractor emits the *entire* AttackSpec as one tool
+#: call; the provider default (``DEFAULT_MAX_TOKENS`` = 4096) truncates it mid-emit on any
+#: non-trivial chain — the bug ADR 0032 diagnosed. The model ceiling for
+#: ``claude-opus-4-8`` is 128K output tokens, but the provider call is **non-streaming**,
+#: and the Anthropic SDK refuses a non-streaming request whose estimated time exceeds 10
+#: minutes — i.e. ``max_tokens`` above ``600/3600 * 128000 ≈ 21_333`` raises ``ValueError``
+#: (``anthropic._base_client._calculate_nonstreaming_timeout``).
+#:
+#: **Recalibration (investigation 0002).** ADR 0032's original note — "16384 covers a
+#: realistically rich spec with margin; a measured 9-step spec serialises to ~12K output
+#: tokens" — was **falsified** by a real Sysdig run: an 8-step spec serialised to ~16K
+#: output tokens and truncated at the 16384 ceiling. 20000 gives the dense tail ~30%
+#: headroom while staying below the ~21_333 non-streaming wall. This is a **stopgap, not
+#: the truncation class-fix**: a spec above ~20K still truncates with no recourse
+#: (``chain_steps`` has no schema maximum). Closing the class requires converting the tool
+#: loop to streaming (which removes the non-streaming wall) + a sectioned/continuation
+#: emit — the deferred D1/D2 work, neither of which exists yet (``implementation-plan.md
+#: §4.6``; investigation 0002 §5).
+DEFAULT_EXTRACTOR_MAX_TOKENS = 20000
 
 
 class CheckFinding(InternalModel):

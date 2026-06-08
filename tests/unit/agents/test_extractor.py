@@ -249,8 +249,12 @@ async def test_extractor_requests_a_generous_output_budget() -> None:
     _register(provider, _spec())
     await _extractor(provider).extract(blog_content="blog", source_summary="url=...")
     assert provider.last_max_tokens == DEFAULT_EXTRACTOR_MAX_TOKENS
-    assert DEFAULT_EXTRACTOR_MAX_TOKENS == 16384  # generous (4x the 4096 default)
-    assert DEFAULT_EXTRACTOR_MAX_TOKENS <= 21333  # safe on the non-streaming call path
+    # Raised 16384 -> 20000 (investigation 0002): ADR 0032's calibration ("16384 covers a
+    # rich spec with margin; a 9-step spec ~12K") was falsified by a ~16K/8-step spec that
+    # truncated. 20000 gives the dense tail ~30% headroom; it is a stopgap, NOT the
+    # truncation class-fix (streaming is — specs >~20K still truncate).
+    assert DEFAULT_EXTRACTOR_MAX_TOKENS == 20000
+    assert DEFAULT_EXTRACTOR_MAX_TOKENS <= 21333  # still below the non-streaming SDK wall
 
 
 async def test_extractor_output_budget_is_configurable() -> None:
