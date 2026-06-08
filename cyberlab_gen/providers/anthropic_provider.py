@@ -57,7 +57,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider as PydAnthropicProvider
 from pydantic_ai.tools import Tool
 from pydantic_ai.usage import UsageLimits
@@ -212,7 +212,7 @@ class AnthropicProvider(Provider):
             instructions=instructions or None,
             tools=pyd_tools,
             retries={"output": self._output_retries},
-            model_settings={"max_tokens": max_tokens or DEFAULT_MAX_TOKENS},
+            model_settings=self._model_settings(max_tokens),
         )
         usage_limits = UsageLimits(request_limit=request_limit) if request_limit else None
 
@@ -280,6 +280,34 @@ class AnthropicProvider(Provider):
         )
 
     # --- model + pricing --------------------------------------------------
+
+    def _model_settings(self, max_tokens: int | None) -> AnthropicModelSettings:
+        """Per-request settings: the output cap + Anthropic prompt caching on the static prefix.
+
+        Caching (ADR 0059). Every model-request in a run re-sends a byte-identical static
+        prefix — the schema-heavy system prompt and the tool-definition JSON do not change
+        within a call, and the blog/metadata are constant across the structural re-extraction.
+        Marking them with ``cache_control`` lets requests after the first read that prefix from
+        Anthropic's cache (5-minute TTL) instead of re-billing the full ~41K base, roughly
+        halving re-extraction input cost (investigation 0002 §3):
+
+        - ``anthropic_cache_instructions`` — the system prompt / schema (the dominant share).
+        - ``anthropic_cache_tool_definitions`` — the tool JSON schemas (inert when no tools).
+        - ``anthropic_cache_messages`` — the last message block (covers the metadata+blog
+          prefix within a tool loop / output-retry burst).
+
+        Three of Anthropic's four cache breakpoints; the auto ``anthropic_cache`` is left off,
+        so there is no conflict. The ``Provider`` ABC signature is unchanged — this is an
+        internal request-configuration change whose only external effect is non-zero
+        cache_read/cache_write in the ledger (already priced by ``compute_cost`` and carried by
+        the usage path).
+        """
+        return AnthropicModelSettings(
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
+            anthropic_cache_instructions=True,
+            anthropic_cache_tool_definitions=True,
+            anthropic_cache_messages=True,
+        )
 
     def _resolve_model(self, capability: CapabilityHint) -> str:
         """Resolve a capability to the first ``anthropic`` model id in the rankings.

@@ -157,6 +157,50 @@ async def test_complete_reads_cache_tokens_into_usage() -> None:
     assert resp.usage.cache_write_tokens == 10
 
 
+async def test_static_prefix_caching_is_enabled_in_model_settings() -> None:
+    # B-i / ADR 0059: prompt caching is wired on the static prefix so repeated requests
+    # within a run read the schema-heavy system prompt + tool defs + blog from cache instead
+    # of re-billing the full ~41K base (investigation 0002 §3). With an injected model the
+    # flags are inert; asserting they are SET is the deterministic check — the live
+    # AnthropicModel applies the cache_control headers, and cache-token cost is pinned by
+    # test_cost_ledger::test_compute_cost_with_cache_read_and_write.
+    seen: dict[str, object] = {}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.update(info.model_settings or {})
+        return _emit_ok(messages, info)
+
+    await _complete(_provider(fn))
+    assert seen.get("anthropic_cache_instructions") is True
+    assert seen.get("anthropic_cache_tool_definitions") is True
+    assert seen.get("anthropic_cache_messages") is True
+    assert seen.get("max_tokens") == 4096  # the existing output cap is still carried
+
+
+async def test_cache_reads_surface_on_requests_after_the_first() -> None:
+    # A multi-request _invoke: the first request writes cache, a later one reads it. The usage
+    # plumbing must surface the cache tokens the provider reports — the win caching unlocks
+    # (these were always zero while caching was unwired; investigation 0002 §1/§3).
+    calls = {"n": 0}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls["n"] += 1
+        name = _output_tool(info)
+        if calls["n"] == 1:  # first request writes the cache, then a malformed re-prompt
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name=name, args={"nope": 1})],
+                usage=RequestUsage(input_tokens=100, output_tokens=50, cache_write_tokens=80),
+            )
+        return ModelResponse(  # second request reads the cached prefix
+            parts=[ToolCallPart(tool_name=name, args={"greeting": "h", "audience": "w"})],
+            usage=RequestUsage(input_tokens=20, output_tokens=50, cache_read_tokens=80),
+        )
+
+    resp = await _complete(_provider(fn, output_retries=1))
+    assert resp.usage.cache_read_tokens == 80  # surfaced from the 2nd request
+    assert resp.usage.cache_write_tokens == 80  # from the 1st
+
+
 async def test_max_tokens_is_passed_through_to_the_model() -> None:
     seen: dict[str, object] = {}
 
