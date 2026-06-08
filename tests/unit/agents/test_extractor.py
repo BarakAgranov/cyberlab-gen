@@ -257,6 +257,22 @@ async def test_extractor_requests_a_generous_output_budget() -> None:
     assert DEFAULT_EXTRACTOR_MAX_TOKENS <= 21333  # still below the non-streaming SDK wall
 
 
+def test_prompt_steers_first_pass_proposals_for_unknown_vocabulary() -> None:
+    # B-ii (investigation 0002 §6): the Extractor must propose unknown vocabulary on the
+    # FIRST pass rather than wait for a structural-validation rejection that forces a
+    # costlier full re-extraction (the truncation-prone second emit). All three propose_*
+    # tools must be documented — including propose_thesis_type (ADR 0045), which the prompt
+    # previously omitted even though 4 of the real run's 13 findings were unknown_thesis_type.
+    from cyberlab_gen.agents.prompts import load_prompt
+
+    prompt = load_prompt("extractor").lower()
+    assert "propose_value_type" in prompt
+    assert "propose_facet" in prompt
+    assert "propose_thesis_type" in prompt
+    assert "first pass" in prompt  # the proactive steering
+    assert "do not wait" in prompt  # ...don't wait for a rejection
+
+
 async def test_extractor_output_budget_is_configurable() -> None:
     provider = MockProvider()
     _register(provider, _spec())

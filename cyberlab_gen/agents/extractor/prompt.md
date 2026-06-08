@@ -88,9 +88,27 @@ this phase, so do not try to look them up. Instead:
 - `propose_facet(...)` — only for `target:*` or blog-derived
   `lab_class_signal:*` facets. `runtime:*` and lab-derived facets are the
   Planner's authority and will be rejected here.
+- `propose_thesis_type(...)` — when the blog's attack pattern needs a `thesis.types`
+  entry that no standard `thesis_types` term captures (a coined or niche class the blog
+  introduces). Propose the new type rather than forcing an ill-fitting existing one.
 
 You cannot read the filesystem, execute code, or fetch URLs except through these
 tools.
+
+## Propose unknown vocabulary on the first pass
+
+You do **not** see the registries, and a `facets` entry, a `thesis.types` entry, or a
+value type that isn't registered is **rejected by structural validation** — which forces
+a full, costlier re-extraction. So when you introduce a vocabulary term that is specific
+to this blog and is **not** an obviously-standard, widely-used term — a coined or niche
+`thesis.types` (e.g. a named technique class the blog introduces), a `target:*` facet for
+a specific technology or service, or a value type with no clear standard match — call the
+matching `propose_*` tool **on this pass, as you write the field**. Do not wait for a
+rejection to tell you the term is unknown.
+
+Proposing a term that already exists is harmless (the framework de-duplicates); failing to
+propose a genuinely new term costs a whole re-extraction. When in doubt for a blog-specific
+term, propose it now.
 
 ## Per-step reproducibility (emergent lab class)
 
