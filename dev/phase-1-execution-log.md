@@ -1943,4 +1943,24 @@ conservatively (4× the cap) and recorded in ADR 0056 rather than invented silen
 
 `just verify` green (642 passed, 1 skipped). No validation-contract change.
 
+### #5 — the nvd missing-`cve_id` branch is now graceful, not fatal (ADR 0042)
+
+**The bug.** `tools.py::_nvd_lookup` returned `is_error=True` ("external_lookup against nvd
+requires params.cve_id") for a missing/blank `cve_id` — the one un-neutralized fatal tool
+branch after ADR 0042 made the others graceful. The provider turns `is_error` into a
+pydantic-ai `ModelRetry`, but re-firing the same call cannot supply the param the model
+fumbled, so it exhausts the tool-retry budget and escalates to a fatal `ToolRetryError`
+that kills the whole extraction. The Wiz run hit exactly this.
+
+**The fix.** The branch now records a not-found `ExternalLookupRecord` and returns
+`is_error=False` with a message steering the model to set the field to `unknown_from_blog`
+(requires external research) and continue — mirroring the unavailable-source and
+no-client graceful paths.
+
+**Tests.** A missing `params` dict and a present-but-blank (whitespace) `cve_id` both return
+a non-error result and record a not-found lookup — proven WITH an NVD client wired so the
+fix doesn't rely on the no-client degrade path.
+
+`just verify` green (644 passed, 1 skipped). No validation-contract change.
+
 Next ADR number: **0057**.

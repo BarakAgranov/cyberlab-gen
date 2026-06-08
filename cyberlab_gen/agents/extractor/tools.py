@@ -255,11 +255,24 @@ class ExtractorToolExecutor:
     def _nvd_lookup(self, call: ToolCall, params: dict[str, Any]) -> ToolResult:
         cve_id = str(params.get("cve_id", "")).strip()
         if not cve_id:
-            return ToolResult(
-                call_id=call.call_id,
-                content="external_lookup against nvd requires params.cve_id",
-                is_error=True,
+            # A missing/blank cve_id is the last un-neutralized fatal tool branch after
+            # ADR 0042. Make it behave like the rest: NOT an error result. The provider
+            # turns is_error into a pydantic-ai ModelRetry, but re-firing the same call
+            # cannot supply the param the model fumbled — it just exhausts the tool-retry
+            # budget and escalates to a fatal ToolRetryError that kills the whole
+            # extraction (the Wiz run hit exactly this). Record a not-found lookup and steer
+            # the model to mark the field unknown and continue.
+            detail = (
+                "external_lookup against nvd needs a cve_id and none was supplied; couldn't "
+                "look it up — set the field to unknown_from_blog (requires external research) "
+                "and continue (do not retry this call without a cve_id)"
             )
+            self.lookups.append(
+                ExternalLookupRecord(
+                    source_id=_NVD_SOURCE_ID, params=params, found=False, detail=detail
+                )
+            )
+            return ToolResult(call_id=call.call_id, content=detail, is_error=False)
         if self._nvd_client is None:
             detail = (
                 "nvd lookup unavailable (no client wired); record as requires external research"

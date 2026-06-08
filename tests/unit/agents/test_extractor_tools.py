@@ -108,6 +108,35 @@ async def test_external_lookup_unavailable_source_is_graceful_not_fatal() -> Non
     assert ex.lookups[0].found is False
 
 
+async def test_nvd_lookup_missing_cve_id_is_graceful_not_fatal() -> None:
+    # A fumbled/missing cve_id param must NOT be a fatal tool error (ADR 0042): the provider
+    # turns is_error into a pydantic-ai ModelRetry, and a missing param can't be fixed by
+    # retrying the same call, so it would exhaust the tool-retry budget and kill the whole
+    # extraction (the Wiz run hit exactly this). It is recorded as a not-found lookup, with
+    # the model steered to mark the field unknown, so the loop continues. Proven WITH an NVD
+    # client wired so it does not rely on the no-client degrade path.
+    ex = _executor(_FakeNvd({"CVE-2024-0001": NvdCveData(cve_id="CVE-2024-0001", cvss_score=7.5)}))
+    result = await ex.execute(_call(TOOL_EXTERNAL_LOOKUP, {"source_id": "nvd", "params": {}}))
+
+    assert not result.is_error
+    assert len(ex.lookups) == 1
+    assert ex.lookups[0].source_id == "nvd"
+    assert ex.lookups[0].found is False
+    # steers the model to mark the field unknown rather than re-fire a doomed lookup
+    content = result.content.lower()
+    assert "external research" in content or "unknown_from_blog" in content
+
+
+async def test_nvd_lookup_blank_cve_id_is_graceful_not_fatal() -> None:
+    # A present-but-blank cve_id (whitespace) is the same fumble — graceful, not fatal.
+    ex = _executor(_FakeNvd({}))
+    result = await ex.execute(
+        _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "nvd", "params": {"cve_id": "   "}})
+    )
+    assert not result.is_error
+    assert ex.lookups[0].found is False
+
+
 async def test_propose_value_type_collected() -> None:
     ex = _executor()
     result = await ex.execute(
