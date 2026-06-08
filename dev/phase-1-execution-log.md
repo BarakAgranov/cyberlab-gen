@@ -1914,4 +1914,33 @@ takes the retry and ships).
 
 `just verify` green (639 passed, 1 skipped). No validation-contract change.
 
-Next ADR number: **0056**.
+### #4 — global iteration cap + LangGraph recursion_limit backstop (L3, ADR 0056)
+
+**The bug.** Per-node caps bounded structural retry and refinement, but nothing bounded
+total pipeline iterations end-to-end, and LangGraph's `recursion_limit` was unset (library
+default 25). The documented "Total iteration cap (default 20)" (`architecture.md §6`) was
+not enforced.
+
+**The fix (two bounds, two units — see ADR 0056).** `GLOBAL_ITERATION_CAP = 20` (Extractor
+runs) — a new `PipelineState.total_iterations` bumps on every `extract_node` entry, and
+each re-routing node (`validate_node` structural branch, `jury_node` refinement branch)
+halts cleanly as `HALTED_VALIDATION` before starting a run past the cap. Plumbed as a
+`build_pipeline(global_iteration_cap=…)` param. `GRAPH_RECURSION_LIMIT = 4 ×
+GLOBAL_ITERATION_CAP = 80` (super-steps) is set in the `RunnableConfig` on every `ainvoke`
+as the final graph-level backstop — sized above the cap's worst-case super-steps so the
+clean semantic halt always binds first, leaving `recursion_limit` to catch only a genuine
+routing loop (raising `GraphRecursionError`).
+
+**Tests.** A pathological structural loop with `structural_retry_attempts=100` halts at the
+global cap (20 runs) — which also implies `recursion_limit` exceeds the cap's super-steps
+(a clean halt fires, not a `GraphRecursionError`); the `recursion_limit` constant is pinned
+at `4 × GLOBAL_ITERATION_CAP`; with both app caps disabled a runaway loop raises
+`GraphRecursionError`.
+
+**Doc note (surfaced, not diverged).** `architecture.md §6` documents the cap value (20)
+but not a `recursion_limit`; its exact super-step value is an implementation choice, made
+conservatively (4× the cap) and recorded in ADR 0056 rather than invented silently.
+
+`just verify` green (642 passed, 1 skipped). No validation-contract change.
+
+Next ADR number: **0057**.

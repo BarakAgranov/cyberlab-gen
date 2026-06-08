@@ -87,6 +87,22 @@ DEFAULT_STRUCTURAL_RETRY_ATTEMPTS = 3
 #: brief pins 3 for the minimal Phase-1 coordinator.
 DEFAULT_REFINEMENT_CAP = 3
 
+#: Total Extractor runs across the whole pipeline (structural retries + refinements +
+#: the first run). ``architecture.md §6`` "Total iteration cap (default 20)" — the
+#: end-to-end bound that binds regardless of the per-node caps. With the default per-node
+#: caps the realistic maximum is ~6 runs, so this is a backstop for raised/buggy per-node
+#: budgets and routing pathologies, enforced as a clean ``HALTED_VALIDATION`` (L3, ADR 0056).
+GLOBAL_ITERATION_CAP = 20
+
+#: The LangGraph ``recursion_limit`` (a super-step bound), set as the final graph-level
+#: backstop so the whole graph is bounded even if the application caps are mis-set. Each
+#: iteration costs at most 3 super-steps (extract → validate → jury) before the next run
+#: or a terminal node, so ``GLOBAL_ITERATION_CAP`` iterations consume well under
+#: ``4 * GLOBAL_ITERATION_CAP`` super-steps — sized so the *semantic* cap (which halts
+#: cleanly with a clear reason) always binds first in a legitimate run, leaving this to
+#: catch only a genuine routing loop. ADR 0056.
+GRAPH_RECURSION_LIMIT = 4 * GLOBAL_ITERATION_CAP
+
 
 # --- cross-stage feedback contract (pipeline.md §3.3) ----------------------
 
@@ -207,6 +223,9 @@ class PipelineState(BaseModel):
     # routing counters
     structural_attempts: int = 0
     refinement_iterations: int = 0
+    # total Extractor runs across the whole pipeline (structural + refinement + first);
+    # bounded by the global iteration cap (``architecture.md §6``, L3).
+    total_iterations: int = 0
 
     # accumulated feedback for the next re-run (cleared after the re-run consumes)
     pending_feedback: RefinementFeedback | None = None
@@ -357,6 +376,7 @@ def build_pipeline(
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
+    global_iteration_cap: int = GLOBAL_ITERATION_CAP,
     # ``BaseCheckpointSaver`` is generic over its version type; we hold any concrete
     # saver opaquely (we only pass it to ``graph.compile``), hence ``Any``.
     checkpointer: BaseCheckpointSaver[Any] | None = None,
@@ -385,7 +405,26 @@ def build_pipeline(
         raise ValueError("structural_retry_attempts must be >= 1")
     if refinement_cap < 0:
         raise ValueError("refinement_cap must be >= 0")
+    if global_iteration_cap < 1:
+        raise ValueError("global_iteration_cap must be >= 1")
     enrich_cfg = enrichment_config
+
+    def _global_cap_reached(state: PipelineState) -> bool:
+        """True when the run has used its whole end-to-end iteration budget (L3)."""
+        return state.total_iterations >= global_iteration_cap
+
+    def _halt_global_cap(state: PipelineState) -> PipelineState:
+        """Halt the pipeline cleanly at the global iteration cap (``architecture.md §6``)."""
+        state.status = PipelineStatus.HALTED_VALIDATION
+        state.halt_reason = (
+            f"Global iteration cap of {global_iteration_cap} reached "
+            f"({state.total_iterations} total Extractor runs); halting to bound the pipeline."
+        )
+        state.route = END
+        logger.warning(
+            "global iteration cap of %d reached; halting (HALTED_VALIDATION)", global_iteration_cap
+        )
+        return state
 
     async def extract_node(state: PipelineState) -> PipelineState:
         """Run (or re-run) the Extractor: full extract, structural retry, or targeted patch.
@@ -400,6 +439,9 @@ def build_pipeline(
           targeted ``refine``: the structured field-level feedback drives a patch of only
           the flagged paths, convergent by construction.
         """
+        # Every Extractor run — first, structural retry, or refinement — is one global
+        # iteration; the cap on this counter bounds the whole pipeline end-to-end (L3).
+        state.total_iterations += 1
         pending = state.pending_feedback
         is_refinement = (
             pending is not None
@@ -452,6 +494,10 @@ def build_pipeline(
             state.route = _Node.JURY.value
             return state
         if state.structural_attempts < structural_retry_attempts:
+            # Global backstop: never start another Extractor run past the end-to-end cap,
+            # even if the per-node structural budget still has room (L3).
+            if _global_cap_reached(state):
+                return _halt_global_cap(state)
             state.pending_feedback = RefinementFeedback(
                 kind=FeedbackKind.STRUCTURAL_RETRY,
                 static_findings=state.static_schema.findings,
@@ -503,6 +549,10 @@ def build_pipeline(
         # text happens only at the Extractor boundary (ADR 0048 A2, the typed-contents rule).
         feedback = RefinementFeedback(kind=FeedbackKind.REFINEMENT, jury_feedback=verdict.feedback)
         if state.refinement_iterations < refinement_cap:
+            # Global backstop: never start another Extractor run past the end-to-end cap,
+            # even if the per-agent refinement budget still has room (L3).
+            if _global_cap_reached(state):
+                return _halt_global_cap(state)
             state.refinement_iterations += 1
             state.pending_feedback = feedback
             state.route = _Node.EXTRACT.value
@@ -575,13 +625,17 @@ def build_pipeline(
         # made in a node, ADR 0023). The *returned* channel is the source of truth,
         # not the input object; coerce it back to the typed model.
         #
-        # When a checkpointer is configured, a thread_id namespaces this run's
-        # checkpoints (ADR 0040); LangGraph requires one, so we synthesize a default
-        # if the caller didn't supply one. With no checkpointer the config is unused.
-        # ``state is None`` resumes the thread from its last checkpoint.
-        config: RunnableConfig | None = None
+        # ``recursion_limit`` is always set as the graph-level backstop (L3, ADR 0056):
+        # it bounds total super-steps regardless of the application caps, so a routing
+        # pathology raises ``GraphRecursionError`` rather than spinning forever. It is sized
+        # above the global iteration cap's super-steps, so the clean semantic halt wins first.
+        #
+        # When a checkpointer is configured, a thread_id namespaces this run's checkpoints
+        # (ADR 0040); LangGraph requires one, so we synthesize a default if the caller didn't
+        # supply one. ``state is None`` resumes the thread from its last checkpoint.
+        config: RunnableConfig = {"recursion_limit": GRAPH_RECURSION_LIMIT}
         if checkpointer is not None:
-            config = {"configurable": {"thread_id": thread_id or "default"}}
+            config["configurable"] = {"thread_id": thread_id or "default"}
         result = await compiled.ainvoke(state, config=config)
         if isinstance(result, PipelineState):
             return result
@@ -710,6 +764,8 @@ class JuryRejectionError(ValidationError):
 __all__ = [
     "DEFAULT_REFINEMENT_CAP",
     "DEFAULT_STRUCTURAL_RETRY_ATTEMPTS",
+    "GLOBAL_ITERATION_CAP",
+    "GRAPH_RECURSION_LIMIT",
     "FeedbackKind",
     "JuryRejectionError",
     "PipelineOutcome",

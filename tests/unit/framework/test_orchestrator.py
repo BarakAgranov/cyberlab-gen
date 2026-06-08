@@ -28,6 +28,8 @@ from pydantic import ValidationError as PydanticValidationError
 from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, Verdict
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.orchestrator import (
+    GLOBAL_ITERATION_CAP,
+    GRAPH_RECURSION_LIMIT,
     FeedbackKind,
     JuryRejectionError,
     PipelineState,
@@ -543,3 +545,59 @@ async def test_structural_budget_intact_after_refinement() -> None:
     # first extract + the structural retry after the bad patch (the refine is not an extract)
     assert len(ext.calls) == 2
     assert state.structural_attempts == 2
+
+
+# --- L3: global iteration cap + LangGraph recursion_limit backstop ----------
+#
+# Nothing must bound total pipeline iterations end-to-end except the documented global cap
+# (architecture.md §6 "Total iteration cap (default 20)"), with the LangGraph recursion_limit
+# as a final graph-level backstop regardless of per-node caps.
+
+
+async def test_global_iteration_cap_bounds_pathological_loop() -> None:
+    # With the per-node structural cap raised far past it, the GLOBAL iteration cap is what
+    # bounds total iterations — a pathological structural loop halts at the global cap, not at
+    # the (much larger) per-node budget. (This also implies recursion_limit > the cap's
+    # super-steps, since the clean halt fires instead of a GraphRecursionError.)
+    bad = _spec(facets=["target:bogus_unknown_cloud"])
+    ext = _FakeExtractor([bad])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])  # never reached
+    run = build_pipeline(
+        extractor=ext,
+        validator=_validator(),
+        jury=jury,
+        structural_retry_attempts=100,
+        global_iteration_cap=20,
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.HALTED_VALIDATION
+    assert "iteration cap" in (state.halt_reason or "").lower()
+    assert state.total_iterations == 20
+    assert len(ext.calls) == 20  # bounded by the global cap, not the 100-attempt structural cap
+
+
+def test_graph_recursion_limit_is_the_documented_backstop() -> None:
+    # The recursion_limit is a fixed multiple of the global cap, sized so the semantic cap
+    # (which halts cleanly with a clear reason) always binds first in a legitimate run.
+    assert GRAPH_RECURSION_LIMIT == 4 * GLOBAL_ITERATION_CAP
+
+
+async def test_recursion_limit_bounds_graph_when_app_caps_disabled() -> None:
+    # Final backstop: with BOTH the per-node and global caps effectively disabled, the
+    # LangGraph recursion_limit still bounds the graph — a runaway loop raises
+    # GraphRecursionError rather than spinning forever.
+    from langgraph.errors import GraphRecursionError
+
+    bad = _spec(facets=["target:bogus_unknown_cloud"])
+    ext = _FakeExtractor([bad])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(
+        extractor=ext,
+        validator=_validator(),
+        jury=jury,
+        structural_retry_attempts=10_000,
+        global_iteration_cap=10_000,
+    )
+    with pytest.raises(GraphRecursionError):
+        await run(PipelineState(blog_content="blog", source_summary="url=..."))
