@@ -45,6 +45,7 @@ from cyberlab_gen.validators.static_schema_validator import (
     StaticSchemaFinding,
 )
 from tests.unit.framework.pipeline_fakes import (
+    ChangingBadExtractor,
     CrashOnceJury,
     FakeExtractor,
     FakeJury,
@@ -104,11 +105,14 @@ async def test_run_pipeline_returns_outcome_for_clean_approve() -> None:
 
 
 async def test_static_schema_failure_routes_to_retry_not_refinement() -> None:
-    # The Extractor keeps producing a static-schema-invalid spec (unknown facet). The
-    # orchestrator must re-run the EXTRACTOR (retry), never call the Jury
-    # (refinement), and finally HALT with ValidationError on retry exhaustion.
-    bad = _spec(facets=["target:bogus_unknown_cloud"])
-    ext = _FakeExtractor([bad])
+    # The Extractor keeps producing static-schema-invalid specs (each a DIFFERENT unknown
+    # facet, so findings change and the no-progress bail (ADR 0057) never fires). The
+    # orchestrator must re-run the EXTRACTOR (retry), never call the Jury (refinement), and
+    # finally HALT with ValidationError on retry exhaustion (the full budget is used).
+    bad1 = _spec(facets=["target:bogus_unknown_one"])
+    bad2 = _spec(facets=["target:bogus_unknown_two"])
+    bad3 = _spec(facets=["target:bogus_unknown_three"])
+    ext = _FakeExtractor([bad1, bad2, bad3])
     jury = _FakeJury([_verdict(Verdict.APPROVE)])  # must never be consulted
     run = build_pipeline(
         extractor=ext, validator=_validator(), jury=jury, structural_retry_attempts=3
@@ -556,11 +560,12 @@ async def test_structural_budget_intact_after_refinement() -> None:
 
 async def test_global_iteration_cap_bounds_pathological_loop() -> None:
     # With the per-node structural cap raised far past it, the GLOBAL iteration cap is what
-    # bounds total iterations — a pathological structural loop halts at the global cap, not at
-    # the (much larger) per-node budget. (This also implies recursion_limit > the cap's
-    # super-steps, since the clean halt fires instead of a GraphRecursionError.)
-    bad = _spec(facets=["target:bogus_unknown_cloud"])
-    ext = _FakeExtractor([bad])
+    # bounds total iterations — a pathological loop halts at the global cap, not at the (much
+    # larger) per-node budget. The Extractor emits a DIFFERENT invalid spec each time so the
+    # no-progress bail (ADR 0057) never fires and the loop reaches the cap. (This also implies
+    # recursion_limit > the cap's super-steps, since the clean halt fires instead of a
+    # GraphRecursionError.)
+    ext = ChangingBadExtractor()
     jury = _FakeJury([_verdict(Verdict.APPROVE)])  # never reached
     run = build_pipeline(
         extractor=ext,
@@ -589,8 +594,7 @@ async def test_recursion_limit_bounds_graph_when_app_caps_disabled() -> None:
     # GraphRecursionError rather than spinning forever.
     from langgraph.errors import GraphRecursionError
 
-    bad = _spec(facets=["target:bogus_unknown_cloud"])
-    ext = _FakeExtractor([bad])
+    ext = ChangingBadExtractor()  # changing findings -> no-progress bail never fires
     jury = _FakeJury([_verdict(Verdict.APPROVE)])
     run = build_pipeline(
         extractor=ext,
@@ -601,3 +605,46 @@ async def test_recursion_limit_bounds_graph_when_app_caps_disabled() -> None:
     )
     with pytest.raises(GraphRecursionError):
         await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+
+# --- no-progress early-bail on the structural-retry loop (ADR 0057) ---------
+#
+# A structural retry that reproduces the IDENTICAL finding set is not converging; halting
+# immediately (rather than spending the rest of the ~$3-4 retry budget re-extracting toward
+# a finding that can never clear) mirrors the ADR-0032 no-progress bail on the call surface.
+
+
+async def test_no_progress_structural_retry_bails_early() -> None:
+    # The Extractor keeps producing the same failing spec -> identical findings each attempt.
+    # The loop must halt after the second identical attempt, NOT grind to the full budget.
+    bad = _spec(facets=["target:bogus_unknown_cloud"])
+    ext = _FakeExtractor([bad])  # same failing spec every attempt
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])  # never reached
+    run = build_pipeline(
+        extractor=ext, validator=_validator(), jury=jury, structural_retry_attempts=5
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.HALTED_VALIDATION
+    assert "no progress" in (state.halt_reason or "").lower()
+    # bailed after the SECOND identical attempt, not the full budget of 5
+    assert len(ext.calls) == 2
+    assert jury.calls == 0
+
+
+async def test_progressing_structural_retry_is_not_bailed() -> None:
+    # A run whose findings CHANGE each attempt is making progress and must NOT be bailed — it
+    # uses the full structural-retry budget, then halts on exhaustion (not on no-progress).
+    bad1 = _spec(facets=["target:bogus_cloud_one"])
+    bad2 = _spec(facets=["target:bogus_cloud_two"])
+    bad3 = _spec(facets=["target:bogus_cloud_three"])
+    ext = _FakeExtractor([bad1, bad2, bad3])  # a different finding each attempt
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(
+        extractor=ext, validator=_validator(), jury=jury, structural_retry_attempts=3
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.HALTED_VALIDATION  # exhaustion, not no-progress
+    assert "no progress" not in (state.halt_reason or "").lower()
+    assert len(ext.calls) == 3  # full budget used (findings kept changing)

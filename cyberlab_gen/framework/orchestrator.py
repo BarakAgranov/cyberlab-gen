@@ -230,6 +230,10 @@ class PipelineState(BaseModel):
     # accumulated feedback for the next re-run (cleared after the re-run consumes)
     pending_feedback: RefinementFeedback | None = None
 
+    # signature of the prior failed static-schema attempt's finding set, for the
+    # no-progress early-bail (ADR 0057); reset to None whenever validation passes.
+    last_static_finding_signature: str | None = None
+
     # the node-decided next destination, read by the (pure) conditional edges.
     # LangGraph discards mutations made inside routing functions, so every
     # decision (and its counter/feedback bookkeeping) is made in a *node* and the
@@ -491,8 +495,30 @@ def build_pipeline(
         pending = _pending_from_extraction(state.extraction)
         state.static_schema = validator.validate(state.spec, pending=pending)
         if state.static_schema.passed:
+            # Cleared: end this structural-failure streak so a *later* failure (e.g. after a
+            # refinement patch) is judged fresh, not against this run's pre-pass findings.
+            state.last_static_finding_signature = None
             state.route = _Node.JURY.value
             return state
+        # No-progress early-bail (ADR 0057, mirrors the ADR-0032 call-surface bail): a
+        # structural retry that reproduced the *identical* finding set is not converging.
+        # Halt now rather than spending the rest of the (~$3-4) retry budget re-extracting
+        # toward a finding that can never clear (e.g. an unconvergeable external-source
+        # finding). A *changing* finding set may signal convergence, so the budget is
+        # honoured then. This only ever halts *earlier* — same terminal status, no contract
+        # change, never a raised ceiling.
+        signature = _finding_signature(state.static_schema)
+        if signature == state.last_static_finding_signature:
+            state.status = PipelineStatus.HALTED_VALIDATION
+            state.halt_reason = (
+                "Static schema validation made no progress — the same findings recurred on "
+                "consecutive Extractor attempts: "
+                f"{'; '.join(state.static_schema.rendered_findings())}"
+            )
+            state.route = END
+            logger.info("structural retry made no progress (identical findings); halting early")
+            return state
+        state.last_static_finding_signature = signature
         if state.structural_attempts < structural_retry_attempts:
             # Global backstop: never start another Extractor run past the end-to-end cap,
             # even if the per-node structural budget still has room (L3).
@@ -718,6 +744,16 @@ def _finalize(state: PipelineState) -> PipelineOutcome:
         refinement_iterations=state.refinement_iterations,
         verdict_history=state.verdict_history,
     )
+
+
+def _finding_signature(result: StaticSchemaResult) -> str:
+    """An order-independent signature of a failed static-schema attempt's finding set.
+
+    Used by the no-progress early-bail (ADR 0057): two consecutive structural attempts with
+    the same signature are not converging. Sorting makes it insensitive to finding order so
+    only a genuine change in *which* findings fired counts as progress.
+    """
+    return "\n".join(sorted(result.rendered_findings()))
 
 
 def _pending_from_extraction(extraction: ExtractionResult | None) -> PendingProposals:

@@ -194,6 +194,36 @@ class FakeExtractor:
         return make_result(prior_spec)  # default: echo the prior spec (a no-op, valid patch)
 
 
+class ChangingBadExtractor:
+    """Emits a DIFFERENT static-schema-invalid spec on every extract.
+
+    Each run carries a distinct unknown facet, so the finding set keeps changing and the
+    orchestrator's no-progress early-bail (ADR 0057) never fires — used to drive a runaway
+    loop all the way to the global iteration cap / LangGraph recursion_limit (L3).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.refine_calls: list[tuple[AttackSpec, list[JuryFieldFeedback]]] = []
+
+    async def extract(self, *, blog_content: str, source_summary: str) -> ExtractionResult:
+        del blog_content
+        self.calls.append(source_summary)
+        return make_result(make_spec(facets=[f"target:bogus_unknown_{len(self.calls)}"]))
+
+    async def refine(
+        self,
+        *,
+        prior_spec: AttackSpec,
+        feedback: list[JuryFieldFeedback],
+        blog_content: str,
+        source_summary: str,
+    ) -> ExtractionResult:
+        del blog_content, source_summary
+        self.refine_calls.append((prior_spec, list(feedback)))
+        return make_result(prior_spec)
+
+
 class FakeJury:
     """Records every review() call and returns scripted verdicts in sequence."""
 

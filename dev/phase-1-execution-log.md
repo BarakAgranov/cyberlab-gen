@@ -1963,4 +1963,28 @@ fix doesn't rely on the no-client degrade path.
 
 `just verify` green (644 passed, 1 skipped). No validation-contract change.
 
-Next ADR number: **0057**.
+### #6 — no-progress early-bail on the structural-retry loop (ADR 0057)
+
+**The bug.** `validate_node` retried to the full structural budget regardless of whether
+findings were improving. The Wiz run cleared 8 → 1 finding, then would have spent the
+remaining budget (~+$3–4) re-extracting toward a single unconvergeable finding, reaching
+the same `HALTED_VALIDATION` it would have reached immediately.
+
+**The fix (ADR 0057, mirrors the ADR-0032 call-surface bail).** A new
+`PipelineState.last_static_finding_signature` carries an order-independent signature of the
+prior failed attempt's finding set. On a failing validation whose signature equals the
+prior attempt's, the run halts immediately as `HALTED_VALIDATION` (same terminal status,
+reached earlier) with a "no progress" reason. A *changing* finding set still gets the full
+budget (it may be converging). The signature resets on every pass, so a post-refinement
+structural failure is judged fresh.
+
+**Tests.** Identical findings across two attempts → halt at the 2nd attempt (not the full
+budget), jury never invoked; a run whose findings keep changing uses the full budget and
+halts only on exhaustion. The existing routing test now emits a different invalid spec each
+attempt (full-budget path), and the L3 cap tests drive a `ChangingBadExtractor` so their
+runaway loops reach the caps instead of tripping this bail.
+
+`just verify` green (646 passed, 1 skipped). No validation-contract change — only *how long*
+the pipeline grinds on an unconvergeable finding.
+
+Next ADR number: **0058**.
