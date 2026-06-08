@@ -57,17 +57,25 @@ Also populate the top-level `gaps` list: structural things you could not fill
 
 ## Search-before-claim (mandatory)
 
-For any identifier with an authoritative source — CVE IDs (NVD), MITRE technique
-IDs (the bundled MITRE catalog), GitHub repos, packages — you must **look it up
-before claiming it**. Call `external_lookup(source_id, params)` first, then set
-the field with `source: external_api` and both citations. Pure recall from
-training is rejected by the framework, costs you a retry, and re-prompts you with
-the offending id flagged. If a lookup finds nothing, do not claim the id — set
-the field to `unknown_from_blog`.
+For a **CVE ID**, look it up before claiming a derived value: call
+`external_lookup(source_id="nvd", params={"cve_id": "CVE-..."})` first, then set any
+`external_api`-sourced field (cvss_score, severity) with `source: external_api` and
+both citations. Pure recall of a CVE's metadata is rejected by the framework, costs you
+a retry, and re-prompts you with the offending id flagged. If the lookup finds nothing,
+do not claim the derived value — set the field to `unknown_from_blog`. Do not invent CVE
+IDs.
 
-Do not invent CVE IDs or MITRE technique IDs. A technique id that is not in the
-MITRE catalog, or a CVE that NVD has no record of, is a hallucination and will be
-rejected.
+There is **no lookup source for MITRE technique IDs** (or for GitHub repos / packages)
+this phase, so do not try to look them up. Instead:
+
+- **Cite the technique IDs the blog names**, with `source: blog_explicit` and the
+  passage. A real, current ATT&CK id is valid even though the framework cannot verify it
+  here — **keep it; never drop a blog-named technique** for fear of rejection. The
+  framework does not reject a well-formed technique id it cannot verify.
+- If the blog *describes* a technique without naming its ID, either infer the ID
+  (`source: llm_inference` with a `confidence` + `confidence_source` and the passages it
+  rests on) or mark it `unknown_from_blog` ("requires external research").
+- Do not **fabricate** technique IDs the blog gives no basis for.
 
 ## Tools (read-only — you have no other access)
 

@@ -3,7 +3,9 @@
 Covers the Task 5 exit criteria for the Extractor:
 - produces a schema-valid AttackSpec with provenance on every content field;
 - an external_api field with no tool-call trace is rejected (search-before-claim);
-- a hallucinated MITRE technique id is rejected and re-prompted, then resolved;
+- a well-formed-but-uncatalogued MITRE technique id passes through unverified, never
+  rejected (ADR 0055/0058 — the 8-entry seed is not an authority); a malformed id is
+  rejected at construction by the MitreTechniqueId type, not by _check_mitre;
 - out-of-scope content sets extraction_outcome.
 
 The MockProvider does not drive the tool-use loop (it returns the registered
@@ -19,6 +21,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from cyberlab_gen.agents.extractor import Extractor
 from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback
@@ -66,9 +69,15 @@ if TYPE_CHECKING:
 # --- builders --------------------------------------------------------------
 
 _HASH = "a" * 64
-# Technique ids present in the bundled MITRE catalog (registry/mitre_attack_techniques.yaml).
+# A technique id present in the bundled MITRE seed (registry/mitre_attack_techniques.yaml).
 _REAL_TECH = "T1078"
-_HALLUCINATED_TECH = "T9999"
+# A real, current ATT&CK id absent from the 8-entry seed (the case ADR 0055 protects):
+# well-formed and uncatalogued, so it must pass through unverified, not be rejected.
+_UNCATALOGUED_TECH = "T1195"  # Supply Chain Compromise — blog-central, absent from the seed
+# Well-formed but not a real ATT&CK id. Without an authoritative adapter the framework cannot
+# tell this apart from a real uncatalogued id, so per ADR 0055 P2 it too passes unverified
+# (the jury's fidelity review is the grounding backstop until the MITRE adapter is wired).
+_UNVERIFIABLE_TECH = "T9999"
 
 
 def _cite() -> CitationBlock:
@@ -271,31 +280,36 @@ async def test_external_api_field_without_trace_is_rejected() -> None:
         await extractor.extract(blog_content="blog", source_summary="url=...")
 
 
-async def test_hallucinated_mitre_id_rejected_and_reprompted() -> None:
-    # First attempt: a hallucinated technique. The framework re-prompts with the id
-    # flagged; the matcher returns a clean spec once the re-prompt text appears.
+async def test_uncatalogued_mitre_id_passes_unverified() -> None:
+    # ADR 0055/0058: a real, current ATT&CK id absent from the bundled seed is well-formed
+    # but unverifiable here — it must pass THROUGH unverified, never be rejected/re-prompted
+    # (the seed is not an authority; the LATER MITRE adapter verifies). No re-prompt, no drop.
     provider = MockProvider()
-
-    def is_reprompt(messages: list[Message]) -> bool:
-        return any("FRAMEWORK REJECTION" in m.content for m in messages)
-
-    def is_first(messages: list[Message]) -> bool:
-        return not is_reprompt(messages)
-
-    _register(provider, _spec(tech=_HALLUCINATED_TECH), message_matcher=is_first)
-    _register(provider, _spec(tech=_REAL_TECH), message_matcher=is_reprompt)
-
-    result = await _extractor(provider).extract(blog_content="blog", source_summary="url=...")
-    assert result.reprompts == 1
-    assert result.attack_spec.chain.chain_steps[0].techniques.mitre == [_REAL_TECH]  # type: ignore[union-attr]
+    _register(provider, _spec(tech=_UNCATALOGUED_TECH))
+    result = await _extractor(provider, hallucination_retry_attempts=2).extract(
+        blog_content="blog", source_summary="url=..."
+    )
+    assert result.reprompts == 0  # no MITRE re-prompt was needed
+    assert result.attack_spec.chain.chain_steps[0].techniques.mitre == [_UNCATALOGUED_TECH]  # type: ignore[union-attr]
 
 
-async def test_hallucinated_mitre_exhausts_budget_raises() -> None:
+async def test_uncatalogued_mitre_id_does_not_hard_fail_even_with_zero_budget() -> None:
+    # P2: a well-formed-but-unverifiable id is never a hard finding, even with no retry
+    # budget left. _check_mitre no longer produces mitre_hallucination for any well-formed id.
     provider = MockProvider()
-    _register(provider, _spec(tech=_HALLUCINATED_TECH))
-    extractor = _extractor(provider, hallucination_retry_attempts=2)
-    with pytest.raises(ExtractionError, match="mitre_hallucination"):
-        await extractor.extract(blog_content="blog", source_summary="url=...")
+    _register(provider, _spec(tech=_UNVERIFIABLE_TECH))
+    result = await _extractor(provider, hallucination_retry_attempts=0).extract(
+        blog_content="blog", source_summary="url=..."
+    )
+    assert result.attack_spec.chain.chain_steps[0].techniques.mitre == [_UNVERIFIABLE_TECH]  # type: ignore[union-attr]
+
+
+def test_malformed_mitre_id_rejected_at_construction() -> None:
+    # Well-formedness is owned by the MitreTechniqueId type (primitives.py) and enforced at
+    # AttackSpec construction — NOT re-checked in _check_mitre (ADR 0058). A malformed id
+    # never reaches the framework check; it fails here.
+    with pytest.raises(PydanticValidationError):
+        ChainStepTechniques(mitre=["T12"])  # type: ignore[list-item]
 
 
 def test_negative_retry_budget_rejected() -> None:
@@ -404,23 +418,26 @@ async def test_refine_exhausts_budget_on_a_persistently_unapplyable_patch() -> N
         )
 
 
-async def test_refine_runs_mechanical_checks_whole_spec_and_catches_hallucinated_mitre() -> None:
-    # R2: the search-before-claim / MITRE / CVE checks run over the WHOLE patched spec,
-    # so a patch that introduces a hallucinated technique in the patched field is caught.
+async def test_refine_runs_mechanical_checks_whole_spec_and_catches_ungrounded_external_api() -> (
+    None
+):
+    # R2: the surviving mechanical checks (search-before-claim / CVE) run over the WHOLE
+    # patched spec, so a patch that introduces an ungrounded external_api field is caught.
+    # (MITRE is no longer a catching check after ADR 0058; search-before-claim still is.)
     provider = MockProvider()
     _register_patch(
         provider,
         RefinementPatch(
             patches=[
                 FieldPatch(
-                    field_path="chain.chain_steps[0].techniques.mitre",
-                    new_value=[_HALLUCINATED_TECH],
+                    field_path="external_references",
+                    new_value=_external_api_cve().model_dump(mode="json", by_alias=True),
                 )
             ]
         ),
     )
     extractor = _extractor(provider, hallucination_retry_attempts=0)  # 1 attempt
-    with pytest.raises(ExtractionError, match="mitre_hallucination"):
+    with pytest.raises(ExtractionError, match="search_before_claim"):
         await extractor.refine(
             prior_spec=_spec(), feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
         )

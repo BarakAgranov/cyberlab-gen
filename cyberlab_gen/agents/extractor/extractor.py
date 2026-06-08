@@ -12,8 +12,10 @@ surface's structural-malformation budget (ADR 0018, ADR 0021):
 
 1. **search-before-claim** (``schema.md §4.15``) — every ``source: external_api``
    field must have a matching ``external_lookup`` record in the tool trace.
-2. **MITRE hallucination** (``pipeline.md §3.2.2``) — every referenced technique
-   id must resolve in the bundled MITRE catalog.
+2. **MITRE pass-through** (ADR 0055/0058) — referenced technique ids are accepted
+   as-is. A well-formed-but-uncatalogued id is never rejected (the bundled seed is
+   not an authority; well-formedness is owned by the ``MitreTechniqueId`` type). This
+   check produces no findings until a real MITRE adapter is wired (LATER).
 3. **CVE hallucination** — every CVE id whose provenance claims a non-unknown
    source must resolve against NVD (skipped, not failed, when no NVD client is
    wired — the honest "couldn't check" posture).
@@ -47,7 +49,6 @@ from cyberlab_gen.providers.base import (
     AgentLabel,
     CapabilityHint,
 )
-from cyberlab_gen.registries.loader import load_mitre_techniques
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.schemas.enums import ProvenanceSource
@@ -57,7 +58,6 @@ if TYPE_CHECKING:
     from cyberlab_gen.framework.enrichment import NvdClient
     from cyberlab_gen.providers.base import Provider
     from cyberlab_gen.providers.ranking import ProviderRegistry
-    from cyberlab_gen.schemas.registries import MitreTechniqueCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ DEFAULT_EXTRACTOR_MAX_TOKENS = 16384
 class CheckFinding(InternalModel):
     """One framework-check rejection reason (search-before-claim or hallucination)."""
 
-    kind: str  # "search_before_claim" | "mitre_hallucination" | "cve_hallucination"
+    kind: str  # "search_before_claim" | "cve_hallucination"
     field_path: str
     detail: str
 
@@ -126,7 +126,6 @@ class Extractor:
         registry: ProviderRegistry,
         registries: object,  # MergedRegistries; typed loosely to avoid a runtime import here
         nvd_client: NvdClient | None = None,
-        mitre_catalog: MitreTechniqueCatalog | None = None,
         hallucination_retry_attempts: int = DEFAULT_HALLUCINATION_RETRY_ATTEMPTS,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
         max_output_tokens: int = DEFAULT_EXTRACTOR_MAX_TOKENS,
@@ -143,7 +142,6 @@ class Extractor:
         )
         self._registries = registries
         self._nvd_client = nvd_client
-        self._mitre_catalog = mitre_catalog
         self._hallucination_retry_attempts = hallucination_retry_attempts
         self._max_tool_iterations = max_tool_iterations
         self._max_output_tokens = max_output_tokens
@@ -420,28 +418,27 @@ class Extractor:
         return findings
 
     def _check_mitre(self, spec: AttackSpec) -> list[CheckFinding]:
-        """Every referenced MITRE technique id must resolve in the bundled catalog."""
+        """MITRE technique ids are never hard-rejected against a local list (ADR 0055/0058).
+
+        Well-formedness is already owned by the ``MitreTechniqueId`` type (``primitives.py``),
+        enforced at AttackSpec construction — a malformed id can never reach this check. The
+        old 8-entry seed-catalog membership gate rejected real, current ATT&CK ids (e.g. the
+        blog-central T1195/T1199) as "hallucinations"; per ADR 0055 P2 an unverifiable-but-
+        well-formed identifier must pass THROUGH unverified, never be rejected. Phase 1 wires
+        no MITRE verification adapter, so this mirrors ``_check_cves``'s skip-when-unwired
+        posture and returns no findings — it only logs which ids went unverified. Verifying
+        (and fetching) technique ids via a wired ``external_data_sources/mitre_attack`` adapter
+        is the LATER work named in findings doc 0001 §5.
+        """
         refs = self._collect_technique_refs(spec)
-        if not refs:
-            return []
-        catalog = (
-            self._mitre_catalog if self._mitre_catalog is not None else load_mitre_techniques()
-        )
-        known = {entry.name for entry in catalog.entries}
-        findings: list[CheckFinding] = []
-        for path, tech in refs:
-            if tech not in known:
-                findings.append(
-                    CheckFinding(
-                        kind="mitre_hallucination",
-                        field_path=path,
-                        detail=(
-                            f"technique {tech} is not in the bundled MITRE ATT&CK catalog; "
-                            "verify the id or remove the reference"
-                        ),
-                    )
-                )
-        return findings
+        if refs:
+            logger.info(
+                "extractor: %d MITRE technique id(s) passed unverified (no MITRE adapter wired "
+                "this phase): %s",
+                len(refs),
+                ", ".join(tech for _, tech in refs),
+            )
+        return []
 
     def _check_cves(
         self, spec: AttackSpec, lookups: list[ExternalLookupRecord]

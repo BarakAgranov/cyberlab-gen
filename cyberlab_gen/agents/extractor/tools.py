@@ -104,9 +104,10 @@ def extractor_tool_definitions(
                 "(e.g. source_id='nvd', params={'cve_id': 'CVE-2024-1234'}). "
                 f"{sources_clause} "
                 "Do NOT use this for MITRE ATT&CK technique ids — there is no 'mitre' / "
-                "'mitre_attack' source; technique ids are validated automatically against "
-                "the bundled MITRE catalog, not via external_lookup. Required before "
-                "claiming any external_api-sourced value (search-before-claim)."
+                "'mitre_attack' lookup source this phase. Cite the technique ids the blog "
+                "names from the blog (source: blog_explicit); the framework does not reject a "
+                "well-formed technique id it cannot verify. Required before claiming any "
+                "external_api-sourced value (search-before-claim)."
             ),
             input_schema={
                 "type": "object",
