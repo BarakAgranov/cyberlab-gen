@@ -401,11 +401,13 @@ def build_pipeline(
           the flagged paths, convergent by construction.
         """
         pending = state.pending_feedback
-        if (
+        is_refinement = (
             pending is not None
             and pending.kind is FeedbackKind.REFINEMENT
             and state.spec is not None
-        ):
+        )
+        if is_refinement:
+            assert pending is not None and state.spec is not None  # narrowed by is_refinement
             result = await extractor.refine(
                 prior_spec=state.spec,
                 feedback=pending.jury_feedback,
@@ -419,7 +421,12 @@ def build_pipeline(
             result = await extractor.extract(
                 blog_content=state.blog_content, source_summary=summary
             )
-        state.structural_attempts += 1
+            # Only a first/structural-retry extract spends the structural-retry budget. A
+            # jury-revise refinement re-run is bounded by its OWN counter
+            # (``refinement_iterations``, bumped in ``jury_node``), so it must NOT charge the
+            # structural counter here — refinement and structural retry have independent
+            # budgets (``architecture.md §1.7`` retry/refinement table; L2).
+            state.structural_attempts += 1
         state.extraction = result
         state.spec = result.attack_spec
         # the feedback (if any) has now been consumed by this re-run

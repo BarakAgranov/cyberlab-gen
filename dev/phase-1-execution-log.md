@@ -1894,4 +1894,24 @@ cross-module use is pyright-strict clean.
 
 `just verify` green (637 passed, 1 skipped). No validation-contract change.
 
+### #3 — refinement and structural retry no longer share `structural_attempts` (L2)
+
+**The bug.** `extract_node` bumped `structural_attempts` on *every* re-run, including a
+jury-revise refinement (the `refine` path). Since `refinement_iterations` is bumped
+separately in `jury_node`, a refinement charged BOTH counters — silently stealing from
+the structural-retry budget. `architecture.md §1.7`'s retry/refinement table specifies
+independent budgets.
+
+**The fix.** `extract_node` now increments `structural_attempts` only on the
+non-refinement branch (first run or structural retry); the refinement re-run is bounded
+solely by `refinement_iterations`. One-line guard, no contract change.
+
+**Tests.** `test_refinement_does_not_consume_structural_attempts` (a revise→approve run
+keeps `structural_attempts == 1`) and `test_structural_budget_intact_after_refinement`
+(a refinement that emits a static-schema-invalid patch still leaves a full structural
+retry — with the old shared counter the run would HALT; with independent counters it
+takes the retry and ships).
+
+`just verify` green (639 passed, 1 skipped). No validation-contract change.
+
 Next ADR number: **0056**.

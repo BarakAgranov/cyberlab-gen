@@ -484,3 +484,62 @@ async def test_unresolved_feedback_preserves_suggested_fix() -> None:
     assert state.status is PipelineStatus.SHIPPED_LOW_CONFIDENCE
     assert any("thesis.summary" in item for item in state.unresolved_feedback)
     assert any("add a citation" in item for item in state.unresolved_feedback)
+
+
+# --- L2: refinement and structural retry have INDEPENDENT budgets ----------
+#
+# architecture.md's retry/refinement table specifies separate budgets. The orchestrator
+# must not charge a jury-revise refinement re-run against the structural-retry counter
+# (or vice versa) — else one mechanism silently steals the other's budget.
+
+
+async def test_refinement_does_not_consume_structural_attempts() -> None:
+    # A jury-revise refinement re-runs the Extractor via `refine`, but `structural_attempts`
+    # must count only first/structural extracts — never the refinement re-run.
+    good = _spec(facets=["target:aws"])
+    ext = _FakeExtractor([good])
+    revise = _verdict(
+        Verdict.REVISE,
+        feedback=[JuryFieldFeedback(field_path="thesis.summary", problem="vague")],
+    )
+    jury = _FakeJury([revise, _verdict(Verdict.APPROVE)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert state.refinement_iterations == 1
+    assert len(ext.refine_calls) == 1
+    # only the first extract counted as a structural attempt; the refine did NOT bump it
+    assert state.structural_attempts == 1
+
+
+async def test_structural_budget_intact_after_refinement() -> None:
+    # Behavioral: after a refinement re-run, a subsequent static-schema failure still has the
+    # FULL structural-retry budget. Here the refine produces a static-schema-INVALID patch;
+    # with a SHARED counter the refine would have spent the only structural retry and the run
+    # would HALT — with independent counters the structural retry still fires and ships.
+    good = _spec(facets=["target:aws"])
+    bad = _spec(facets=["target:bogus_unknown_cloud"])
+    # extract#1 -> good (passes); jury revise -> refine -> bad (fails static); structural
+    # retry -> extract#2 -> good (passes) -> jury approve -> ship.
+    ext = _FakeExtractor([good, good], refine_specs=[bad])
+    jury = _FakeJury(
+        [
+            _verdict(
+                Verdict.REVISE,
+                feedback=[JuryFieldFeedback(field_path="thesis.summary", problem="x")],
+            ),
+            _verdict(Verdict.APPROVE),
+        ]
+    )
+    run = build_pipeline(
+        extractor=ext, validator=_validator(), jury=jury, structural_retry_attempts=2
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert state.refinement_iterations == 1
+    assert len(ext.refine_calls) == 1
+    # first extract + the structural retry after the bad patch (the refine is not an extract)
+    assert len(ext.calls) == 2
+    assert state.structural_attempts == 2
