@@ -1849,3 +1849,49 @@ category fixes, as of 2026-06-08.
 `just verify` green (documentation only — new/edited `dev/*.md`; no `cyberlab_gen/` change).
 
 Next ADR number: **0056**.
+
+## Pre-Phase-2 safety/lossless batch — 2026-06-08
+
+Mechanical, lower-risk fixes that make the pipeline lossless and safe before the next
+real `--auto` run. **None change the validation contract** (what counts as a blocking
+finding); the contract-touching MITRE/advisory category fixes are a separate,
+sign-off-gated change (investigation 0001 / ADR 0055). One commit per item, no tag.
+
+### #1 + #2 — persistence reads the checkpoint as the single authority (L4 + G1)
+
+**The bug.** On a mid-graph abort (Ctrl-C / budget halt / crash) the partial AttackSpec
+was dropped even though it was already in `checkpoint.sqlite`: `PipelineExtractRunner`
+set its in-memory `_last_state` only *after* `asyncio.run(...)` returned, so an abort —
+which never returns cleanly — left `_persist_from_state` reading `None`, and `run.json`
+ended with `artifacts: [cost.yaml]` only. Verified in the wild twice (a budget-exceeded
+run and an interrupted run).
+
+**The fix (G1 / ADR 0053 — the run store is the single persistence authority that reads
+the checkpoint).** New `framework/checkpointing.read_latest_pipeline_state(db_path)`
+reopens the run's sqlite checkpoint read-only, takes the globally-newest checkpoint
+across all threads (`alist(None)` is newest-first; interactive feedback re-runs each get
+a fresh thread), filters its `channel_values` to the declared `PipelineState` fields, and
+reconstructs the typed state (the pickle-fallback serializer already restores `AttackSpec`
+& friends as instances). `PipelineExtractRunner.last_state` now reads the checkpoint
+instead of an in-memory field; the `_last_state = final` capture (the "second path") is
+removed. This covers **every** exit path uniformly — a clean ship's latest checkpoint is
+the final enriched state, an abort's is the last completed node's partial — so the run
+store persists from one authority. Best-effort throughout (a read failure logs and returns
+`None`, never masking the run's own outcome). The **eval's identical gap** is fixed by the
+same property: `ProviderBackedEvalRunner._persist_run_dir` already reads
+`runner.last_state`, so it now recovers the checkpointed partial too.
+
+**Tests.** `tests/unit/framework/test_checkpointing.py` (new) pins the read mechanism —
+recovers a partial spec after a mid-graph abort, recovers the full terminal state on a
+clean run, returns `None` for a missing db. `tests/integration/test_cli_extract.py` and
+`tests/eval/test_runner.py` each gained a test driving the **real** `PipelineExtractRunner`
+(ingestion stubbed, no provider) to a mid-graph crash and asserting `spec.yaml` is written
+from the checkpoint and `run.json.artifacts` lists it — the existing `_RaisingRunner` /
+`_StatefulExtractRunner` fakes set `last_state` explicitly and so masked the gap. The
+shared, typed pipeline fakes were extracted to `tests/unit/framework/pipeline_fakes.py`
+(the orchestrator/checkpointing/CLI/eval tests all drive the same fixture) so the
+cross-module use is pyright-strict clean.
+
+`just verify` green (637 passed, 1 skipped). No validation-contract change.
+
+Next ADR number: **0056**.

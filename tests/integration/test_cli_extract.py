@@ -74,6 +74,7 @@ from cyberlab_gen.state.run_store import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from cyberlab_gen.cli.extract import PipelineExtractRunner
     from cyberlab_gen.state.local_state import LocalState
 
 runner = CliRunner()
@@ -789,6 +790,85 @@ def test_run_store_lineage_populated_on_failed_run(tmp_path: Path) -> None:
     assert record.status is RunStatus.FAILED
     assert record.lineage.model == "claude-opus-4-8"  # from the ledger (no spec emitted)
     assert record.lineage.input_hash == "a" * 64  # from the runner's content hash
+
+
+# --- L4/G1: persistence recovers the partial spec from the checkpoint on abort ----
+#
+# The fakes above carry an explicit ``last_state`` and so mask the real gap; these
+# drive the *real* ``PipelineExtractRunner`` (ingestion stubbed, no provider) whose
+# pipeline aborts mid-graph. The in-memory "final" is never set on an abort, so the
+# partial spec must be recovered straight from ``checkpoint.sqlite`` (ADR 0053).
+
+
+def _abort_runner(monkeypatch: pytest.MonkeyPatch, *, facets: list[str]) -> PipelineExtractRunner:
+    """A real ``PipelineExtractRunner`` whose pipeline aborts mid-graph (jury raises).
+
+    Ingestion is stubbed so the run reaches the graph with no provider/network. The
+    Extractor + Validator complete (checkpointing the partial spec); the jury then
+    raises, so the graph never returns cleanly.
+    """
+    from cyberlab_gen.agents.extractor_jury.schema import Verdict
+    from cyberlab_gen.cli.extract import PipelineExtractRunner
+    from tests.unit.framework.pipeline_fakes import (
+        CrashOnceJury,
+        FakeExtractor,
+        install_stub_ingestion,
+        make_ingestion,
+        make_spec,
+        make_validator,
+        make_verdict,
+    )
+
+    install_stub_ingestion(monkeypatch, ingestion=make_ingestion(), blog_content="blog content")
+    return PipelineExtractRunner(
+        extractor=FakeExtractor([make_spec(facets=facets)]),  # type: ignore[arg-type]
+        validator=make_validator(),
+        jury=CrashOnceJury([make_verdict(Verdict.APPROVE)]),  # type: ignore[arg-type]
+    )
+
+
+def test_pipeline_runner_last_state_reads_checkpoint_on_abort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``PipelineExtractRunner.last_state`` recovers the partial spec from the checkpoint."""
+    runner = _abort_runner(monkeypatch, facets=["target:aws"])
+    runner.enable_checkpointing(tmp_path / "checkpoint.sqlite", thread_id="run-A")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        runner.run("https://example.com/x", ledger=_ledger(None))
+
+    # No clean graph return happened, so the in-memory final was never set — last_state
+    # is reconstructed from checkpoint.sqlite (the L4 fix).
+    state = runner.last_state
+    assert state is not None
+    assert state.spec is not None
+    assert list(state.spec.facets) == ["target:aws"]
+
+
+def test_run_extract_persists_partial_spec_from_checkpoint_on_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-graph crash persists the checkpointed partial spec into the run dir."""
+    runs = tmp_path / "runs"
+    runner = _abort_runner(monkeypatch, facets=["target:aws"])
+
+    with pytest.raises(RuntimeError, match="boom"):
+        run_extract(
+            url="https://example.com/x",
+            interactive=False,
+            auto=True,
+            runner=runner,
+            ledger=_ledger(None),
+            stdin_is_tty=False,
+            out_dir=tmp_path / "cwd",
+            run_store=RunStore(runs),
+        )
+
+    run_dir = _only_run_dir(runs)
+    assert (run_dir / SPEC_FILENAME).is_file()  # the partial spec was recovered + written
+    record = _read_record(run_dir)
+    assert SPEC_FILENAME in record.artifacts  # run.json lists it (not just cost.yaml)
+    assert record.status is RunStatus.CRASHED
 
 
 def test_sigterm_guard_converts_to_keyboard_interrupt() -> None:

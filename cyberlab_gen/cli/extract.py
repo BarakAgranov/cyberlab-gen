@@ -172,7 +172,6 @@ class PipelineExtractRunner:
         self._state = state
         self._ingestion: IngestionResult | None = None
         self._blog_content: str | None = None
-        self._last_state: PipelineState | None = None
         self._checkpoint_db: Path | None = None
         self._checkpoint_thread_base: str | None = None
         self._checkpoint_seq = 0
@@ -191,13 +190,23 @@ class PipelineExtractRunner:
 
     @property
     def last_state(self) -> PipelineState | None:
-        """The most recent terminal/partial ``PipelineState`` (for persistence).
+        """The latest (possibly partial) ``PipelineState`` this run reached, read from the checkpoint.
 
-        Set by :meth:`_drive` *before* the halt errors are raised, so the run-store
-        can persist the produced (possibly partial) per-stage artifacts — spec, jury
-        verdict, enrichment — on a halt as well as on a ship (ADR 0039).
+        G1/ADR 0053: the run store's single source of truth for what a run produced is
+        the checkpoint the LangGraph checkpointer wrote on each completed super-step —
+        never an in-memory field set only on a clean graph return. Reading it here is what
+        lets a mid-graph abort (Ctrl-C / budget halt / crash), which never returns
+        cleanly, still surface the partial AttackSpec for persistence — closing the L4
+        drop-partial-on-abort gap (a spec already in ``checkpoint.sqlite`` that the run
+        record never listed). On a clean ship the latest checkpoint is the final enriched
+        state, so the same read serves both halt and ship. ``None`` when this run was
+        driven without a checkpoint (no persistence) or none was written yet.
         """
-        return self._last_state
+        if self._checkpoint_db is None:
+            return None
+        from cyberlab_gen.framework.checkpointing import read_latest_pipeline_state
+
+        return read_latest_pipeline_state(self._checkpoint_db)
 
     @property
     def content_hash(self) -> str | None:
@@ -259,9 +268,12 @@ class PipelineExtractRunner:
                 )
                 return await run(initial, thread_id=thread)
 
-        final = asyncio.run(_go())
-        self._last_state = final  # captured before _state_to_run_result may raise (ADR 0039)
-        return _state_to_run_result(final)
+        # The run's state (partial or terminal) lives in the checkpoint the saver wrote on
+        # every completed super-step; :attr:`last_state` reads it back. We do NOT cache the
+        # clean-return value in memory — that in-memory "second path" is what missed the
+        # mid-graph abort case (G1/ADR 0053). ``_go`` may abort before returning; the
+        # checkpoint still holds whatever the pipeline reached.
+        return _state_to_run_result(asyncio.run(_go()))
 
 
 def _state_to_run_result(state: object) -> RunResult:

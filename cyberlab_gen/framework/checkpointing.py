@@ -14,6 +14,8 @@ store. Recorded in ADR 0040.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +24,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    from cyberlab_gen.framework.orchestrator import PipelineState
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -41,4 +47,58 @@ async def open_sqlite_checkpointer(db_path: Path) -> AsyncGenerator[BaseCheckpoi
         yield saver
 
 
-__all__ = ["open_sqlite_checkpointer"]
+def read_latest_pipeline_state(db_path: Path) -> PipelineState | None:
+    """Recover the most recent completed-node ``PipelineState`` from a run's checkpoint.
+
+    The run store's single persistence authority (G1, ADR 0053): on every exit path
+    — clean ship, ``HALTED_*``, ``BudgetExceeded``, Ctrl-C/SIGTERM, or an unexpected
+    crash — the partial (or final) artifacts a run produced are recovered from the
+    checkpoint the LangGraph checkpointer already wrote, **not** from an in-memory
+    field that is only set on a clean graph return. A mid-graph abort never produces a
+    clean return, so reading the checkpoint is what stops the partial ``AttackSpec``
+    from being dropped (the L4 bug: a spec already in ``checkpoint.sqlite`` that
+    ``run.json`` never listed).
+
+    Returns the latest state across every thread in the file (interactive feedback
+    re-runs each get a fresh thread; the newest checkpoint is the run's latest reached
+    state), or ``None`` when there is no checkpoint to read. Best-effort: any read or
+    deserialization failure is logged and returns ``None`` so persistence never masks
+    the run's own outcome.
+    """
+    if not db_path.exists():
+        return None
+    try:
+        return asyncio.run(_aread_latest_pipeline_state(db_path))
+    except Exception:
+        # Best-effort: a corrupt/locked checkpoint or an unexpected loop state must not
+        # crash the persistence path that is finalizing the run record.
+        logger.warning(
+            "run-store: could not read latest state from checkpoint %s", db_path, exc_info=True
+        )
+        return None
+
+
+async def _aread_latest_pipeline_state(db_path: Path) -> PipelineState | None:
+    """Open the checkpoint read-only and reconstruct the newest ``PipelineState``."""
+    # Lazy import: the orchestrator imports nothing from this module at load time, but
+    # importing PipelineState at module scope would still couple the two; keep it local.
+    from cyberlab_gen.framework.orchestrator import PipelineState
+
+    async with open_sqlite_checkpointer(db_path) as saver:
+        # ``alist(None)`` yields every thread's checkpoints, globally newest-first; fully
+        # consume it inside the open connection before it closes.
+        tuples = [ct async for ct in saver.alist(None)]
+    if not tuples:
+        return None
+    channel_values = tuples[0].checkpoint.get("channel_values", {})
+    # Keep only the declared state fields (the checkpoint also carries LangGraph-internal
+    # channels like ``branch:to:*``); the values are already the deserialized typed
+    # objects (AttackSpec, JuryVerdict, ...) thanks to the pickle-fallback serializer.
+    fields = set(PipelineState.model_fields)
+    filtered = {k: v for k, v in channel_values.items() if k in fields}
+    if not filtered:
+        return None
+    return PipelineState.model_validate(filtered)
+
+
+__all__ = ["open_sqlite_checkpointer", "read_latest_pipeline_state"]

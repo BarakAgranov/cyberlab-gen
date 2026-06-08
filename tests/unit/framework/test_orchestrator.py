@@ -20,19 +20,12 @@ asserted directly (not just the terminal state).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from cyberlab_gen.agents.extractor.extractor import ExtractionResult
-from cyberlab_gen.agents.extractor_jury.schema import (
-    JuryFieldFeedback,
-    JuryScores,
-    JuryVerdict,
-    Verdict,
-)
+from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, Verdict
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.orchestrator import (
     FeedbackKind,
@@ -44,199 +37,33 @@ from cyberlab_gen.framework.orchestrator import (
     reject_interactive_when_headless,
     run_pipeline,
 )
-from cyberlab_gen.registries.merge import load_merged_registries
-from cyberlab_gen.schemas.attack_spec import (
-    AttackSpec,
-    ChainBlock,
-    ChainStep,
-    ChainStepTechniques,
-    ExtractionMetadataBlock,
-    PerStepReproducibility,
-    PublisherBlock,
-    SourceBlock,
-    ThesisBlock,
-)
-from cyberlab_gen.schemas.enums import (
-    CitationKind,
-    ExtractionOutcome,
-    ProvenanceSource,
-    ProvisioningMechanism,
-    ReproducibilityTier,
-)
-from cyberlab_gen.schemas.ingestion import IngestionResult
-from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
+from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.validators.static_schema_validator import (
     StaticSchemaCode,
     StaticSchemaFinding,
-    StaticSchemaValidator,
+)
+from tests.unit.framework.pipeline_fakes import (
+    CrashOnceJury,
+    FakeExtractor,
+    FakeJury,
+    make_ingestion,
+    make_spec,
+    make_validator,
+    make_verdict,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
-
-_HASH = "a" * 64
-
-
-# --- builders --------------------------------------------------------------
-
-
-def _cite() -> CitationBlock:
-    return CitationBlock(kind=CitationKind.BLOG_PASSAGE, reference="§1")
-
-
-def _pstr(value: str) -> ProvenanceString:
-    return ProvenanceString(value=value, source=ProvenanceSource.BLOG_EXPLICIT, citations=[_cite()])
-
-
-def _spec(*, facets: list[str] | None = None) -> AttackSpec:
-    return AttackSpec(
-        spec_version=1,
-        source=SourceBlock(
-            url="https://example.com/blog",  # type: ignore[arg-type]
-            canonical_url="https://example.com/blog",  # type: ignore[arg-type]
-            title="A writeup",
-            publisher=PublisherBlock(name="Lab", domain="example.com", kind="vendor_lab"),  # type: ignore[arg-type]
-            fetched_at=datetime(2025, 2, 1, tzinfo=UTC),
-            content_hash=_HASH,
-            fetch_method="httpx",
-            word_count=100,
-        ),
-        extraction_outcome=ExtractionOutcome.IN_SCOPE,
-        thesis=ThesisBlock(
-            types=["vulnerability_chain"],  # type: ignore[list-item]
-            summary=_pstr("a chain"),
-            attacker_objective=_pstr("admin"),
-            vulnerability_story=_pstr("misconfig"),
-            duration_as_described=_pstr("a week"),
-        ),
-        facets=facets or [],  # type: ignore[arg-type]
-        chain=ChainBlock(
-            chain_steps=[
-                ChainStep(
-                    id="step-1",  # type: ignore[arg-type]
-                    step_number=1,
-                    title="Step 1",
-                    description=_pstr("do the thing"),
-                    blog_excerpt="verbatim",
-                    techniques=ChainStepTechniques(mitre=["T1078"]),  # type: ignore[list-item]
-                    reproducibility=PerStepReproducibility(
-                        classification=ReproducibilityTier.FULL,
-                        caveats=_pstr("none"),
-                        why=_pstr("scriptable"),
-                    ),
-                    provisioning_mechanism=ProvisioningMechanism.TERRAFORM,
-                )
-            ]
-        ),
-        extraction_metadata=ExtractionMetadataBlock(
-            extractor_version="1.0.0", model="m", completeness_score=0.8, citations_count=2
-        ),
-    )
-
-
-def _result(spec: AttackSpec) -> ExtractionResult:
-    return ExtractionResult(
-        attack_spec=spec,
-        value_type_proposals=[],
-        facet_proposals=[],
-        thesis_type_proposals=[],
-        lookups=[],
-    )
-
-
-def _verdict(verdict: Verdict, *, feedback: list[JuryFieldFeedback] | None = None) -> JuryVerdict:
-    return JuryVerdict(
-        verdict=verdict,
-        scores=JuryScores(
-            fidelity=0.9, completeness=0.9, provenance_correctness=0.9, structural_validity=0.9
-        ),
-        feedback=feedback or [],
-        retry_recommended=verdict is not Verdict.APPROVE,
-        rationale="because",
-    )
-
-
-def _ingestion() -> IngestionResult:
-    return IngestionResult(
-        url="https://example.com/blog",  # type: ignore[arg-type]
-        canonical_url="https://example.com/blog",  # type: ignore[arg-type]
-        content_hash=_HASH,
-        fetched_at=datetime(2025, 2, 1, tzinfo=UTC),
-        fetch_method="http_get",
-        word_count=100,
-        publisher_domain="example.com",
-        cached_path="/tmp/cache/x",
-    )
-
-
-# --- fakes recording the call path -----------------------------------------
-
-
-class _FakeExtractor:
-    """Records extract() and refine() calls and returns scripted specs in sequence.
-
-    A jury ``revise`` routes to :meth:`refine` (targeted patch, ADR 0054); a structural
-    retry and the first run route to :meth:`extract`. ``refine`` records the prior spec and
-    the *structured* jury feedback it received so the routing + the typed boundary are both
-    asserted directly. By default ``refine`` echoes the prior spec (a no-op patch — valid,
-    so the jury re-reviews it); pass ``refine_specs`` to script distinct patched outputs.
-    """
-
-    def __init__(
-        self, specs: list[AttackSpec], *, refine_specs: list[AttackSpec] | None = None
-    ) -> None:
-        self._specs = specs
-        self._refine_specs = refine_specs
-        self.calls: list[str] = []  # the source_summary each extract() call received
-        self.refine_calls: list[tuple[AttackSpec, list[JuryFieldFeedback]]] = []
-
-    async def extract(self, *, blog_content: str, source_summary: str) -> ExtractionResult:
-        del blog_content
-        self.calls.append(source_summary)
-        # return the next scripted spec; repeat the last one once exhausted
-        idx = min(len(self.calls) - 1, len(self._specs) - 1)
-        return _result(self._specs[idx])
-
-    async def refine(
-        self,
-        *,
-        prior_spec: AttackSpec,
-        feedback: list[JuryFieldFeedback],
-        blog_content: str,
-        source_summary: str,
-    ) -> ExtractionResult:
-        del blog_content, source_summary
-        self.refine_calls.append((prior_spec, list(feedback)))
-        if self._refine_specs is not None:
-            idx = min(len(self.refine_calls) - 1, len(self._refine_specs) - 1)
-            return _result(self._refine_specs[idx])
-        return _result(prior_spec)  # default: echo the prior spec (a no-op, valid patch)
-
-
-class _FakeJury:
-    """Records every review() call and returns scripted verdicts in sequence."""
-
-    def __init__(self, verdicts: list[JuryVerdict]) -> None:
-        self._verdicts = verdicts
-        self.calls = 0
-
-    async def review(
-        self,
-        *,
-        spec: AttackSpec,
-        blog_content: str,
-        lookups: list[ExternalLookupRecord] | None = None,
-    ) -> JuryVerdict:
-        del spec, blog_content, lookups
-        idx = min(self.calls, len(self._verdicts) - 1)
-        self.calls += 1
-        return self._verdicts[idx]
-
-
-def _validator() -> StaticSchemaValidator:
-    return StaticSchemaValidator(registries=load_merged_registries())
+# The pipeline test doubles + builders live in a shared, typed module; alias them to the
+# private names this module's existing tests already use so the call sites stay unchanged.
+_CrashOnceJury = CrashOnceJury
+_FakeExtractor = FakeExtractor
+_FakeJury = FakeJury
+_ingestion = make_ingestion
+_spec = make_spec
+_validator = make_validator
+_verdict = make_verdict
 
 
 # --- tests -----------------------------------------------------------------
@@ -452,27 +279,6 @@ def test_build_rejects_negative_refinement_cap() -> None:
 
 
 # --- checkpointer / resume (ADR 0040) --------------------------------------
-
-
-class _CrashOnceJury:
-    """Raises on its first review (a mid-node crash), then returns scripted verdicts."""
-
-    def __init__(self, verdicts: list[JuryVerdict]) -> None:
-        self._verdicts = verdicts
-        self.calls = 0
-
-    async def review(
-        self,
-        *,
-        spec: AttackSpec,
-        blog_content: str,
-        lookups: list[ExternalLookupRecord] | None = None,
-    ) -> JuryVerdict:
-        del spec, blog_content, lookups
-        self.calls += 1
-        if self.calls == 1:
-            raise RuntimeError("boom in jury")
-        return self._verdicts[min(self.calls - 2, len(self._verdicts) - 1)]
 
 
 async def test_checkpointer_survives_midnode_crash_and_resumes(tmp_path: Path) -> None:

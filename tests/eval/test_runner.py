@@ -202,6 +202,54 @@ def test_run_once_persists_partial_on_halt(tmp_path: Path) -> None:
     assert _read_status(run_dir) == "failed"
 
 
+def test_run_once_persists_partial_from_checkpoint_on_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The eval's identical L4 gap: a mid-graph crash persists the checkpointed partial.
+
+    Drives the *real* ``PipelineExtractRunner`` (ingestion stubbed) whose pipeline aborts
+    after extract + validate have checkpointed the partial spec. The eval reads the same
+    single persistence authority — the checkpoint — so the partial lands in the run dir
+    even though no clean return ever set an in-memory state (ADR 0053).
+    """
+    from cyberlab_gen.agents.extractor_jury.schema import Verdict
+    from cyberlab_gen.cli.extract import PipelineExtractRunner
+    from cyberlab_gen.state.run_store import RunStore
+    from tests.unit.framework.pipeline_fakes import (
+        CrashOnceJury,
+        FakeExtractor,
+        install_stub_ingestion,
+        make_ingestion,
+        make_spec,
+        make_validator,
+        make_verdict,
+    )
+
+    install_stub_ingestion(monkeypatch, ingestion=make_ingestion(), blog_content="blog content")
+
+    def factory(_ledger: CostLedger) -> PipelineExtractRunner:
+        return PipelineExtractRunner(
+            extractor=FakeExtractor([make_spec(facets=["target:aws"])]),  # type: ignore[arg-type]
+            validator=make_validator(),
+            jury=CrashOnceJury([make_verdict(Verdict.APPROVE)]),  # type: ignore[arg-type]
+        )
+
+    runs = tmp_path / "runs"
+    runner = ProviderBackedEvalRunner(
+        extract_runner_factory=factory,
+        validator=_PassValidator(),  # type: ignore[arg-type]
+        url_for=lambda _blog_id: "https://example.com/x",
+        run_store=RunStore(runs),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        runner.run_once("ai-assisted-aws-intrusion", run_index=0)
+
+    run_dir = next(p for p in runs.iterdir() if p.is_dir())
+    assert (run_dir / "spec.yaml").is_file()  # partial recovered from checkpoint.sqlite
+    assert _read_status(run_dir) == "crashed"
+
+
 class _CrashFirstRunner(EvalPipelineRunner):
     """A runner whose ``run_once`` always raises an unexpected (non-pipeline) error."""
 
