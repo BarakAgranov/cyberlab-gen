@@ -8,8 +8,10 @@ Framework code — **never an agent** (CLAUDE.md hard rules; ``schema.md §4.9``
   (live, via an injectable client so tests replay recorded fixtures).
 - **MITRE technique references** (``...chain.chain_steps[*].techniques.mitre[*]``
   and ``external_references.mitre_techniques[*]``) against the bundled MITRE
-  ATT&CK technique catalog (read locally, ``registry-details.md §5.1`` — no
-  live call, no rate-limit).
+  ATT&CK seed (read locally, ``registry-details.md §5.1`` — no live call, no
+  rate-limit): a seed-listed id is enriched; a well-formed uncatalogued id is
+  recorded as an unverified skip, never a false discrepancy (ADR 0055/0058 — the
+  8-entry seed is not an authority).
 
 The framework sets each enriched field's provenance to ``source=external_api``
 with citations to *both* the blog passage and the API/catalog response. When the
@@ -18,10 +20,10 @@ both citations and sets ``discrepancy_with_blog=True`` (always recorded for
 audit, ``schema.md §4.9``). The discrepancy is then classified per the source
 entry's ``discrepancy_materiality_rules``:
 
-- **non-material** (same-tier CVSS, same CWE category, equivalent technique) →
+- **non-material** (same-tier CVSS, same CWE category) →
   silent rewrite, recorded only in the field's ``Provenance``
   (``discrepancy_classification="non_material"``);
-- **material** (cross-tier CVSS, different vector/CWE, contradicting technique) →
+- **material** (cross-tier CVSS, different vector/CWE) →
   the rewrite *also* appends a ``MaterialDiscrepancy`` to the AttackSpec's
   top-level ``material_discrepancies`` list. Phase 1 surfaces these in the run
   report only; the third interactive review surface lands in Phase 4
@@ -660,12 +662,13 @@ def _enrich_techniques(
     config: EnrichmentConfig,
     result: EnrichmentResult,
 ) -> None:
-    """Validate/enrich MITRE technique ids against the bundled local catalog.
+    """Enrich MITRE technique ids against the bundled local seed (no live call, no budget).
 
-    Local lookup — no live call, no budget spend, no rate-limit. A technique id
-    present in the catalog is recorded as enriched; a technique id *absent* from
-    the catalog is a contradicting-technique discrepancy → material
-    (``pipeline.md §3.2.4``).
+    A technique id present in the seed is recorded as enriched. A well-formed id *absent*
+    from the seed is recorded as an UNVERIFIED skip (ADR 0055/0058 P2) — never a false
+    "contradicting technique" ``MaterialDiscrepancy``, because the 8-entry seed is not an
+    authority and would mislabel real, current ATT&CK ids (T1195/T1199/…). Verifying/fetching
+    via a wired MITRE adapter is LATER work (findings doc 0001 §5).
     """
     tech_refs = _collect_technique_refs(spec)
     if not tech_refs:
@@ -679,15 +682,19 @@ def _enrich_techniques(
         if tech in known:
             result.enriched_field_paths.append(path)
         else:
-            discrepancy = MaterialDiscrepancy(
-                field_path=path,
-                summary=f"technique {tech} not present in the bundled MITRE ATT&CK catalog",
-                blog_value=tech,
-                authoritative_value="(not found in MITRE ATT&CK catalog)",
-                source_of_record=_MITRE_SOURCE_ID,
+            # Uncatalogued but well-formed: UNVERIFIED, not a discrepancy (ADR 0055/0058 P2).
+            # An honest skip names the gap without polluting the run report with a false
+            # "contradicting technique" finding for a real id the seed simply doesn't carry.
+            result.skipped.append(
+                SkippedLookup(
+                    field_path=path,
+                    source_id=_MITRE_SOURCE_ID,
+                    reason=(
+                        f"MITRE technique {tech} not in the bundled seed and no MITRE adapter "
+                        "is wired this phase; left unverified (requires external research)"
+                    ),
+                )
             )
-            result.material_discrepancies.append(discrepancy)
-            spec.material_discrepancies.append(discrepancy)
 
 
 # --- Stub sources ----------------------------------------------------------

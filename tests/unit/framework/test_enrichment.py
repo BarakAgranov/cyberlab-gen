@@ -12,7 +12,8 @@ These exercise the four behaviors the brief's exit criteria name:
 4. budget exhaustion and rate-limiting both degrade gracefully (skips, no raise).
 
 Plus: framework-only authorship (every rewrite is ``external_api``), MITRE local
-validation (known → enriched, unknown → material), and stub-source honesty.
+validation (seed-listed → enriched, well-formed uncatalogued → unverified skip, never a
+false discrepancy — ADR 0055/0058), and stub-source honesty.
 
 A fake ``NvdClient`` returns recorded fixtures (no live NVD call), which is the
 VCR-equivalent for a pure-Python client surface — the client *is* the seam the
@@ -374,18 +375,21 @@ def test_rate_limit_records_skip_and_continues() -> None:
 # --- MITRE local validation ------------------------------------------------
 
 
-def test_known_mitre_technique_enriched_unknown_is_material() -> None:
-    spec = _spec(mitre=["T1078", "T9999"])  # one known, one not in catalog
+def test_known_mitre_enriched_uncatalogued_is_unverified_not_material() -> None:
+    # ADR 0055/0058 (item 1b): the bundled seed is not an authority, so a well-formed
+    # uncatalogued technique id is recorded as UNVERIFIED (an honest skip), NOT as a false
+    # "contradicting technique" material discrepancy. A catalogued id is still enriched.
+    spec = _spec(mitre=["T1078", "T9999"])  # one in the seed, one not
     result = enrich(spec, _no_registry_config())
 
     assert "technique.T1078" in result.enriched_field_paths
-    # The unknown technique is a material discrepancy.
-    paths = [m.field_path for m in spec.material_discrepancies]
-    assert "technique.T9999" in paths
-    assert all(
-        m.source_of_record == "mitre_attack_techniques"
-        for m in spec.material_discrepancies
-        if m.field_path == "technique.T9999"
+    # The uncatalogued id is NOT a material discrepancy (the false positive we removed).
+    assert not spec.material_discrepancies
+    assert not result.material_discrepancies
+    # It is recorded honestly as an unverified/skipped MITRE lookup instead.
+    assert any(
+        s.field_path == "technique.T9999" and s.source_id == "mitre_attack_techniques"
+        for s in result.skipped
     )
 
 
