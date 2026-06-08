@@ -2132,3 +2132,85 @@ from being hard-rejected so a real `--auto` extract can converge and ship. TDD, 
 `just verify` green per commit (645 passed, 1 skipped). No eval run.
 
 Next ADR number: **0059**.
+
+## Emit-truncation fix batch (investigation 0002 → the five NOW fixes) — 2026-06-09
+
+Sign-off-gated batch from `dev/investigations/0002-extractor-emit-truncation.md` (the Sysdig
+"admin in 8 minutes" run that failed `status: failed` on `EmitTruncated`, $2.93/2 calls, partial
+spec persisted). TDD, per-item commits, `just verify` green per commit, no tag, no eval run. The
+investigation reconciled the two anomalies first: **16384 is the real per-request output ceiling**
+(the 31,701/38,249 `cost.yaml` figures are per-`_invoke` `RunUsage` aggregates across multiple
+requests — not a second limit); the input doubling is a **full re-extraction + reactive proposals
+with caching unwired** — not an emit-re-feed.
+
+### Capture + Commit 1 — investigation 0002 (no code)
+
+The reconstruction, both anomalies reconciled, the ~16K/8-step vs ADR-0032 ~12K/9-step calibration
+finding, the atomic-emit + ~21,333 non-streaming-SDK-wall constraint, the §6 reactive-proposal root
+cause (the first-pass spec actually *fit*; the structural retry's larger second emit is the
+truncation-prone one), and the deferred streaming/sectioned class-fix.
+
+### Commit 2 — A-NOW: raise `DEFAULT_EXTRACTOR_MAX_TOKENS` 16384 → 20000
+
+Stopgap, not the class-fix. Docstring corrects ADR 0032's falsified calibration note. 20000 stays
+below the ~21,333 wall (~30% headroom for the dense tail); specs >~20K still truncate — streaming is
+the durable fix. Constant + docstring only; no locked surface. Test pins the new value.
+
+### Commit 3 — E: `lineage.model` from the billed ledger, not the LLM-authored spec
+
+`_persist_from_state` was setting `lineage.model = state.spec.extraction_metadata.model` — an
+LLM-authored content field — so the model's self-report (`"claude-sonnet"`) overrode the billed
+`claude-opus-4-8` (`architecture.md §1.5` violation). New `_billed_extractor_model(ledger)` sources
+it from the last `EXTRACTOR`-labelled ledger entry; the spec still supplies `extractor_version`. The
+existing `:746` test *pinned the bug* (`lineage.model == "m"`) — updated; added a billed-wins test.
+**Sibling instance flagged, not fixed:** `extract.py:756` `proposed_by_model` (same shape, proposal
+audit — separate decision).
+
+### Commit 4 — C: `EmitTruncated` message states per-request limit vs aggregate-over-K
+
+The 16384 ceiling is correct and unchanged. Both raise sites now phrase the decomposition
+("per-request limit max_tokens=L; aggregated output_tokens=A across K model-request(s)") via a shared
+`_truncation_decomposition` helper (`RunUsage.requests` gives K), so an operator can't misread
+aggregate > limit. Threaded `max_tokens` into `_map_error`. Additive; no contract.
+
+### Commit 5 — B-i: wire Anthropic prompt caching (ADR 0059, locked provider surface)
+
+Caching was unwired (`cache_read=0` everywhere), so every request re-billed the ~41K
+schema-dominated base — the structural-retry input doubling. `_model_settings` now sets
+`anthropic_cache_instructions` + `anthropic_cache_tool_definitions` + `anthropic_cache_messages`
+(3/4 breakpoints, 5m TTL). The `Provider` ABC signature is unchanged — the only external effect is
+non-zero cache_read/cache_write (already priced by `compute_cost`). Tests assert the flags are set
+(offline `FunctionModel` — inert there, so SET is the deterministic check) and that a multi-request
+run surfaces aggregated cache tokens; cost stays pinned by the existing cost-ledger test. **Live
+hit-rate is confirmable only on the user's re-run.**
+
+### Commit 6 — B-ii: first-pass proposal steering (prompt-only)
+
+Prompt now documents `propose_thesis_type` (ADR 0045 — previously **omitted** from the prompt though
+4 of the run's 13 findings were `unknown_thesis_type`) and steers the model to propose blog-specific
+vocabulary up front instead of waiting for a structural-validation rejection. Prompt-only by design,
+to avoid pre-empting the held **E1** proposal-lifecycle work (ADR 0050).
+
+### Surprises / flagged
+
+- **`propose_thesis_type` was undocumented in the prompt** despite existing in `tools.py` — the model
+  could not proactively propose thesis types. Fixed in B-ii (prompt-only).
+- **The model does not see the registries** (system prompt is just `prompt.md`; no registry digest is
+  injected — `call_surface.py:126-129`). So B-ii's proactive-proposal payoff is *limited* — the model
+  must guess which terms are novel. **Surfacing a registry digest to the model is a framework/context
+  change that overlaps E1's in-loop-steering work; deferred there, not done here.**
+- A-NOW is a **stopgap**; the durable truncation class-fix (streaming + sectioned/continuation emit,
+  D1/D2/P4) remains deferred and needs its own design ADR + gate.
+- B-i's blog-prefix `CachePoint` (guaranteed cross-extract blog reuse) needs the `Message` content
+  surface extended from `str` to a structured sequence — a further locked-surface change, deferred
+  (the system+tools breakpoints already carry the dominant prefix across extracts).
+- **Pre-existing user WIP preserved:** `cli/extract.py` carried an uncommitted
+  `DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP = 20` (the user's proof-run scaffolding, ADR 0058's blessed knob).
+  The E commit was staged with the cap reverted to the committed 5, then the 20 restored — so the
+  user's WIP stays uncommitted and the cap bump was not swept into the fix.
+
+`just verify` green per commit (650 passed, 1 skipped). No eval run. After this lands, the user
+re-runs the Sysdig blog to confirm it ships (A-NOW headroom + B-i/B-ii) and for the second-blog
+quality read.
+
+Next ADR number: **0060**.
