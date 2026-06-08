@@ -26,7 +26,6 @@ from eval.runner.runner import (
     FAILURE_RETRYABLE,
     _classify_pipeline_failure,  # pyright: ignore[reportPrivateUsage]
     _failure_signature,  # pyright: ignore[reportPrivateUsage]
-    _normalize_failure,  # pyright: ignore[reportPrivateUsage]
     run_blog_set,
 )
 from tests.eval.conftest import make_failure_record, make_record
@@ -213,65 +212,12 @@ def test_no_cost_cap_runs_everything() -> None:
 
 
 # --- failure-signature normalization ----------------------------------------
-
-
-def test_normalize_failure_collapses_varying_tool_ids_and_indices() -> None:
-    a = (
-        "Anthropic call failed (400): messages.7: tool_use ids were found without "
-        "tool_result blocks immediately after: toolu_01ABC"
-    )
-    b = (
-        "Anthropic call failed (400): messages.5: tool_use ids were found without "
-        "tool_result blocks immediately after: toolu_99ZZZ"
-    )
-    assert _normalize_failure(a) == _normalize_failure(b)
-
-
-def test_normalize_failure_collapses_varying_request_ids() -> None:
-    # The real 400s differed ONLY by the alphanumeric request_id (req_...), which
-    # the digit-only collapse left distinct, so fail-fast never tripped on six
-    # identical failures (ADR 0032). request_ids must normalize equal.
-    a = (
-        "Anthropic call failed (400): messages.7: tool_use ids were found without "
-        "tool_result blocks: toolu_01ABC, 'request_id': 'req_011Cbdq7ZqaTxP7if8SKGZSb'"
-    )
-    b = (
-        "Anthropic call failed (400): messages.7: tool_use ids were found without "
-        "tool_result blocks: toolu_99ZZZ, 'request_id': 'req_011CbdqF4oZFBM52LGdA1cvE'"
-    )
-    assert _normalize_failure(a) == _normalize_failure(b)
-
-
-def test_blog_stops_after_two_400s_differing_only_by_request_id() -> None:
-    # Regression for the gen0-20260602 archive: blog-fatal 400s that differed only
-    # by request_id ran in full because the signature never matched. With request_id
-    # normalization, the within-blog counter trips and each blog stops after the 2nd
-    # identical failure (skip-blog under ADR 0034, was abort-all under ADR 0032).
-    manifest = load_manifest()
-
-    def record_for(idx: int, blog_id: str, run_index: int) -> BlogRunRecord:
-        # request_id varies by a LETTER (chr) so it is NOT collapsed by the
-        # digit-only rule — exactly the real failure mode.
-        rid_letter = chr(ord("A") + idx)
-        reason = (
-            f"Anthropic call failed (400): messages.{idx + 5}: request too large: "
-            f"toolu_{idx}abc, 'request_id': 'req_011Cbdq{rid_letter}ZqaTxPif8SKGZSb'"
-        )
-        return make_failure_record(
-            blog_id, run_index, failure_kind=FAILURE_BLOG_FATAL, halt_reason=reason
-        )
-
-    runner = _ScriptedRunner(record_for)
-    run_blog_set(
-        manifest=manifest,
-        runner=runner,
-        n=3,
-        provider_backed=False,
-        abort_after_consecutive_failures=2,
-    )
-    # Each blog stops after 2 (request_id normalized away); without it each would run
-    # all 3. 2 per blog proves the normalization tripped the within-blog counter.
-    assert len(runner.calls) == 2 * len(_curated_ids())
+#
+# The toolu_/req_ id collapses were scar tissue from the retired direct-Anthropic
+# tool-loop adapter's "tool_use ids without tool_result" 400s; the pydantic-ai migration
+# (ADR 0036) removed that adapter, so those id forms no longer appear and the collapses —
+# and the tests that pinned them — were deleted (F1). The generic digit/message-index
+# collapse that remains is still exercised by the blog-fatal fail-fast tests above.
 
 
 def test_failure_signature_only_fires_for_blog_fatal_runs() -> None:

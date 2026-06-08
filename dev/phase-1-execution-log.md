@@ -1987,4 +1987,33 @@ runaway loops reach the caps instead of tripping this bail.
 `just verify` green (646 passed, 1 skipped). No validation-contract change — only *how long*
 the pipeline grinds on an unconvergeable finding.
 
+### #7 — eval reads the pipeline's emitted static-schema verdict; drop the 400-error scar (F1)
+
+Implements the F1 doc note (`eval.md §7.4`, committed `e94c35d`) — docs-only then, code now.
+
+**(a) Read, don't recompute.** `ProviderBackedEvalRunner.run_once` re-ran
+`StaticSchemaValidator.validate(...)` to get the static-schema pass/fail for the record —
+a second implementation of a check the pipeline already ran, which risks a *false* failure
+if the re-validation's context (e.g. the run's provisional proposals) differs. It now reads
+the pipeline's **emitted** verdict off the runner's last state
+(`_emitted_static_schema_passed` → `last_state.static_schema.passed`, defaulting to `True`
+when absent — a shipped run implies the gate passed). The `validator` param/field and the
+`StaticSchemaValidator`/`PendingProposals` imports are dropped from the eval runner (the CLI
+still wires a validator into the *pipeline* via the extract-runner factory; only the eval
+runner's own copy is gone).
+
+**(b) Drop the retired-adapter 400-error normalization.** `_normalize_failure`'s `toolu_`
+and `req_` id collapses were scar tissue from the retired direct-Anthropic tool-loop
+adapter's "tool_use ids without tool_result" 400s; the pydantic-ai migration (ADR 0036)
+removed that adapter, so those id forms no longer appear. Deleted the two collapses (the
+generic message-index / digit collapse remains and is still exercised by the blog-fatal
+fail-fast tests) and the three tests that pinned the obsolete behavior.
+
+**Tests.** A new F1 test ships a spec a *fresh* validation would FAIL (unknown facet, no
+proposal) with the emitted verdict saying passed → the record reads the emitted `True`, not
+a recomputed `False` (verified to bite by a temporary revert-to-recompute). `_StatefulExtractRunner`
+now carries the emitted `static_schema` verdict; the `_PassValidator` test double is gone.
+
+`just verify` green (644 passed, 1 skipped). No validation-contract change.
+
 Next ADR number: **0058**.

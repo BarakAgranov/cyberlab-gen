@@ -13,10 +13,11 @@ framing: the harness's *logic* is the deliverable, independent of whether a give
 invocation has a live model behind it.
 
 The production runner (:class:`ProviderBackedEvalRunner`) wraps the Task-7
-``PipelineExtractRunner`` (Ingestion → orchestrator) and the Task-6
-``StaticSchemaValidator`` and yields a :class:`~eval.runner.metrics.BlogRunRecord` per
-run. When no provider is configured the harness reports that cleanly and runs
-nothing (it never fabricates results).
+``PipelineExtractRunner`` (Ingestion → orchestrator) and yields a
+:class:`~eval.runner.metrics.BlogRunRecord` per run, reading the pipeline's *emitted*
+static-schema verdict rather than re-running a validator (F1, ``eval.md §7.4``). When no
+provider is configured the harness reports that cleanly and runs nothing (it never
+fabricates results).
 """
 
 from __future__ import annotations
@@ -47,7 +48,6 @@ if TYPE_CHECKING:
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.schemas.attack_spec import AttackSpec
     from cyberlab_gen.state.run_store import RunHandle, RunStore
-    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
     from eval.runner.manifest import BlogSetManifest
 
 #: Default repeated-run count per blog (``eval.md §7.6``; the Phase-1 exit
@@ -133,17 +133,14 @@ def _hard_failure_is_global(exc: BaseException) -> bool:
 def _normalize_failure(reason: str) -> str:
     """Strip run-varying detail from a halt reason so repeats compare equal (ADR 0030).
 
-    The tool-loop 400 names a different ``toolu_`` id, ``request_id`` (``req_…``),
-    and ``messages.N`` index each run; without normalizing, two instances of the
-    *same* systemic failure would look distinct and never trip the
-    consecutive-failure abort. Collapse the variable bits (tool ids, request ids,
-    message indices, any digits) to placeholders. The ``req_…`` id is mixed
-    alphanumeric, so the digit-only collapse alone left it varying — the gap that
-    let six identical 400s run in full in the gen0-20260602 archive (ADR 0032).
+    Collapses message indices and any digit runs to placeholders so two instances of the
+    *same* systemic failure trip the consecutive-failure abort. (The ``toolu_``/``req_`` id
+    collapses were scar tissue from the retired direct-Anthropic tool-loop adapter, whose
+    "tool_use ids without tool_result" 400s carried those ids; the pydantic-ai migration —
+    ADR 0036 — removed that adapter, so those id forms no longer appear and the collapses
+    were obsolete, F1.)
     """
-    s = re.sub(r"toolu_[A-Za-z0-9]+", "toolu_X", reason)
-    s = re.sub(r"req_[A-Za-z0-9]+", "req_X", s)
-    s = re.sub(r"messages\.\d+", "messages.N", s)
+    s = re.sub(r"messages\.\d+", "messages.N", reason)
     s = re.sub(r"\d+", "N", s)
     return s.strip()
 
@@ -216,12 +213,13 @@ class EvalProgress(Protocol):
 class ProviderBackedEvalRunner:
     """The production :class:`EvalPipelineRunner`: real Ingestion → orchestrator (ADR 0025).
 
-    Wraps a Task-7 ``ExtractRunner`` (which drives Ingestion → the LangGraph
-    pipeline) plus the Task-6 ``StaticSchemaValidator`` so the per-run record carries
-    the static-schema pass/fail the ``RunResult`` omits (ADR 0024 left it off the CLI
-    type). Requires a configured provider behind the runner; absent one the agents
-    raise at resolve time (``provider-interface.md §6.3``) — the harness CLI guards
-    against that before constructing this.
+    Wraps a Task-7 ``ExtractRunner`` (which drives Ingestion → the LangGraph pipeline) and
+    reads the per-run static-schema pass/fail off the pipeline's *emitted* verdict — the one
+    it computed with this run's provisional-proposals context (F1, ``eval.md §7.4``) — rather
+    than re-running a validator, which could record a false failure. Requires a configured
+    provider behind the runner; absent one the agents raise at resolve time
+    (``provider-interface.md §6.3``) — the harness CLI guards against that before
+    constructing this.
 
     ``url_for`` maps a blog id to its fetch URL (from the manifest); the runner
     ingests + caches the blog and runs the pipeline once per call.
@@ -231,7 +229,6 @@ class ProviderBackedEvalRunner:
         self,
         *,
         extract_runner_factory: Callable[[CostLedger], ExtractRunner],
-        validator: StaticSchemaValidator,
         url_for: Callable[[str], str],
         cost_cap_usd: Decimal | None = DEFAULT_COST_CAP_USD,
         specs_dir: Path | None = None,
@@ -240,9 +237,10 @@ class ProviderBackedEvalRunner:
         # The factory builds a fresh ``ExtractRunner`` per run from a per-run
         # ``CostLedger`` *this* class constructs (so the run can read real spend off
         # it — the provider the factory wires must record into the passed ledger).
-        # Exercised by the provider-backed path, not run in CI (ADR 0025/0030).
+        # Exercised by the provider-backed path, not run in CI (ADR 0025/0030). The
+        # static-schema verdict is read off the pipeline's emitted state (F1), so no
+        # validator is held here — the harness measures pipeline truth, never recomputing it.
         self._extract_runner_factory = extract_runner_factory
-        self._validator = validator
         self._url_for = url_for
         self._cost_cap_usd = cost_cap_usd
         # When set, each *shipped* run's AttackSpec is written here as
@@ -299,24 +297,20 @@ class ProviderBackedEvalRunner:
                 return self._halt_record(
                     blog_id, run_index, ledger, exc, failure_kind=_classify_pipeline_failure(exc)
                 )
-            # Provisional resolution (ADR 0044): the in-pipeline static schema validation already
-            # provisionally resolved references covered by this run's proposals; this
-            # measurement re-validation must apply the same set or it would record a
-            # false static-schema failure for a spec the pipeline shipped.
-            from cyberlab_gen.validators.static_schema_validator import PendingProposals
-
-            pending = PendingProposals(
-                facets=frozenset(p.name for p in result.facet_proposals),
-                value_types=frozenset(p.name for p in result.value_type_proposals),
-                thesis_types=frozenset(p.name for p in result.thesis_type_proposals),
-            )
-            static_schema = self._validator.validate(result.spec, pending=pending)
+            # F1 (eval.md §7.4): read the pipeline's EMITTED static-schema verdict — the one
+            # it computed WITH this run's provisional-proposals context — instead of
+            # re-running a validator here. Re-validation outside the pipeline risks a
+            # different result (e.g. a Layer-1 false failure from not re-applying the run's
+            # provisional proposals); the harness measures pipeline truth, it never
+            # re-derives it (architecture.md §1.8: a peer that measures, not a second
+            # implementation of the checks).
+            static_schema_passed = _emitted_static_schema_passed(runner)
             self._write_spec(blog_id, run_index, result.spec)
             record = record_from_run(
                 blog_id=blog_id,
                 run_index=run_index,
                 shipped=True,
-                static_schema_passed=static_schema.passed,
+                static_schema_passed=static_schema_passed,
                 cost_usd=ledger.total_usd,
                 spec=result.spec,
                 value_type_proposals=len(result.value_type_proposals),
@@ -454,6 +448,22 @@ class ProviderBackedEvalRunner:
             halt_reason=str(exc),
             failure_kind=failure_kind,
         )
+
+
+def _emitted_static_schema_passed(runner: ExtractRunner) -> bool:
+    """Read the pipeline's emitted static-schema verdict off the runner's last state (F1).
+
+    The pipeline already ran the static-schema layer and emitted its verdict (computed *with*
+    the run's provisional-proposals context); the harness measures that, never re-deriving it
+    (``eval.md §7.4``). A shipped run implies the gate passed, so when the emitted verdict
+    isn't on the last state (a fake runner that carries none), default to ``True``.
+    """
+    from cyberlab_gen.framework.orchestrator import PipelineState
+
+    last = getattr(runner, "last_state", None)
+    if isinstance(last, PipelineState) and last.static_schema is not None:
+        return last.static_schema.passed
+    return True
 
 
 def _eval_halt_status(exc: Exception) -> RunStatus:

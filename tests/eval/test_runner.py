@@ -58,16 +58,6 @@ class _FakeExtractRunner:
         raise NotImplementedError
 
 
-class _PassValidator:
-    """A duck-typed validator whose static-schema result always passes."""
-
-    def validate(self, spec: object, *, pending: object = None) -> object:
-        from types import SimpleNamespace
-
-        del spec, pending  # provisional-resolution set ignored by this always-pass fake
-        return SimpleNamespace(passed=True)  # shipped path reads only `.passed`
-
-
 def test_provider_backed_runner_writes_shipped_spec_to_disk(tmp_path: Path) -> None:
     # The report records only metrics; the shipped AttackSpec itself must be written
     # so a maintainer can read it (e.g. to check a `completeness=0.85` ship wasn't a
@@ -78,7 +68,6 @@ def test_provider_backed_runner_writes_shipped_spec_to_disk(tmp_path: Path) -> N
     specs_dir = tmp_path / "specs"
     runner = ProviderBackedEvalRunner(
         extract_runner_factory=lambda _ledger: _FakeExtractRunner(spec),
-        validator=_PassValidator(),  # type: ignore[arg-type]
         url_for=lambda _blog_id: "https://example.com/blog",
         specs_dir=specs_dir,
     )
@@ -98,7 +87,6 @@ def test_provider_backed_runner_writes_no_spec_when_specs_dir_unset(tmp_path: Pa
     spec = make_spec()
     runner = ProviderBackedEvalRunner(
         extract_runner_factory=lambda _ledger: _FakeExtractRunner(spec),
-        validator=_PassValidator(),  # type: ignore[arg-type]
         url_for=lambda _blog_id: "https://example.com/blog",
     )
     record = runner.run_once("b", run_index=0)
@@ -106,15 +94,48 @@ def test_provider_backed_runner_writes_no_spec_when_specs_dir_unset(tmp_path: Pa
     assert list(tmp_path.iterdir()) == []  # nothing written anywhere under tmp
 
 
+def test_run_once_reads_emitted_static_schema_verdict_not_recompute() -> None:
+    # F1 (eval.md §7.4): the eval reads the pipeline's EMITTED static-schema verdict, it does
+    # NOT re-run a validator. Proven by shipping a spec a fresh validation would FAIL (an
+    # unknown facet, no proposal) while the emitted verdict says passed — the record must
+    # reflect the emitted True, not a recomputed False. (No validator is even constructible
+    # here — the harness has none.)
+    from tests.unit.framework.pipeline_fakes import make_spec as framework_make_spec
+
+    would_fail_fresh = framework_make_spec(facets=["target:bogus_unknown_cloud"])
+    runner = ProviderBackedEvalRunner(
+        extract_runner_factory=lambda _ledger: _StatefulExtractRunner(
+            would_fail_fresh, static_schema_passed=True
+        ),
+        url_for=lambda _blog_id: "https://example.com/blog",
+    )
+
+    record = runner.run_once("b", run_index=0)
+
+    assert record.shipped
+    assert record.static_schema_passed is True  # the emitted verdict, never a recomputation
+
+
 # --- run-store persistence + first-blog-crash archive (ADR 0039) -----------
 
 
 class _StatefulExtractRunner:
-    """A scripted ``ExtractRunner`` exposing a ``last_state`` like the real one."""
+    """A scripted ``ExtractRunner`` exposing a ``last_state`` like the real one.
 
-    def __init__(self, spec: AttackSpec, *, exc: BaseException | None = None) -> None:
+    ``last_state`` carries the *emitted* static-schema verdict (``static_schema_passed``)
+    the eval reads under F1, alongside the spec/verdict/enrichment.
+    """
+
+    def __init__(
+        self,
+        spec: AttackSpec,
+        *,
+        exc: BaseException | None = None,
+        static_schema_passed: bool = True,
+    ) -> None:
         self._spec = spec
         self._exc = exc
+        self._static_schema_passed = static_schema_passed
         self.last_state: object | None = None
 
     def run(self, url: str, *, ledger: CostLedger) -> RunResult:
@@ -122,6 +143,7 @@ class _StatefulExtractRunner:
         from cyberlab_gen.cli.extract import RunResult
         from cyberlab_gen.framework.enrichment import EnrichmentResult
         from cyberlab_gen.framework.orchestrator import PipelineState
+        from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult
 
         del url, ledger
         verdict = JuryVerdict(
@@ -138,6 +160,7 @@ class _StatefulExtractRunner:
             spec=self._spec,
             verdict=verdict,
             enrichment=EnrichmentResult(),
+            static_schema=StaticSchemaResult(passed=self._static_schema_passed),
         )
         if self._exc is not None:
             raise self._exc
@@ -162,7 +185,6 @@ def test_run_once_persists_full_run_dir_on_ship(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     runner = ProviderBackedEvalRunner(
         extract_runner_factory=lambda _ledger: _StatefulExtractRunner(make_spec()),
-        validator=_PassValidator(),  # type: ignore[arg-type]
         url_for=lambda _blog_id: "https://example.com/blog",
         run_store=RunStore(runs),
     )
@@ -189,7 +211,6 @@ def test_run_once_persists_partial_on_halt(tmp_path: Path) -> None:
         extract_runner_factory=lambda _ledger: _StatefulExtractRunner(
             make_spec(), exc=MalformedOutput("bad emit")
         ),
-        validator=_PassValidator(),  # type: ignore[arg-type]
         url_for=lambda _blog_id: "https://example.com/blog",
         run_store=RunStore(runs),
     )
@@ -237,7 +258,6 @@ def test_run_once_persists_partial_from_checkpoint_on_crash(
     runs = tmp_path / "runs"
     runner = ProviderBackedEvalRunner(
         extract_runner_factory=factory,
-        validator=_PassValidator(),  # type: ignore[arg-type]
         url_for=lambda _blog_id: "https://example.com/x",
         run_store=RunStore(runs),
     )

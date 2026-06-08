@@ -284,7 +284,6 @@ def _build_provider_backed_runner(
 
     return ProviderBackedEvalRunner(
         extract_runner_factory=extract_runner_factory,
-        validator=validator,
         url_for=url_for,
         cost_cap_usd=cost_cap_usd,
         # Shipped specs land alongside the reports, under eval/reports/specs/, so a
