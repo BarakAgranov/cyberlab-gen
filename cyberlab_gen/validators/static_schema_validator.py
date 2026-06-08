@@ -19,12 +19,14 @@ checks, in order:
 2. **``spec_kind`` discriminator** — the spec's ``spec_kind`` must be
    ``attack_spec`` at the AttackSpec loading point. Loading a Manifest where an
    AttackSpec is expected fails loudly (``validation.md §6.4``).
-3. **Registry reference resolution** — every registry/catalog reference in the
+3. **Registry reference resolution** — every controlled-vocabulary reference in the
    spec resolves against the merged registry (bundled + overlay) and the closed
    bundled-only catalogs (ADR 0016): facets (``FacetName`` → merged ``facets``
    registry), thesis types (``ThesisType`` → merged ``thesis_types`` registry —
-   runtime-proposable since ADR 0045), CVE/advisory ``source_of_record`` /
-   ``source`` (→ merged ``external_data_sources`` registry). The closed *enums*
+   runtime-proposable since ADR 0045). External-source ids (``advisory.source``,
+   ``cve.source_of_record``) are deliberately **not** resolved here: ``external_data_sources``
+   is a catalog of tool adapters, not a vocabulary the spec resolves into (ADR 0055/0058,
+   ``schema.md §4.14``). The closed *enums*
    (``Severity``, ``DetectionComponent``,
    ``DetectionFormat``, ``ProvisioningMechanism``) are already validated by
    Pydantic at construction, so static schema validation does not re-check them — but it confirms
@@ -97,6 +99,9 @@ class StaticSchemaCode(StrEnum):
     SPEC_KIND_MISMATCH = "spec_kind_mismatch"
     UNKNOWN_FACET = "unknown_facet"
     UNKNOWN_THESIS_TYPE = "unknown_thesis_type"
+    # Reserved (ADR 0055/0058): no longer emitted at the structural gate — external-source ids
+    # are tool-adapter references, not gate-checked vocabularies. Kept for the deferred
+    # post-enrichment verification of ``cve.source_of_record`` (findings doc 0001 §5).
     UNKNOWN_EXTERNAL_SOURCE = "unknown_external_source"
     CATALOG_DRIFT = "catalog_drift"
 
@@ -181,7 +186,6 @@ class StaticSchemaValidator:
         findings.extend(self._check_spec_kind(spec))
         findings.extend(self._check_facets(spec, pending))
         findings.extend(self._check_thesis_types(spec, pending))
-        findings.extend(self._check_external_sources(spec))
         findings.extend(self._check_closed_catalog_membership(spec))
 
         passed = not findings
@@ -284,38 +288,16 @@ class StaticSchemaValidator:
                 )
         return findings
 
-    def _check_external_sources(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
-        """Every external-data-source reference must resolve in the registry."""
-        findings: list[StaticSchemaFinding] = []
-        if spec.external_references is None:
-            return findings
-        for i, cve in enumerate(spec.external_references.cves):
-            if cve.source_of_record is not None and (
-                self._registries.external_source(cve.source_of_record) is None
-            ):
-                findings.append(
-                    StaticSchemaFinding(
-                        code=StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE,
-                        location=f"external_references.cves[{i}].source_of_record",
-                        detail=(
-                            f"external data source {cve.source_of_record!r} does not resolve in "
-                            "the external_data_sources registry"
-                        ),
-                    )
-                )
-        for i, adv in enumerate(spec.external_references.advisories):
-            if self._registries.external_source(adv.source) is None:
-                findings.append(
-                    StaticSchemaFinding(
-                        code=StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE,
-                        location=f"external_references.advisories[{i}].source",
-                        detail=(
-                            f"external data source {adv.source!r} does not resolve in the "
-                            "external_data_sources registry"
-                        ),
-                    )
-                )
-        return findings
+    # NOTE: there is deliberately no external-source check here. ``external_data_sources`` is
+    # a catalog of TOOL ADAPTERS (queried at runtime / enrichment), not a controlled
+    # vocabulary the spec must resolve into (ADR 0055/0058, schema.md §4.14). Two former
+    # checks were category errors and were removed: ``advisory.source`` is a publisher
+    # provenance label (e.g. 'aws') that can never resolve in the ['nvd'] tool registry — the
+    # lone unconvergeable ship-blocker; and ``cve.source_of_record`` is framework-authored by
+    # enrichment AFTER this gate (always a registered id by construction), so checking it
+    # pre-enrichment is meaningless and could hard-fail a future Extractor-emitted value. A
+    # post-enrichment verification of ``source_of_record`` is deferred LATER with the NVD/MITRE
+    # adapter wiring (findings doc 0001 §5); ``UNKNOWN_EXTERNAL_SOURCE`` is retained for it.
 
     def _check_closed_catalog_membership(self, spec: AttackSpec) -> list[StaticSchemaFinding]:
         """Confirm each closed-enum value used also appears in its closed catalog.

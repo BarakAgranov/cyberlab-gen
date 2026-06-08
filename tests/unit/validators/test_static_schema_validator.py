@@ -4,7 +4,9 @@ Covers the Task-6 exit criteria for static schema validation:
 - a structurally-valid AttackSpec with all references resolving → passes;
 - an unknown facet → ``UNKNOWN_FACET`` finding;
 - an unknown thesis type → ``UNKNOWN_THESIS_TYPE`` finding (closed catalog, ADR 0016);
-- an unknown external-data-source reference → ``UNKNOWN_EXTERNAL_SOURCE`` finding;
+- external-source references (``advisory.source``, ``cve.source_of_record``) are NOT
+  gate-checked against the tool registry (ADR 0055/0058 — they are a publisher label and a
+  framework-authored verifier id, not vocabularies the spec must resolve into);
 - the ``spec_kind`` discriminator is enforced;
 - the validator never mutates the spec.
 
@@ -178,7 +180,11 @@ def test_unknown_thesis_type_with_pending_proposal_provisionally_passes() -> Non
     assert result.passed
 
 
-def test_unknown_external_source_in_cve_fails() -> None:
+def test_bogus_cve_source_of_record_is_not_checked_at_the_structural_gate() -> None:
+    # ADR 0055/0058: cve.source_of_record is a verifying-tool id authored by enrichment
+    # (post-gate, always a registered id by construction); the Extractor leaves it None. It
+    # must NOT be validated against the tool registry at the pre-enrichment structural gate,
+    # so a future Extractor-emitted value can't hard-fail the way advisory.source did.
     external = ExternalRefsBlock(
         cves=[
             CveReference(
@@ -189,34 +195,47 @@ def test_unknown_external_source_in_cve_fails() -> None:
         ]
     )
     result = _validator().validate(_spec(external=external))
-    assert not result.passed
-    assert any(f.code is StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
+    assert result.passed
+    assert not any(f.code is StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
 
 
-def test_unknown_external_source_in_advisory_fails() -> None:
+def test_advisory_source_is_not_checked_at_the_structural_gate() -> None:
+    # ADR 0055/0058: advisory.source is a publisher provenance label (e.g. 'aws'), not a
+    # queryable tool id — it can never resolve in the ['nvd'] external_data_sources registry
+    # and was the lone unconvergeable ship-blocker. It is no longer gate-checked.
     external = ExternalRefsBlock(
         advisories=[
             AdvisoryReference(
                 advisory_id="ADV-1",
-                source="not_a_real_source",  # type: ignore[arg-type]
+                source="aws",  # type: ignore[arg-type]
                 description=_pstr("an advisory"),
             )
         ]
     )
     result = _validator().validate(_spec(external=external))
-    assert any(f.code is StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
+    assert result.passed
+    assert not any(f.code is StaticSchemaCode.UNKNOWN_EXTERNAL_SOURCE for f in result.findings)
 
 
-def test_known_external_source_passes() -> None:
-    # nvd is the one integrated external source in Phase 1.
+def test_advisory_aws_and_bogus_cve_source_both_ship() -> None:
+    # Contract pin (ADR 0058): the two formerly-blocking external-source findings are gone — a
+    # spec whose only external-source 'problems' are a publisher-label advisory.source and a
+    # not-yet-enriched cve.source_of_record now passes the structural gate.
     external = ExternalRefsBlock(
         cves=[
             CveReference(
                 cve_id="CVE-2024-0001",
                 description=_pstr("a vuln"),
-                source_of_record="nvd",  # type: ignore[arg-type]
+                source_of_record="not_a_real_source",  # type: ignore[arg-type]
             )
-        ]
+        ],
+        advisories=[
+            AdvisoryReference(
+                advisory_id="ADV-1",
+                source="aws",  # type: ignore[arg-type]
+                description=_pstr("an advisory"),
+            )
+        ],
     )
     result = _validator().validate(_spec(external=external))
     assert result.passed
