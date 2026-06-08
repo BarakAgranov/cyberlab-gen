@@ -244,6 +244,39 @@ async def test_incomplete_tool_call_truncation_raises_emit_truncated() -> None:
     assert exc_info.value.model == _HAIKU
 
 
+async def test_emit_truncated_message_distinguishes_per_request_limit_from_aggregate() -> None:
+    # The cost.yaml output figure is a RunUsage AGGREGATE summed across every model-request
+    # in one _invoke; the final emit still hit the per-request max_tokens. The halt message
+    # must state both so an operator doesn't misread aggregate > limit as a second/wrong
+    # ceiling (investigation 0002 §2, fix C). Here: malformed attempt 1 forces an
+    # output-retry, attempt 2 is valid-but-length-truncated => 2 requests, output 50x2=100.
+    calls = {"n": 0}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls["n"] += 1
+        name = _output_tool(info)
+        if calls["n"] == 1:
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name=name, args={"nope": 1})], usage=_USAGE
+            )
+        return ModelResponse(
+            parts=[ToolCallPart(tool_name=name, args={"greeting": "h", "audience": "w"})],
+            usage=_USAGE,
+            finish_reason="length",
+        )
+
+    with pytest.raises(EmitTruncated) as exc_info:
+        await _complete(_provider(fn, output_retries=1), max_tokens=4096)
+    msg = str(exc_info.value).lower()
+    assert "per-request" in msg  # the limit is per request...
+    assert "max_tokens=4096" in msg
+    assert "aggregat" in msg  # ...the call total is an aggregate...
+    assert "2 model-request" in msg  # ...across this many requests
+    assert "output_tokens=100" in msg
+    assert exc_info.value.usage is not None
+    assert exc_info.value.usage.output_tokens == 100
+
+
 # --- tool loop -------------------------------------------------------------
 
 

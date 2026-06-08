@@ -239,7 +239,9 @@ class AnthropicProvider(Provider):
             ModelAPIError,
             UserError,
         ) as exc:
-            raise self._map_error(exc, model_id=model_id, run_usage=run_usage) from exc
+            raise self._map_error(
+                exc, model_id=model_id, run_usage=run_usage, max_tokens=max_tokens
+            ) from exc
 
         if result is None:  # pragma: no cover - iter always reaches End on success
             raise MalformedOutput(
@@ -255,9 +257,10 @@ class AnthropicProvider(Provider):
             # silently by pydantic-ai; halt it explicitly to preserve the ADR-0033
             # contract (retrying regenerates the same oversized output — only burns money).
             raise EmitTruncated(
-                f"emit truncated at the output-token limit (finish_reason='length', "
-                f"max_tokens={max_tokens or DEFAULT_MAX_TOKENS}); raise max_tokens or "
-                f"shorten the input — re-running will truncate again at the same budget",
+                f"emit truncated (finish_reason='length') at the "
+                f"{_truncation_decomposition(max_tokens, usage, _request_count(run_usage))}. "
+                f"Raise max_tokens or shorten the input — re-running will truncate again at "
+                f"the same budget",
                 usage=usage,
                 model=model_id,
             )
@@ -364,15 +367,16 @@ class AnthropicProvider(Provider):
             return None
 
     def _map_error(
-        self, exc: Exception, *, model_id: str, run_usage: RunUsage | None
+        self, exc: Exception, *, model_id: str, run_usage: RunUsage | None, max_tokens: int | None
     ) -> ProviderError:
         """Translate a pydantic-ai exception into the project error hierarchy (ADR 0036)."""
         usage = self._safe_usage(run_usage, model_id)
         if isinstance(exc, IncompleteToolCall):
             return EmitTruncated(
-                f"emit truncated at the output-token limit while generating a tool call "
-                f"({exc}); raise max_tokens or shorten the input — re-running will truncate "
-                f"again at the same budget",
+                f"emit truncated while generating a tool call ({exc}) at the "
+                f"{_truncation_decomposition(max_tokens, usage, _request_count(run_usage))}. "
+                f"Raise max_tokens or shorten the input — re-running will truncate again at "
+                f"the same budget",
                 usage=usage,
                 model=model_id,
                 cause=exc,
@@ -583,6 +587,34 @@ def _as_text(content: object) -> str:
     if isinstance(content, str):
         return content
     return str(content)
+
+
+def _request_count(run_usage: RunUsage | None) -> int:
+    """Number of model-requests pydantic-ai made in this ``_invoke`` (>= 1)."""
+    return run_usage.requests if run_usage is not None and run_usage.requests else 1
+
+
+def _truncation_decomposition(
+    max_tokens: int | None, usage: TokenUsage | None, requests: int
+) -> str:
+    """Phrase the per-request limit against the per-``_invoke`` aggregate so the units of a
+    truncation halt are not misread.
+
+    ``max_tokens`` bounds a **single** model-request's output; ``RunUsage`` (and therefore
+    ``cost.yaml``) **sums** output across **every** request in the call, so the aggregate can
+    exceed the per-request limit while the final emit still hit it. Persisting this in the
+    halt message closes the observability gap from investigation 0002 §2 (an operator reading
+    ``cost.yaml`` alone saw output 38,249 against ``max_tokens=16384`` and could not tell the
+    final emit had hit the per-request ceiling). The per-request *split* lives only in the
+    Phoenix trace; what is computable here is "limit L per request, aggregate A over K".
+    """
+    limit = max_tokens or DEFAULT_MAX_TOKENS
+    aggregate = usage.output_tokens if usage is not None else 0
+    return (
+        f"per-request output-token limit max_tokens={limit}; this call aggregated "
+        f"output_tokens={aggregate} across {requests} model-request(s), so the per-call "
+        f"total can exceed the per-request limit while the final emit still hit it"
+    )
 
 
 def _run_usage_to_token_usage(run_usage: RunUsage | None) -> TokenUsage:
