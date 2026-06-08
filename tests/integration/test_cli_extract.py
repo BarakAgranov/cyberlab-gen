@@ -743,7 +743,12 @@ def test_persist_from_state_writes_all_stage_artifacts(tmp_path: Path) -> None:
     assert (handle.directory / SPEC_FILENAME).is_file()
     assert (handle.directory / JURY_VERDICT_FILENAME).is_file()
     assert (handle.directory / ENRICHMENT_FILENAME).is_file()
-    assert handle.record.lineage.model == "m"  # lineage pulled from the spec metadata
+    # extractor_version is config/code provenance (legitimately spec-authored); model is
+    # NOT — it is sourced from the billed ledger in _populate_lineage, never from the
+    # LLM-authored extraction_metadata.model (architecture.md §1.5; investigation 0002 §7).
+    # So _persist_from_state alone records the version and leaves model unset.
+    assert handle.record.lineage.extractor_version == "1.0.0"
+    assert handle.record.lineage.model is None
 
 
 def test_run_store_lineage_populated_on_failed_run(tmp_path: Path) -> None:
@@ -790,6 +795,55 @@ def test_run_store_lineage_populated_on_failed_run(tmp_path: Path) -> None:
     assert record.status is RunStatus.FAILED
     assert record.lineage.model == "claude-opus-4-8"  # from the ledger (no spec emitted)
     assert record.lineage.input_hash == "a" * 64  # from the runner's content hash
+
+
+def test_lineage_model_is_billed_ledger_model_not_spec_self_report(tmp_path: Path) -> None:
+    """lineage.model is the billed provider model, never the LLM-authored
+    extraction_metadata.model (architecture.md §1.5; investigation 0002 §7 — the real run
+    self-reported "claude-sonnet" while the ledger billed claude-opus-4-8)."""
+    from cyberlab_gen.cli.extract import (
+        _persist_from_state,  # pyright: ignore[reportPrivateUsage]
+        _populate_lineage,  # pyright: ignore[reportPrivateUsage]
+    )
+    from cyberlab_gen.errors import MalformedOutput
+    from cyberlab_gen.framework.orchestrator import PipelineState
+    from cyberlab_gen.providers import (
+        AgentLabel,
+        CallOutcome,
+        CapabilityHint,
+        CostLedgerEntry,
+        TokenUsage,
+    )
+    from cyberlab_gen.state.run_store import RunKind
+
+    # The spec self-reports model "m" — the LLM-authored content field that used to win.
+    state = PipelineState(blog_content="b", source_summary="s", spec=_in_scope_spec())
+    assert state.spec is not None
+    assert state.spec.extraction_metadata.model == "m"
+
+    ledger = _ledger(None)
+    ledger.record(
+        CostLedgerEntry(
+            timestamp=datetime(2026, 6, 8, tzinfo=UTC),
+            agent_label=AgentLabel.EXTRACTOR,
+            provider="anthropic",
+            model="claude-opus-4-8",  # what the framework actually billed
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            usage=TokenUsage(input_tokens=82365, output_tokens=31701, cost_usd=Decimal("1.2")),
+            outcome=CallOutcome.SUCCESS,
+            purpose="cli",
+        )
+    )
+
+    handle = RunStore(tmp_path).start(kind=RunKind.EXTRACT, label="u")
+    runner_obj = _RaisingRunner(MalformedOutput("unused"), content_hash="b" * 64)
+
+    _persist_from_state(handle, state)  # must NOT write model="m"
+    _populate_lineage(handle, runner=runner_obj, ledger=ledger)
+
+    assert handle.record.lineage.model == "claude-opus-4-8"  # billed wins over the spec's "m"
+    assert handle.record.lineage.extractor_version == "1.0.0"  # version still from the spec
+    assert handle.record.lineage.input_hash == "b" * 64
 
 
 # --- L4/G1: persistence recovers the partial spec from the checkpoint on abort ----

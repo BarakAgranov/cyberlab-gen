@@ -48,6 +48,7 @@ from cyberlab_gen.framework.proposal_acceptance import (
     accept_value_type,
     auto_accept_to_overlay,
 )
+from cyberlab_gen.providers import AgentLabel
 from cyberlab_gen.schemas.attack_spec import AttackSpec, MaterialDiscrepancy
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.state.run_store import (
@@ -914,23 +915,37 @@ def _persist_run(
     handle.finalize(status, halt_reason=reason)
 
 
+def _billed_extractor_model(ledger: CostLedger) -> str | None:
+    """The provider model the framework actually billed for extraction — the authoritative
+    source for ``lineage.model``.
+
+    Provenance is a framework fact: ``lineage.model`` must come from the billed cost ledger,
+    **never** from the LLM-authored ``extraction_metadata.model`` (``architecture.md §1.5``;
+    investigation 0002 §7 — a real run self-reported ``"claude-sonnet"`` into its own spec
+    metadata while the ledger correctly billed ``claude-opus-4-8``). Prefers the last
+    ``EXTRACTOR``-labelled entry (the model that produced the spec); falls back to the last
+    billed entry, then ``None`` (empty ledger — nothing billed yet).
+    """
+    extractor_entries = [e for e in ledger.entries if e.agent_label is AgentLabel.EXTRACTOR]
+    pool = extractor_entries or ledger.entries
+    return pool[-1].model if pool else None
+
+
 def _populate_lineage(handle: RunHandle, *, runner: ExtractRunner, ledger: CostLedger) -> None:
     """Fill run lineage knowable even on a failed (pre-emit) run — what makes runs
     comparable (ADR 0039).
 
-    ``model``/``extractor_version`` come from the emitted spec when there is one
-    (:func:`_persist_from_state`); here we add the ingested ``input_hash`` and, when no
-    spec was produced, fall back to the model actually billed (from the ledger) so a run
-    that died before emitting still records which model + input it ran on.
-    ``update_lineage`` ignores ``None`` fields, so this never clears a known value.
+    ``extractor_version`` comes from the emitted spec (config/code provenance,
+    :func:`_persist_from_state`); ``model`` is sourced **here, from the billed ledger**
+    (:func:`_billed_extractor_model`) regardless of whether a spec was emitted — never from
+    the LLM-authored ``extraction_metadata.model``. ``input_hash`` is the ingested content
+    hash. ``update_lineage`` ignores ``None`` fields, so an empty ledger never clears a known
+    value.
     """
     content_hash = getattr(runner, "content_hash", None)
-    model = handle.record.lineage.model
-    if model is None and ledger.entries:
-        model = ledger.entries[-1].model
     handle.update_lineage(
         input_hash=content_hash if isinstance(content_hash, str) else None,
-        model=model,
+        model=_billed_extractor_model(ledger),
     )
 
 
@@ -940,7 +955,10 @@ def _persist_from_state(handle: RunHandle, state: PipelineState | None) -> None:
         return
     if state.spec is not None:
         meta = state.spec.extraction_metadata
-        handle.update_lineage(model=str(meta.model), extractor_version=str(meta.extractor_version))
+        # extractor_version is config/code provenance (legitimately spec-authored). model is
+        # NOT taken from the spec here: it is the billed provider model, sourced from the
+        # ledger in _populate_lineage (architecture.md §1.5; investigation 0002 §7).
+        handle.update_lineage(extractor_version=str(meta.extractor_version))
         # A clean ship already mirrored the post-edit spec; only fill in the partial.
         if SPEC_FILENAME not in handle.record.artifacts:
             handle.write_artifact(SPEC_FILENAME, state.spec)
