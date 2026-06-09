@@ -166,6 +166,22 @@ def test_reject_requires_feedback() -> None:
         )
 
 
+def test_scores_min_dimension_and_all_above() -> None:
+    """The rubric helpers the framework backstop relies on (ADR 0067).
+
+    ``min_dimension`` is the lowest of the four dimensions; ``all_above`` is an inclusive
+    floor (``>=``), so a dimension exactly at the floor passes. Before ADR 0067 these had
+    zero call sites (dead code) — the framework now reads them in ``jury_node``.
+    """
+    s = JuryScores(
+        fidelity=0.9, completeness=0.65, provenance_correctness=0.8, structural_validity=0.95
+    )
+    assert s.min_dimension() == pytest.approx(0.65)
+    assert s.all_above(0.6) is True
+    assert s.all_above(0.65) is True  # inclusive floor
+    assert s.all_above(0.7) is False
+
+
 def test_verdict_round_trips_through_yaml() -> None:
     v = JuryVerdict(
         verdict=Verdict.REVISE,

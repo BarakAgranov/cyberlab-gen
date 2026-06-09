@@ -233,6 +233,10 @@ class PipelineStatus(StrEnum):
     SHIPPED_LOW_CONFIDENCE = "shipped_low_jury_confidence"
     HALTED_VALIDATION = "halted_validation"
     HALTED_REJECT = "halted_reject"
+    # Mechanical backstop (ADR 0067): the jury returned ``approve`` while a rubric
+    # dimension scored below the floor — a self-contradictory verdict the framework
+    # refuses to ship (defense-in-depth, ``architecture.md §1.6``).
+    HALTED_JURY_INCONSISTENT = "halted_jury_inconsistent"
 
 
 class PipelineState(BaseModel):
@@ -350,6 +354,9 @@ class _ExtractorLike(Protocol):
 
 
 class _JuryLike(Protocol):
+    @property
+    def rubric_floor(self) -> float: ...
+
     async def review(
         self,
         *,
@@ -681,6 +688,29 @@ def build_pipeline(
         state.verdict_history = [*state.verdict_history, verdict.verdict]
 
         if verdict.verdict is Verdict.APPROVE:
+            # Mechanical rubric-floor backstop (ADR 0067): an ``approve`` whose dimension
+            # scores fall below the floor is a self-contradiction the verdict↔feedback
+            # validator cannot catch. The framework reads ``verdict.scores`` against the floor
+            # and refuses to ship it (defense-in-depth, ``architecture.md §1.6`` — mechanical
+            # safety is framework-owned). The jury still owns the holistic verdict (``§1.5``);
+            # this only vetoes a verdict that disagrees with itself. An ``approve`` carries no
+            # feedback (the validator forbids it), so there is nothing to refine toward — the
+            # safe deterministic action is a halt, not a re-run.
+            if not verdict.scores.all_above(jury.rubric_floor):
+                state.status = PipelineStatus.HALTED_JURY_INCONSISTENT
+                state.halt_reason = (
+                    "Extractor-Jury returned approve while a rubric dimension scored below the "
+                    f"floor ({jury.rubric_floor}): lowest dimension "
+                    f"{verdict.scores.min_dimension()}. The framework refuses an approve that "
+                    "contradicts its own scores."
+                )
+                state.route = END
+                logger.info(
+                    "jury approve contradicts sub-floor scores (min %.3f < floor %.3f); halting",
+                    verdict.scores.min_dimension(),
+                    jury.rubric_floor,
+                )
+                return state
             # Enrichment already ran before this review (ADR 0052/0061), so an approve ships
             # directly: the jury owns the ship decision (``architecture.md §1.5``).
             state.status = PipelineStatus.SHIPPED
@@ -872,6 +902,10 @@ def _finalize(state: PipelineState) -> PipelineOutcome:
         )
     if state.status is PipelineStatus.HALTED_REJECT:
         raise JuryRejectionError(state.halt_reason or "Extractor-Jury rejected the AttackSpec")
+    if state.status is PipelineStatus.HALTED_JURY_INCONSISTENT:
+        raise JuryInconsistencyError(
+            state.halt_reason or "Extractor-Jury approved a spec with sub-floor rubric scores"
+        )
 
     # shipped (clean or low-confidence) — enrichment ran, everything is present.
     assert state.spec is not None
@@ -952,6 +986,20 @@ class JuryRejectionError(ValidationError):
     """
 
 
+class JuryInconsistencyError(JuryRejectionError):
+    """The jury returned ``approve`` while a rubric dimension scored below the floor → halt.
+
+    A mechanical defense-in-depth backstop (ADR 0067): the framework reads
+    ``verdict.scores`` against the rubric floor and refuses to ship an ``approve`` that
+    contradicts its own sub-floor scores (``architecture.md §1.6`` — mechanical safety
+    checks are framework-owned, never LLM-routed). Subclasses :class:`JuryRejectionError`
+    so it inherits the reject-class terminal-status mapping (a quality halt, no
+    static-schema findings) while remaining a distinct type the run report and tests can
+    name. The jury still owns the holistic verdict (``§1.5``); this only catches the
+    self-contradiction the verdict↔feedback validator cannot see.
+    """
+
+
 __all__ = [
     "DEFAULT_GROUNDING_RETRY_ATTEMPTS",
     "DEFAULT_REFINEMENT_CAP",
@@ -959,6 +1007,7 @@ __all__ = [
     "GLOBAL_ITERATION_CAP",
     "GRAPH_RECURSION_LIMIT",
     "FeedbackKind",
+    "JuryInconsistencyError",
     "JuryRejectionError",
     "PipelineOutcome",
     "PipelineState",

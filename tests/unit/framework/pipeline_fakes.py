@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from cyberlab_gen.agents.extractor.extractor import ExtractionResult
+from cyberlab_gen.agents.extractor_jury.jury import DEFAULT_RUBRIC_FLOOR
 from cyberlab_gen.agents.extractor_jury.schema import (
     JuryFieldFeedback,
     JuryScores,
@@ -120,12 +121,21 @@ def make_result(spec: AttackSpec) -> ExtractionResult:
 
 
 def make_verdict(
-    verdict: Verdict, *, feedback: list[JuryFieldFeedback] | None = None
+    verdict: Verdict,
+    *,
+    feedback: list[JuryFieldFeedback] | None = None,
+    scores: JuryScores | None = None,
 ) -> JuryVerdict:
-    """A jury verdict with uniform high scores and the given ``feedback``."""
+    """A jury verdict with the given ``feedback`` and ``scores``.
+
+    ``scores`` defaults to uniform 0.9 (above any sane floor); pass an explicit
+    ``JuryScores`` to exercise the framework's rubric-floor backstop (ADR 0067) — e.g. an
+    ``approve`` with a sub-floor dimension, the self-contradiction that must not ship.
+    """
     return JuryVerdict(
         verdict=verdict,
-        scores=JuryScores(
+        scores=scores
+        or JuryScores(
             fidelity=0.9, completeness=0.9, provenance_correctness=0.9, structural_validity=0.9
         ),
         feedback=feedback or [],
@@ -232,9 +242,12 @@ class FakeJury:
     (ADR 0051/0060) and reviews the enriched spec (ADR 0052).
     """
 
-    def __init__(self, verdicts: list[JuryVerdict]) -> None:
+    def __init__(
+        self, verdicts: list[JuryVerdict], *, rubric_floor: float = DEFAULT_RUBRIC_FLOOR
+    ) -> None:
         self._verdicts = verdicts
         self.calls = 0
+        self.rubric_floor = rubric_floor
         self.reviewed_specs: list[AttackSpec] = []
         self.reviewed_findings: list[list[GroundingFinding] | None] = []
 
@@ -256,9 +269,12 @@ class FakeJury:
 class CrashOnceJury:
     """Raises on its first review (a mid-node crash), then returns scripted verdicts."""
 
-    def __init__(self, verdicts: list[JuryVerdict]) -> None:
+    def __init__(
+        self, verdicts: list[JuryVerdict], *, rubric_floor: float = DEFAULT_RUBRIC_FLOOR
+    ) -> None:
         self._verdicts = verdicts
         self.calls = 0
+        self.rubric_floor = rubric_floor
 
     async def review(
         self,

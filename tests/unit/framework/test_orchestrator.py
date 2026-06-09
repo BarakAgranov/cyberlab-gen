@@ -25,13 +25,15 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, Verdict
+from cyberlab_gen.agents.extractor_jury.jury import DEFAULT_RUBRIC_FLOOR
+from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryScores, Verdict
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, NvdCveData
 from cyberlab_gen.framework.orchestrator import (
     GLOBAL_ITERATION_CAP,
     GRAPH_RECURSION_LIMIT,
     FeedbackKind,
+    JuryInconsistencyError,
     JuryRejectionError,
     PipelineState,
     PipelineStatus,
@@ -231,6 +233,63 @@ async def test_jury_reject_halts() -> None:
     )
     jury = _FakeJury([reject])
     with pytest.raises(JuryRejectionError):
+        await run_pipeline(
+            ingestion=_ingestion(),
+            blog_content="blog",
+            extractor=ext,  # type: ignore[arg-type]
+            validator=_validator(),
+            jury=jury,  # type: ignore[arg-type]
+        )
+
+
+def _subfloor_scores() -> JuryScores:
+    """An otherwise-clean score set with one dimension below the default rubric floor."""
+    return JuryScores(
+        fidelity=0.1, completeness=0.9, provenance_correctness=0.9, structural_validity=0.9
+    )
+
+
+async def test_jury_approve_with_subfloor_score_halts_not_ships() -> None:
+    """A self-contradictory ``approve`` (verdict=approve, a rubric dimension below the floor)
+    must NOT ship — the framework reads ``verdict.scores`` against the floor and mechanically
+    refuses it (ADR 0067, the defense-in-depth backstop of ``architecture.md §1.6``). Before
+    the fix this shipped at full confidence because ``jury_node`` routed on ``verdict.verdict``
+    alone and never read the scores.
+    """
+    ext = _FakeExtractor([_spec(facets=["target:aws"])])
+    jury = _FakeJury([_verdict(Verdict.APPROVE, scores=_subfloor_scores())])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.HALTED_JURY_INCONSISTENT
+    assert state.spec is not None  # retained for the run report; just not shipped
+
+
+async def test_jury_approve_at_floor_still_ships() -> None:
+    """The backstop is an inclusive floor, not a strict ceiling: an approve whose lowest
+    dimension is exactly at the floor is consistent and still ships (boundary, ADR 0067).
+    """
+    ext = _FakeExtractor([_spec(facets=["target:aws"])])
+    at_floor = JuryScores(
+        fidelity=DEFAULT_RUBRIC_FLOOR,
+        completeness=0.9,
+        provenance_correctness=0.9,
+        structural_validity=0.9,
+    )
+    jury = _FakeJury([_verdict(Verdict.APPROVE, scores=at_floor)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+
+
+async def test_run_pipeline_raises_jury_inconsistency_on_subfloor_approve() -> None:
+    """``run_pipeline`` raises ``JuryInconsistencyError`` (a reject-class quality halt) when an
+    approve contradicts its own sub-floor scores (ADR 0067).
+    """
+    ext = _FakeExtractor([_spec(facets=["target:aws"])])
+    jury = _FakeJury([_verdict(Verdict.APPROVE, scores=_subfloor_scores())])
+    with pytest.raises(JuryInconsistencyError):
         await run_pipeline(
             ingestion=_ingestion(),
             blog_content="blog",
