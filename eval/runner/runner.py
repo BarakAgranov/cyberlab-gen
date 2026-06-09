@@ -30,9 +30,6 @@ from typing import TYPE_CHECKING, Protocol
 from cyberlab_gen.agents.extractor_jury.schema import Verdict
 from cyberlab_gen.providers.cost_ledger import DEFAULT_CATASTROPHE_CEILING_USD
 from cyberlab_gen.state.run_store import (
-    ENRICHMENT_FILENAME,
-    JURY_VERDICT_FILENAME,
-    SPEC_FILENAME,
     RunKind,
     RunLineage,
     RunStatus,
@@ -377,34 +374,26 @@ class ProviderBackedEvalRunner:
             return
         from cyberlab_gen.framework.orchestrator import PipelineState
         from cyberlab_gen.schemas.attack_spec import AttackSpec
+        from cyberlab_gen.state.run_persistence import persist_pipeline_artifacts
 
         last = getattr(runner, "last_state", None)
         state = last if isinstance(last, PipelineState) else None
-        spec = getattr(result, "spec", None)
-        if not isinstance(spec, AttackSpec):
-            spec = state.spec if state is not None else None
-        if spec is not None:
-            meta = spec.extraction_metadata
-            handle.update_lineage(
-                model=str(meta.model), extractor_version=str(meta.extractor_version)
-            )
-            handle.write_artifact(SPEC_FILENAME, spec)
-        if state is not None:
-            if state.verdict is not None:
-                handle.write_artifact(JURY_VERDICT_FILENAME, state.verdict)
-            if state.enrichment is not None:
-                handle.write_artifact(ENRICHMENT_FILENAME, state.enrichment)
-        handle.write_cost(ledger)
-        # Lineage knowable even on a failed (pre-emit) run, so runs stay comparable
-        # (ADR 0039): the ingested input hash, and — when no spec was produced — the
-        # model actually billed (from the ledger). update_lineage ignores None fields.
+        shipped = getattr(result, "spec", None)
+        shipped_spec = shipped if isinstance(shipped, AttackSpec) else None
         content_hash = getattr(runner, "content_hash", None)
-        model = handle.record.lineage.model
-        if model is None and ledger.entries:
-            model = ledger.entries[-1].model
-        handle.update_lineage(
-            input_hash=content_hash if isinstance(content_hash, str) else None, model=model
+        # The shared persistence service (ADR 0068) stamps the BILLED model onto whichever spec it
+        # writes — shipped or partial — so the eval run record never leaks the LLM self-report (the
+        # bug this duplicate path had: it wrote str(meta.model) and stamped nothing). Lineage
+        # (billed model + input_hash + extractor_version) and the per-stage artifacts now have one
+        # home; only status + finalize stay here (they differ from the CLI's exc-derived mapping).
+        persist_pipeline_artifacts(
+            handle,
+            state=state,
+            shipped_spec=shipped_spec,
+            ledger=ledger,
+            content_hash=content_hash if isinstance(content_hash, str) else None,
         )
+        handle.write_cost(ledger)
         handle.finalize(status, halt_reason=halt_reason)
 
     def _write_spec(self, blog_id: str, run_index: int, spec: AttackSpec) -> None:

@@ -48,12 +48,14 @@ from cyberlab_gen.framework.proposal_acceptance import (
     accept_value_type,
     auto_accept_to_overlay,
 )
-from cyberlab_gen.providers import AgentLabel
 from cyberlab_gen.schemas.attack_spec import AttackSpec, MaterialDiscrepancy
 from cyberlab_gen.schemas.base import InternalModel
+from cyberlab_gen.state.run_persistence import (
+    billed_model,
+    persist_pipeline_artifacts,
+    stamp_billed_model,
+)
 from cyberlab_gen.state.run_store import (
-    ENRICHMENT_FILENAME,
-    JURY_VERDICT_FILENAME,
     SPEC_FILENAME,
     RunKind,
     RunLineage,
@@ -290,7 +292,7 @@ class PipelineExtractRunner:
         # Framework-stamp the billed model onto the spec (ADR 0065): the LLM never authors
         # model-provenance, so the shipped + mirrored spec records the billed model, not the
         # model's self-report. The on-abort partial spec is stamped in ``_persist_from_state``.
-        return result.model_copy(update={"spec": _stamp_billed_model(result.spec, ledger)})
+        return result.model_copy(update={"spec": stamp_billed_model(result.spec, ledger)})
 
 
 def _state_to_run_result(
@@ -820,8 +822,7 @@ def _acceptance_context(
     return AcceptanceContext(
         overlay_dir=overlay_dir,
         source_blog=str(result.spec.source.url),
-        proposed_by_model=_billed_extractor_model(ledger)
-        or str(result.spec.extraction_metadata.model),
+        proposed_by_model=billed_model(ledger) or str(result.spec.extraction_metadata.model),
         proposed_at=datetime.now(UTC),
         run_id=handle.record.run_id if handle is not None else None,
     )
@@ -981,88 +982,20 @@ def _persist_run(
     come from the runner's last ``PipelineState`` (available even on a halt, before the
     halt errors are raised); a clean ship has already mirrored the post-edit spec.
     """
-    _persist_from_state(handle, getattr(runner, "last_state", None), ledger)
+    # Persistence/lineage is the shared service's job (ADR 0068): it stamps the billed model onto
+    # whichever spec it writes (here the on-abort partial — a clean ship already mirrored the
+    # billed-stamped result.spec via _mirror_spec). Only status resolution + finalize stay here.
+    content_hash = getattr(runner, "content_hash", None)
+    persist_pipeline_artifacts(
+        handle,
+        state=getattr(runner, "last_state", None),
+        shipped_spec=None,
+        ledger=ledger,
+        content_hash=content_hash if isinstance(content_hash, str) else None,
+    )
     handle.write_cost(ledger)
-    _populate_lineage(handle, runner=runner, ledger=ledger)
     status, reason = _resolve_status(result=result, path=path, exc=sys.exc_info()[1])
     handle.finalize(status, halt_reason=reason)
-
-
-def _billed_extractor_model(ledger: CostLedger) -> str | None:
-    """The provider model the framework actually billed for extraction — the authoritative
-    source for ``lineage.model``.
-
-    Provenance is a framework fact: ``lineage.model`` must come from the billed cost ledger,
-    **never** from the LLM-authored ``extraction_metadata.model`` (``architecture.md §1.5``;
-    investigation 0002 §7 — a real run self-reported ``"claude-sonnet"`` into its own spec
-    metadata while the ledger correctly billed ``claude-opus-4-8``). Prefers the last
-    ``EXTRACTOR``-labelled entry (the model that produced the spec); falls back to the last
-    billed entry, then ``None`` (empty ledger — nothing billed yet).
-    """
-    extractor_entries = [e for e in ledger.entries if e.agent_label is AgentLabel.EXTRACTOR]
-    pool = extractor_entries or ledger.entries
-    return pool[-1].model if pool else None
-
-
-def _stamp_billed_model(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:
-    """Return ``spec`` with ``extraction_metadata.model`` framework-stamped to the billed model.
-
-    The billed provider model is a **framework fact** (``architecture.md §1.5``; ``schema.md``
-    line 793, ADR 0065): the LLM-authored ``extraction_metadata.model`` is overridden so the
-    shipped/persisted spec records the model the framework actually billed, never the model's
-    self-report (investigation 0002 §7 — a real run self-reported "claude-sonnet" while the ledger
-    billed claude-opus-4-8). A surgical ``model_copy`` (every other field byte-identical). No-op
-    (keeps the spec's value as a last-resort fallback) when nothing is billed yet — the ledger is
-    non-empty in practice, so the spec value is never the real shipped model.
-    """
-    billed = _billed_extractor_model(ledger)
-    if billed is None:
-        return spec
-    return spec.model_copy(
-        update={
-            "extraction_metadata": spec.extraction_metadata.model_copy(update={"model": billed})
-        }
-    )
-
-
-def _populate_lineage(handle: RunHandle, *, runner: ExtractRunner, ledger: CostLedger) -> None:
-    """Fill run lineage knowable even on a failed (pre-emit) run — what makes runs
-    comparable (ADR 0039).
-
-    ``extractor_version`` comes from the emitted spec (config/code provenance,
-    :func:`_persist_from_state`); ``model`` is sourced **here, from the billed ledger**
-    (:func:`_billed_extractor_model`) regardless of whether a spec was emitted — never from
-    the LLM-authored ``extraction_metadata.model``. ``input_hash`` is the ingested content
-    hash. ``update_lineage`` ignores ``None`` fields, so an empty ledger never clears a known
-    value.
-    """
-    content_hash = getattr(runner, "content_hash", None)
-    handle.update_lineage(
-        input_hash=content_hash if isinstance(content_hash, str) else None,
-        model=_billed_extractor_model(ledger),
-    )
-
-
-def _persist_from_state(handle: RunHandle, state: PipelineState | None, ledger: CostLedger) -> None:
-    """Persist the per-stage artifacts the pipeline produced (complete or partial)."""
-    if state is None:
-        return
-    if state.spec is not None:
-        # Framework-stamp the billed model onto the on-abort partial spec too (ADR 0065): a halted
-        # run's persisted spec must record the billed model, not the LLM self-report.
-        spec = _stamp_billed_model(state.spec, ledger)
-        meta = spec.extraction_metadata
-        # extractor_version is config/code provenance (legitimately spec-authored). model is
-        # NOT taken from the spec here: it is the billed provider model (stamped above + sourced
-        # for lineage in _populate_lineage; architecture.md §1.5; investigation 0002 §7).
-        handle.update_lineage(extractor_version=str(meta.extractor_version))
-        # A clean ship already mirrored the post-edit spec; only fill in the partial.
-        if SPEC_FILENAME not in handle.record.artifacts:
-            handle.write_artifact(SPEC_FILENAME, spec)
-    if state.verdict is not None:
-        handle.write_artifact(JURY_VERDICT_FILENAME, state.verdict)
-    if state.enrichment is not None:
-        handle.write_artifact(ENRICHMENT_FILENAME, state.enrichment)
 
 
 def _resolve_status(

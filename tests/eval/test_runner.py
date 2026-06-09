@@ -132,20 +132,42 @@ class _StatefulExtractRunner:
         *,
         exc: BaseException | None = None,
         static_schema_passed: bool = True,
+        billed_model: str | None = None,
     ) -> None:
         self._spec = spec
         self._exc = exc
         self._static_schema_passed = static_schema_passed
+        #: When set, record one EXTRACTOR cost entry billing this model — so a test can make the
+        #: ledger's billed model disagree with the spec's LLM self-report (ADR 0065/0068).
+        self._billed_model = billed_model
         self.last_state: object | None = None
 
     def run(self, url: str, *, ledger: CostLedger) -> RunResult:
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
         from cyberlab_gen.agents.extractor_jury.schema import JuryScores, JuryVerdict, Verdict
         from cyberlab_gen.cli.extract import RunResult
         from cyberlab_gen.framework.enrichment import EnrichmentResult
         from cyberlab_gen.framework.orchestrator import PipelineState
+        from cyberlab_gen.providers import AgentLabel, CapabilityHint, TokenUsage
+        from cyberlab_gen.providers.cost_ledger import CallOutcome, CostLedgerEntry
         from cyberlab_gen.validators.static_schema_validator import StaticSchemaResult
 
-        del url, ledger
+        del url
+        if self._billed_model is not None:
+            ledger.record(
+                CostLedgerEntry(
+                    timestamp=datetime.now(UTC),
+                    agent_label=AgentLabel.EXTRACTOR,
+                    provider="anthropic",
+                    model=self._billed_model,
+                    capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+                    usage=TokenUsage(input_tokens=10, output_tokens=10, cost_usd=Decimal("0.1")),
+                    outcome=CallOutcome.SUCCESS,
+                    purpose="extract",
+                )
+            )
         verdict = JuryVerdict(
             verdict=Verdict.APPROVE,
             scores=JuryScores(
@@ -221,6 +243,50 @@ def test_run_once_persists_partial_on_halt(tmp_path: Path) -> None:
     run_dir = next(p for p in runs.iterdir() if p.is_dir())
     assert (run_dir / "spec.yaml").is_file()  # the partial artifact is readable
     assert _read_status(run_dir) == "failed"
+
+
+def test_run_once_records_billed_model_not_self_report_on_halt(tmp_path: Path) -> None:
+    """The eval persistence path records the BILLED model (from the cost ledger), never the
+    spec's LLM self-report — the ADR-0065 invariant, enforced on the eval sibling by the shared
+    persistence service (ADR 0068). On a halt the eval persists the unstamped partial spec, so
+    before the shared service both the run record's ``lineage.model`` and the persisted spec
+    leaked whatever the model self-reported.
+    """
+    import json
+
+    from cyberlab_gen.errors import MalformedOutput
+    from cyberlab_gen.schemas.attack_spec import AttackSpec
+    from cyberlab_gen.state.run_store import RunStore
+
+    self_report = "claude-sonnet-selfreport"
+    billed = "claude-opus-4-8-billed"
+    spec = make_spec()
+    spec = spec.model_copy(
+        update={
+            "extraction_metadata": spec.extraction_metadata.model_copy(
+                update={"model": self_report}
+            )
+        }
+    )
+
+    runs = tmp_path / "runs"
+    runner = ProviderBackedEvalRunner(
+        extract_runner_factory=lambda _ledger: _StatefulExtractRunner(
+            spec, exc=MalformedOutput("bad emit"), billed_model=billed
+        ),
+        url_for=lambda _blog_id: "https://example.com/blog",
+        run_store=RunStore(runs),
+    )
+
+    record = runner.run_once("b", run_index=0)
+    assert not record.shipped
+
+    run_dir = next(p for p in runs.iterdir() if p.is_dir())
+    run_json = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert run_json["lineage"]["model"] == billed  # the billed model, not the self-report
+
+    persisted = AttackSpec.from_yaml((run_dir / "spec.yaml").read_text(encoding="utf-8"))
+    assert persisted.extraction_metadata.model == billed
 
 
 def test_run_once_persists_partial_from_checkpoint_on_crash(

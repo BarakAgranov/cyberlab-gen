@@ -949,16 +949,16 @@ def test_run_store_runs_do_not_overwrite(tmp_path: Path) -> None:
     assert len(run_dirs) == 2
 
 
-def test_persist_from_state_writes_all_stage_artifacts(tmp_path: Path) -> None:
-    """``_persist_from_state`` writes spec, jury verdict and enrichment when present."""
+def test_persist_pipeline_artifacts_writes_all_stage_artifacts(tmp_path: Path) -> None:
+    """The shared persistence service writes spec, jury verdict and enrichment when present."""
     from cyberlab_gen.agents.extractor_jury.schema import (
         JuryScores,
         JuryVerdict,
         Verdict,
     )
-    from cyberlab_gen.cli.extract import _persist_from_state  # pyright: ignore[reportPrivateUsage]
     from cyberlab_gen.framework.enrichment import EnrichmentResult
     from cyberlab_gen.framework.orchestrator import PipelineState
+    from cyberlab_gen.state.run_persistence import persist_pipeline_artifacts
     from cyberlab_gen.state.run_store import RunKind
 
     verdict = JuryVerdict(
@@ -978,15 +978,16 @@ def test_persist_from_state_writes_all_stage_artifacts(tmp_path: Path) -> None:
     )
     handle = RunStore(tmp_path).start(kind=RunKind.EXTRACT, label="u")
 
-    _persist_from_state(handle, state, _ledger(None))
+    persist_pipeline_artifacts(
+        handle, state=state, shipped_spec=None, ledger=_ledger(None), content_hash=None
+    )
 
     assert (handle.directory / SPEC_FILENAME).is_file()
     assert (handle.directory / JURY_VERDICT_FILENAME).is_file()
     assert (handle.directory / ENRICHMENT_FILENAME).is_file()
-    # extractor_version is config/code provenance (legitimately spec-authored); model is
-    # NOT — it is sourced from the billed ledger in _populate_lineage, never from the
-    # LLM-authored extraction_metadata.model (architecture.md §1.5; investigation 0002 §7).
-    # So _persist_from_state alone records the version and leaves model unset.
+    # extractor_version is config/code provenance (legitimately spec-authored); model is NOT — it
+    # is sourced from the billed ledger, never from the LLM-authored extraction_metadata.model
+    # (architecture.md §1.5; ADR 0065/0068). With an empty ledger, model stays unset.
     assert handle.record.lineage.extractor_version == "1.0.0"
     assert handle.record.lineage.model is None
 
@@ -1041,11 +1042,6 @@ def test_lineage_model_is_billed_ledger_model_not_spec_self_report(tmp_path: Pat
     """lineage.model is the billed provider model, never the LLM-authored
     extraction_metadata.model (architecture.md §1.5; investigation 0002 §7 — the real run
     self-reported "claude-sonnet" while the ledger billed claude-opus-4-8)."""
-    from cyberlab_gen.cli.extract import (
-        _persist_from_state,  # pyright: ignore[reportPrivateUsage]
-        _populate_lineage,  # pyright: ignore[reportPrivateUsage]
-    )
-    from cyberlab_gen.errors import MalformedOutput
     from cyberlab_gen.framework.orchestrator import PipelineState
     from cyberlab_gen.providers import (
         AgentLabel,
@@ -1054,6 +1050,7 @@ def test_lineage_model_is_billed_ledger_model_not_spec_self_report(tmp_path: Pat
         CostLedgerEntry,
         TokenUsage,
     )
+    from cyberlab_gen.state.run_persistence import persist_pipeline_artifacts
     from cyberlab_gen.state.run_store import RunKind
 
     # The spec self-reports model "m" — the LLM-authored content field that used to win.
@@ -1076,10 +1073,11 @@ def test_lineage_model_is_billed_ledger_model_not_spec_self_report(tmp_path: Pat
     )
 
     handle = RunStore(tmp_path).start(kind=RunKind.EXTRACT, label="u")
-    runner_obj = _RaisingRunner(MalformedOutput("unused"), content_hash="b" * 64)
 
-    _persist_from_state(handle, state, ledger)  # must NOT write model="m"
-    _populate_lineage(handle, runner=runner_obj, ledger=ledger)
+    # The shared service must NOT write model="m": the billed ledger model wins (ADR 0065/0068).
+    persist_pipeline_artifacts(
+        handle, state=state, shipped_spec=None, ledger=ledger, content_hash="b" * 64
+    )
 
     assert handle.record.lineage.model == "claude-opus-4-8"  # billed wins over the spec's "m"
     assert handle.record.lineage.extractor_version == "1.0.0"  # version still from the spec
@@ -1113,8 +1111,8 @@ def _billed_entry(model: str) -> object:
 def test_extraction_metadata_model_is_stamped_from_the_billed_ledger(tmp_path: Path) -> None:
     """(a) The framework stamps extraction_metadata.model from the billed ledger; the spec's
     LLM-authored self-report ("m") never wins (architecture.md §1.5; investigation 0002 §7)."""
-    from cyberlab_gen.cli.extract import _stamp_billed_model  # pyright: ignore[reportPrivateUsage]
     from cyberlab_gen.providers.cost_ledger import CostLedgerEntry
+    from cyberlab_gen.state.run_persistence import stamp_billed_model
 
     del tmp_path
     spec = _in_scope_spec()
@@ -1124,7 +1122,7 @@ def test_extraction_metadata_model_is_stamped_from_the_billed_ledger(tmp_path: P
     assert isinstance(entry, CostLedgerEntry)
     ledger.record(entry)
 
-    stamped = _stamp_billed_model(spec, ledger)
+    stamped = stamp_billed_model(spec, ledger)
     assert stamped.extraction_metadata.model == "claude-opus-4-8"  # billed wins
     # everything else on the spec is unchanged (model_copy is surgical)
     assert (
@@ -1136,10 +1134,10 @@ def test_extraction_metadata_model_is_stamped_from_the_billed_ledger(tmp_path: P
 def test_stamp_billed_model_is_a_noop_on_an_empty_ledger() -> None:
     """With nothing billed yet, the stamp is a no-op (keeps the spec's value) — the ledger
     is non-empty in practice, so the spec value is only ever a last-resort fallback."""
-    from cyberlab_gen.cli.extract import _stamp_billed_model  # pyright: ignore[reportPrivateUsage]
+    from cyberlab_gen.state.run_persistence import stamp_billed_model
 
     spec = _in_scope_spec()
-    assert _stamp_billed_model(spec, _ledger(None)).extraction_metadata.model == "m"
+    assert stamp_billed_model(spec, _ledger(None)).extraction_metadata.model == "m"
 
 
 def test_proposed_by_model_is_billed_ledger_model_not_spec_self_report(tmp_path: Path) -> None:
