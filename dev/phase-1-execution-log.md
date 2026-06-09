@@ -2350,3 +2350,69 @@ refreshes the working-memory snapshot after the consolidation batch.
 `just verify` green (687 passed, 1 skipped).
 
 Next ADR number: **0067**.
+
+---
+
+## Fix: the `Provenance[<custom enum>]` checkpoint pickle crash (ADR 0066 Resolution)
+
+Closes the latent run-crashing bug this batch discovered and deferred. A spec carrying a CVE
+`severity` (`Provenance[Severity]`) crashed the checkpointer; that whole class of CVE-severity inputs
+is now fixed at the root. Test-first; `just verify` green (**696 passed, 1 skipped**); ADR 0066 updated
+in place with a Resolution section (no new ADR — next ADR number stays **0067**).
+
+### What changed
+
+- **`cyberlab_gen/schemas/provenance.py`** — added `Provenance.__reduce__` + a module-level
+  `_rebuild_provenance(type_args, state)`. The reducer reconstructs the instance via the generic
+  origin + args (`Provenance[type_args[0]]`) and restores pydantic state via `__setstate__`, so the
+  **whole `Provenance[T]` family** pickles deterministically, independent of import order.
+- **`tests/unit/schemas/test_provenance.py`** — a parametrized family pickle round-trip (str / list[str]
+  / float / int / bool / Severity, preserving concrete class + value) + a focused custom-enum regression.
+- **`tests/unit/framework/test_checkpointing.py`** — a CVE-severity spec round-trips through the
+  checkpoint (write + `read_latest_pipeline_state`) with no serde warning, and a mid-graph abort recovers
+  the partial CVE-severity spec (L4/G1, ADR 0053). Updated the now-stale `_ungrounded_spec` comment.
+
+### The decision (why `__reduce__`, not the registered/msgpack path)
+
+The follow-up brief *preferred* extending this batch's registered (non-pickle) msgpack path. **Not
+viable here**, confirmed empirically: the `AttackSpec` channel always carries `HttpUrl`, which
+`_msgpack_default` can't encode, so `dumps_typed` falls the **entire spec** to `pickle` (a baseline spec
+serializes as serde type `pickle`). `Provenance` never reaches the msgpack `EXT_PYDANTIC_V2` path, so
+registering it does nothing; extending the registered path would mean making the whole spec — HttpUrl
+included — msgpack-serializable, i.e. reopening ADR 0040's `pickle_fallback` design (out of scope). So I
+took ADR 0066 sketch **option 1** (custom `__reduce__`). Full root-cause + reasoning in ADR 0066's
+Resolution section.
+
+### Root cause (sharper than the original ADR note)
+
+Pydantic makes a parametrized generic picklable-by-reference only when the parametrization is **first
+created at module-global scope** (`create_generic_submodel` → `_get_caller_frame_info().called_globally`,
+which `setattr`s it into the module namespace). The builtin aliases (`ProvenanceString = Provenance[str]`,
+…) qualify; `Provenance[Severity]` is first built lazily inside pydantic's schema construction for
+`DetectionBlock`/`CveReference` (non-global frame) and cached, so it's never registered → unpicklable. This
+is exactly why a module-level alias **doesn't** fix it (the cache already holds the unregistered class —
+import-order dependent). `__reduce__` sidesteps the frame heuristic entirely.
+
+### For the maintainer's re-run (notes, not actions)
+
+- The bug is fixed: a CVE-severity blog now round-trips cleanly — the re-run can deliberately target
+  CVE-severity content (the path neither proof blog hit).
+- **No-NVD CVE path confirmed sane in tests:** the test's clean run over a CVE-bearing spec **ships**
+  (status SHIPPED), so a `blog_explicit` CVE + `blog_explicit` severity with `nvd_client=None` produces a
+  valid CVE-bearing spec — no `external_lookup`, no choke. (This is a fixture-level confirmation; the live
+  extractor still has to *emit* the CVE/severity as `blog_explicit`.)
+- **`_rewrite_severity` is a no-op with its verifier unwired** (no NVD data → nothing to rewrite), as the
+  brief expected; the blog-stated severity survives enrichment unchanged.
+
+### Scope / latent items noticed (not fixed — per scope guard)
+
+- Strictly the pickle fix. The loop-budget work-stream (ADR 0063) and other deferred items untouched.
+- Latent, **not fixed**, flagged only: the same whole-spec-pickles-via-`HttpUrl` reality means *every*
+  type nested in a persisted spec must stay picklable. Today they all are (HttpUrl, enums, the Provenance
+  family). But the durable guard against a *future* unpicklable nested type would be to take the spec
+  off `pickle_fallback` entirely (msgpack-encode `HttpUrl`) — which is ADR 0040 territory, deliberately
+  out of scope here. Worth a Phase-2 line if the persisted-spec type surface grows.
+
+`just verify` green (696 passed, 1 skipped). No eval run (maintainer-run, real money).
+
+Next ADR number: **0067**.

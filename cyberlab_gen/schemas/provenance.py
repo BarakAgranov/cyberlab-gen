@@ -14,7 +14,8 @@ BLOG_EXPLICIT/EXTERNAL_API -> citations), the confidence/confidence_source
 pairing, and the discrepancy-with-blog audit-trail rules.
 """
 
-from typing import Literal, Self
+from collections.abc import Callable
+from typing import Any, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -143,6 +144,44 @@ class Provenance[T](ArtifactModel):
                     "discrepancy_classification must be None when discrepancy_with_blog is false"
                 )
         return self
+
+    def __reduce__(
+        self,
+    ) -> tuple[Callable[..., "Provenance[Any]"], tuple[tuple[Any, ...], dict[str, Any]]]:
+        # Make every Provenance[T] picklable — including custom-enum args like
+        # Provenance[Severity] (CveReference.severity / DetectionBlock.severity). ADR 0066.
+        #
+        # The checkpointer falls the whole HttpUrl-bearing AttackSpec subtree to
+        # ``pickle_fallback`` (ADR 0040), so every nested Provenance must pickle. Pydantic's
+        # default reduce pickles a generic instance by *reference* to its parametrized class
+        # (``Provenance[Severity]``), which only resolves when pydantic registered that
+        # parametrization in the module namespace. It does that ONLY for parametrizations
+        # first created at module-global scope (``create_generic_submodel`` →
+        # ``_get_caller_frame_info``): the builtin aliases below qualify, but
+        # ``Provenance[Severity]`` is first built lazily inside pydantic's schema construction
+        # for the models that reference it (a non-global frame) and cached, so it is never
+        # registered and the by-reference pickle raises ``PicklingError``. Reconstruct via the
+        # generic origin + args instead, so the whole family round-trips deterministically,
+        # independent of import order. (The msgpack/registered path of ADR 0066 cannot help
+        # here: the HttpUrl forces the entire spec to pickle, so Provenance never reaches it.)
+        type_args = self.__pydantic_generic_metadata__["args"]
+        return (_rebuild_provenance, (type_args, self.__getstate__()))
+
+
+def _rebuild_provenance(type_args: tuple[Any, ...], state: dict[str, Any]) -> Provenance[Any]:
+    """Reconstruct a (possibly parametrized) ``Provenance`` while unpickling (ADR 0066).
+
+    ``type_args`` is the pydantic generic-metadata ``args`` tuple (e.g. ``(Severity,)``);
+    re-subscripting ``Provenance`` rebuilds the exact concrete class so the round-tripped
+    instance preserves ``type(obj)`` and compares equal. This function lives at module scope
+    — and so is itself picklable by reference — precisely because the parametrized classes
+    are not. State is restored via pydantic's own ``__setstate__`` (the same payload its
+    default reduce uses), so no field re-validation runs.
+    """
+    cls: type[Provenance[Any]] = Provenance[type_args[0]] if type_args else Provenance
+    obj = cls.__new__(cls)
+    obj.__setstate__(state)
+    return obj
 
 
 # Convenience aliases for the common content-field value types.

@@ -128,11 +128,11 @@ def _bad_spec() -> AttackSpec:
 
 
 def _ungrounded_spec() -> AttackSpec:
-    # NOTE: the external_api field is the CVE ``cvss_score`` (``ProvenanceFloat``), NOT
-    # ``severity`` (``Provenance[Severity]``): an ad-hoc ``Provenance[<custom enum>]`` is not
-    # picklable, so a CVE-severity spec crashes the checkpointer's pickle_fallback (a pre-existing
-    # latent bug surfaced by this batch; recorded in ADR 0066, out of the serde item's scope).
-    # ``ProvenanceFloat`` is a module-level alias and pickles cleanly.
+    # This fixture drives the GROUNDING_RETRY path via the CVE ``cvss_score``
+    # (``ProvenanceFloat``) claimed as ``external_api`` with no trace (search-before-claim).
+    # The CVE-severity (``Provenance[Severity]``) round-trip is exercised separately by
+    # ``_cve_severity_spec`` below; the custom-enum generic now pickles too (ADR 0066 fix:
+    # ``Provenance.__reduce__``), so it no longer crashes the checkpointer's pickle_fallback.
     from cyberlab_gen.schemas.attack_spec import CveReference, ExternalRefsBlock
     from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource
     from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceFloat, ProvenanceString
@@ -214,3 +214,91 @@ def test_grounding_retry_path_round_trips_with_no_serde_warnings(
     recovered = _round_trip(tmp_path, ext, jury)
     _assert_clean(_serde_warn_msgs)
     assert recovered is not None and recovered.status is PipelineStatus.SHIPPED
+
+
+# --- CVE-severity round-trip: the previously-crashing Provenance[Severity] path (ADR 0066) ---
+#
+# A CVE whose ``severity`` is ``Provenance[Severity]`` (a custom-enum-parametrized generic).
+# The whole HttpUrl-bearing spec falls to pickle_fallback (ADR 0040), so the severity must
+# pickle for the checkpoint to round-trip — write AND read-back — on every exit path. Before
+# the ``Provenance.__reduce__`` fix, the checkpointer raised ``PicklingError`` the moment it
+# serialized this spec, crashing any --auto run that extracted a CVE with a populated severity.
+
+
+def _cve_severity_spec() -> AttackSpec:
+    from cyberlab_gen.schemas.attack_spec import CveReference, ExternalRefsBlock
+    from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource, Severity
+    from cyberlab_gen.schemas.provenance import CitationBlock, Provenance, ProvenanceString
+
+    cite = [CitationBlock(kind=CitationKind.BLOG_PASSAGE, reference="§2")]
+    spec = make_spec(facets=["target:aws"])
+    spec.external_references = ExternalRefsBlock(
+        cves=[
+            CveReference(
+                cve_id="CVE-2024-9999",  # type: ignore[arg-type]
+                description=ProvenanceString(
+                    value="a critical RCE",
+                    source=ProvenanceSource.BLOG_EXPLICIT,
+                    citations=cite,
+                ),
+                # blog_explicit (not external_api): no grounding search-before-claim, so the
+                # run ships clean — the point here is the serde round-trip, not grounding.
+                severity=Provenance[Severity](
+                    value=Severity.CRITICAL,
+                    source=ProvenanceSource.BLOG_EXPLICIT,
+                    citations=cite,
+                ),
+            )
+        ]
+    )
+    return spec
+
+
+def test_cve_severity_spec_round_trips_through_checkpoint(
+    tmp_path: Path, _serde_warn_msgs: list[str]
+) -> None:
+    # The headline ADR 0066 fix: a clean run over a CVE-severity spec writes + reads its
+    # checkpoint with no crash and no serde warning, and the Provenance[Severity] reconstructs
+    # as the real typed object (value + concrete parametrized class preserved), not a raw dict.
+    from cyberlab_gen.schemas.enums import Severity
+    from cyberlab_gen.schemas.provenance import Provenance
+
+    ext = FakeExtractor([_cve_severity_spec()])
+    jury = FakeJury([make_verdict(Verdict.APPROVE)])
+    recovered = _round_trip(tmp_path, ext, jury)
+    _assert_clean(_serde_warn_msgs)
+    assert recovered is not None and recovered.status is PipelineStatus.SHIPPED
+    assert recovered.spec is not None and recovered.spec.external_references is not None
+    severity = recovered.spec.external_references.cves[0].severity
+    assert severity is not None
+    assert severity.value is Severity.CRITICAL
+    assert type(severity) is Provenance[Severity]
+
+
+def test_read_latest_recovers_cve_severity_spec_after_midgraph_abort(tmp_path: Path) -> None:
+    # L4/G1 (ADR 0053) exercised with the previously-crashing content: a mid-graph abort (the
+    # jury raises after extract + validate completed) on a CVE-severity spec must still recover
+    # the partial AttackSpec — with its Provenance[Severity] intact — straight from the checkpoint.
+    from cyberlab_gen.schemas.enums import Severity
+
+    db = tmp_path / "checkpoint.sqlite"
+    ext = FakeExtractor([_cve_severity_spec()])
+    jury = CrashOnceJury([make_verdict(Verdict.APPROVE)])
+
+    async def _drive_until_abort() -> None:
+        async with open_sqlite_checkpointer(db) as saver:
+            run = build_pipeline(
+                extractor=ext, validator=make_validator(), jury=jury, checkpointer=saver
+            )
+            with pytest.raises(RuntimeError, match="boom"):
+                await run(
+                    PipelineState(blog_content="blog", source_summary="url=..."), thread_id="t-0"
+                )
+
+    asyncio.run(_drive_until_abort())
+
+    recovered = read_latest_pipeline_state(db)
+    assert recovered is not None and recovered.spec is not None
+    assert recovered.spec.external_references is not None
+    severity = recovered.spec.external_references.cves[0].severity
+    assert severity is not None and severity.value is Severity.CRITICAL

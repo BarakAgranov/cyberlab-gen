@@ -3,6 +3,9 @@
 Architectural source: ``schema-details.md`` §3.
 """
 
+import pickle
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -11,9 +14,13 @@ from cyberlab_gen.schemas import (
     CitationKind,
     ConfidenceSource,
     Provenance,
+    ProvenanceBool,
+    ProvenanceFloat,
+    ProvenanceInt,
     ProvenanceSource,
     ProvenanceString,
     ProvenanceStringList,
+    Severity,
 )
 
 
@@ -376,3 +383,56 @@ def test_framework_enriched_does_not_let_external_api_carry_confidence() -> None
             confidence=0.9,
             confidence_source=ConfidenceSource.FRAMEWORK_COMPUTED,
         )
+
+
+# --- pickle round-trip across the whole Provenance[T] family (ADR 0066) ----
+#
+# The LangGraph checkpoint serializer falls the entire HttpUrl-bearing AttackSpec
+# subtree to ``pickle_fallback`` (ADR 0040), so EVERY ``Provenance[T]`` inside a
+# persisted spec must pickle — not only the builtin-arg aliases. Pydantic only makes
+# a parametrized generic picklable-by-reference when the parametrization is first
+# created at module-global scope (``create_generic_submodel`` → ``_get_caller_frame_info``);
+# the module-level aliases (``ProvenanceString = Provenance[str]`` …) qualify, but
+# ``Provenance[Severity]`` is first created lazily inside pydantic's schema build for
+# ``DetectionBlock``/``CveReference`` (a non-global frame) and cached, so it never gets
+# registered and was UNpicklable — crashing the checkpointer on any CVE-severity spec.
+# The ``__reduce__`` on ``Provenance`` reconstructs via origin+args, fixing the whole
+# family deterministically and independent of import order.
+
+
+def _family() -> list[Provenance[Any]]:
+    """One valid instance of every ``Provenance[T]`` that can appear in a persisted spec."""
+    cites = [_citation()]
+    src = ProvenanceSource.BLOG_EXPLICIT
+    return [
+        ProvenanceString(value="x", source=src, citations=cites),
+        ProvenanceStringList(value=["a", "b"], source=src, citations=cites),
+        ProvenanceFloat(value=9.8, source=src, citations=cites),
+        ProvenanceInt(value=3, source=src, citations=cites),
+        ProvenanceBool(value=True, source=src, citations=cites),
+        Provenance[Severity](value=Severity.CRITICAL, source=src, citations=cites),
+    ]
+
+
+@pytest.mark.parametrize("original", _family(), ids=lambda p: type(p).__name__)
+def test_provenance_family_pickle_round_trips(original: Provenance[Any]) -> None:
+    # Every parametrization round-trips through pickle, preserving both the concrete
+    # parametrized class and the value. Before the fix, the Provenance[Severity] case
+    # raised ``PicklingError: Can't pickle <class 'Provenance[Severity]'>``.
+    restored = pickle.loads(pickle.dumps(original))
+    assert type(restored) is type(original)
+    assert restored == original
+
+
+def test_provenance_custom_enum_arg_is_picklable() -> None:
+    # Focused regression for the ADR 0066 latent crash: a custom-enum-parametrized
+    # Provenance (the shape carried by CveReference.severity / DetectionBlock.severity).
+    original = Provenance[Severity](
+        value=Severity.HIGH,
+        source=ProvenanceSource.BLOG_EXPLICIT,
+        citations=[_citation()],
+    )
+    restored = pickle.loads(pickle.dumps(original))
+    assert type(restored) is Provenance[Severity]
+    assert restored.value is Severity.HIGH
+    assert restored == original
