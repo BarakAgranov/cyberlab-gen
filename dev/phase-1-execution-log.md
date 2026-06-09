@@ -2214,3 +2214,139 @@ re-runs the Sysdig blog to confirm it ships (A-NOW headroom + B-i/B-ii) and for 
 quality read.
 
 Next ADR number: **0060**.
+
+## Pre-Phase-2 consolidation batch (A3/B1 → C1 → E1 → B2 → provenance → serde → cap) — 2026-06-09
+
+The held consolidation items (the front-half architecture-quality work deferred until after the
+proof). Implemented straight to code against the settled docs/ADRs, one commit per item, `just
+verify` green at every commit. No eval run (user-run). Two design forks were surfaced and the
+maintainer answered them (E1 over-cap; the B2 `--max-llm-cost` binding + interrupt scope) before
+coding — see the stopgaps note below.
+
+### A3/B1 — one orchestrator-owned grounding stack (`f177943`, ADR 0060)
+
+Relocated the Extractor's internal `_run_checks` loop (search-before-claim/MITRE/CVE) and the
+jury's `verify_provenance` into one orchestrator-owned `validators/grounding_validator.py`
+producing one findings set. The Extractor produces in a single pass (no hidden hallucination_retry
+budget); the orchestrator owns a `grounding` node + `grounding_attempts` budget + no-progress bail;
+the jury **consumes** the findings (its `review()` `lookups` param → `grounding_findings`). Deleted
+`extractor_jury/verification.py`. Grounding routes as **retry** (`validation.md §6.10.1`), not the
+ADR-0048 patch (ADR 0051's "re-emit a patch" wording reconciled to the higher-authority taxonomy).
+ADR-0058 MITRE pass-through preserved verbatim.
+
+### C1 — enrich before the jury + `framework_enriched` (`12a3d9d`, ADR 0061)
+
+Graph reorder to `extract → validate → ENRICH → GROUNDING → JURY` (enrich is now mid-pipeline; the
+jury owns the terminal SHIPPED status). Added `Provenance.framework_enriched: bool` (validator:
+requires `source==external_api`); enrichment stamps it on its 4 rewrite sites + is idempotent on
+re-runs (no double `material_discrepancies`); the grounding search-before-claim layer **exempts**
+`framework_enriched` fields (the C1↔A3/B1 interlock). `GRAPH_RECURSION_LIMIT` re-derived 4x → 6x for
+the longer per-iteration path.
+
+### E1 — promotion gated on spec-shipping + registry digest (`7e17c93`, ADR 0062/0063)
+
+Overlay write moved to **spec-ship time** in both modes (a non-shipping run promotes nothing; fixes
+the interactive orphan-write bug). Over-cap is now bounded **steering, not a hard halt**: `--auto`
+writes up to the cap and **reports** the remainder (the `ProposalCapExceeded` raise is gone — a
+STOPGAP, ADR 0062 → 0063). Surfaced a names-only **registry digest** (value_types/facets/thesis_types/
+execution_contexts) into the Extractor user turn so it checks novelty before proposing (prompt.md
+reconciled) — this is what makes B-ii's first-pass-proposal lever effective (directly addresses the
+"the model does not see the registries" surprise from the emit-truncation batch).
+
+### B2 — two distinct cost caps + a real estimate (`df67162`, ADR 0064)
+
+Split the conflated single cap: ledger carries `cap_usd` (the $25 catastrophe ceiling, hard/fixed/
+unraisable, enforced by `CostRecordingProvider` — unchanged) **and** `everyday_budget_usd` (the $10
+soft budget, predictive interrupt only). `--max-llm-cost` now configures the **everyday budget**
+(supersedes ADR 0038's ceiling binding; the ceiling has no flag override). Un-hardwired the predictive
+estimate: the production runner sets `RunResult.estimated_next_stage_cost` from the billed ledger
+(this run's cost ≈ next re-run), so the interrupt actually fires. Interactive: pause-and-ask (raises
+the everyday budget, not the ceiling). `--auto`: hard-stop at the soft budget. The post-Extractor
+estimate + the `--auto` hard-stop are **STOPGAPS** (ADR 0064 → 0063).
+
+### Model-provenance family (`514ba03`, ADR 0065)
+
+The framework stamps the **billed** model (from `_billed_extractor_model(ledger)`) onto all three
+LLM-authored model-provenance instances: `extraction_metadata.model` (new `_stamp_billed_model`
+applied on the ship path + the on-abort partial-persist), `proposed_by_model` (`_acceptance_context`
+sources it from the ledger), and `lineage.model` (already from the ledger — confirmed no regression).
+The LLM self-report never wins (`architecture.md §1.5`; investigation 0002 §7).
+
+### Serde registration (`83fa3e7`, ADR 0066)
+
+Registered the 11 framework `PipelineState`-channel types with `JsonPlusSerializer`'s
+`allowed_msgpack_modules` (as `(module, name)` string tuples, lazy-import-safe), removing the
+"Deserializing unregistered type … will be blocked in a future version" warning every run logged.
+`pickle_fallback` retained for the `HttpUrl`-bearing AttackSpec subtree (ADR 0040).
+
+### Cap revert (`7e3e5f3`)
+
+`DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP` 20 → 5 (the proof-run WIP, now committed away; the cap is a real
+guardrail). The proof-run overlay proposals are legitimate registry state and were left in place.
+(The cap=20 rode along in the E1/B2/provenance commits — unavoidable file-level coupling, since those
+items edit `cli/extract.py` — and is reverted here as its own commit, exactly as scoped.)
+
+### Surprises / flagged
+
+- **DISCOVERED latent run-crashing bug (deferred, ADR 0066):** an ad-hoc `Provenance[<custom enum>]`
+  is **not picklable**, so a spec with a CVE `severity` field (`Provenance[Severity]`, emitted by the
+  Extractor or written by enrichment's `_rewrite_severity`) **crashes the checkpointer's
+  pickle_fallback**. Pre-existing + latent (the aliased `Provenance[str/float]` pickle fine — the
+  difference is builtin vs custom-enum type args in the Pydantic-v2 generic reducer); surfaced by the
+  serde round-trip test, **not** regressed by this batch. The proof runs shipped because their specs
+  had no `Provenance[Severity]` field populated. **Watch for the eval re-run:** prefer a blog without
+  CVE-severity content, or land the fix first.
+- **Three STOPGAPS, one named replacement (ADR 0063 — the loop-budget threading work-stream, the
+  immediate-next architecture work):** E1's over-cap "write-up-to-cap-and-report", B2's post-Extractor
+  estimate, and B2's `--auto` hard-stop are interim scaffolding. They are all replaced by threading the
+  ledger + the ADR-0049 caps into the orchestrator loop (a live per-iteration predictive interrupt
+  firing *between* iterations + in-loop over-cap steering), which touches the ADR-0023-locked graph and
+  deserves its own gated work-stream. Recorded as ADR 0063, not done in this batch.
+- **`--max-llm-cost` re-binding** (ADR 0064): a deliberate, maintainer-confirmed behaviour change —
+  the flag now sets the everyday budget, not the catastrophe ceiling; the $25 ceiling is fixed/unraisable
+  (supersedes ADR 0038's binding).
+- **Graph reorder + recursion bump** (ADR 0061): the per-iteration path grew (`extract → validate →
+  enrich → grounding → jury`); `GRAPH_RECURSION_LIMIT` went 4x → 6x of the global cap so the semantic
+  cap still binds first. ADR 0056's reasoning text (written for the 3-super-step era) is superseded by
+  the ADR-0061 note (not edited in place).
+
+`just verify` green per commit (687 passed, 1 skipped). No eval run.
+
+### Pre-Phase-2 status (refreshed; supersedes the :1800 block)
+
+The canonical Phase-1 done-ness contract is `implementation-plan.md §4` (architect-owned docs). This
+refreshes the working-memory snapshot after the consolidation batch.
+
+- **Phase-1 gate — functionally MET.** A real `--auto extract` ships a good, validated, jury-approved
+  **and human-verified** spec, converging at sane cost with the spec persisted, on **two structurally
+  different blogs**: codebuild (CI regex-bypass, **$2.51**) and sysdig (AI-assisted cloud intrusion /
+  LLMjacking, **$4.41**) — both jury **0.93** fidelity and confirmed good on human read.
+- **Done (code) — this batch:** A3/B1 (ADR 0060) · C1 (ADR 0061) · E1 promotion-on-ship + digest
+  (ADR 0062) · B2 two caps + real estimate (ADR 0064) · model-provenance family (ADR 0065) · serde
+  registration (ADR 0066) · cap revert to 5.
+- **Done (code) — prior batches:** A1/A2 (ADR 0054/0048) · L1 (ADR 0047) · the safety/lossless batch
+  (G1/L4 ADR 0053, L2, L3 ADR 0056, nvd missing-cve_id ADR 0042, no-progress bail ADR 0057, F1) · the
+  external-source/MITRE category fixes (ADR 0058) · the emit-truncation batch (A-NOW max_tokens 20K,
+  E lineage.model, C EmitTruncated, B-i prompt caching ADR 0059, B-ii first-pass steering).
+- **Genuinely deferred to Phase 1.5/2 (honest list):**
+  - **The loop-budget threading work-stream (ADR 0063)** — the immediate-next architecture work;
+    replaces the three stopgaps above (E1 over-cap report, B2 post-Extractor estimate, B2 `--auto`
+    hard-stop) by weaving the ledger + ADR-0049 caps into the orchestrator loop. Touches the
+    ADR-0023-locked graph → its own ADR + gate.
+  - **The `Provenance[<custom enum>]` pickle bug (ADR 0066)** — a real, latent, run-crashing checkpoint
+    defect (CVE-severity specs). Needs a custom `__reduce__` on `Provenance`, a picklable retype of
+    `severity`, or `model_dump`-ing the provenance subtree instead of pickling it.
+  - **Streaming + sectioned/continuation emit (D1/D2/P4, ADR 0032/0033)** — the durable truncation
+    class-fix; A-NOW's 20K `max_tokens` bump is only a stopgap (specs above ~20K still truncate). Its
+    own design ADR + gate.
+  - **Real `external_data_sources/<id>/` adapters** — NVD client; MITRE ATT&CK with `lookup_by_id` +
+    `lookup_by_description`; OSV. (The grounding CVE-hallucination check + enrichment are wired to
+    consume them but run as honest skips with no client this phase.)
+  - **The blog-prefix `CachePoint` (B-i's remaining piece, ADR 0059)** — guaranteed cross-extract blog
+    reuse; needs the `Message` content surface extended from `str` to a structured sequence (a further
+    locked-surface change).
+  - **`advisory.source` retype + post-enrichment `cve.source_of_record` check (ADR 0058 §Deferred).**
+
+`just verify` green (687 passed, 1 skipped).
+
+Next ADR number: **0067**.

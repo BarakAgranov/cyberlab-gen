@@ -5,6 +5,13 @@
 fixes this document recommends were carried out in the same batch (the five-item NOW set
 below); the durable class-fix (streaming + sectioned emit) remains deferred. No `docs/`
 contract was changed.
+**Update (2026-06-09, pre-Phase-2 consolidation batch):** §6's structural lever is now complete —
+the **registry digest** is surfaced to the Extractor so B-ii's first-pass proposing is no longer
+blind (E1, ADR 0062), and §7's model-attribution defect family is fully fixed (the framework stamps
+the billed model on all three instances — provenance family, ADR 0065). **Still deferred:** the
+durable truncation class-fix (streaming + sectioned/continuation emit, D1/D2/P4; A-NOW's 20K bump is
+the stopgap) and the blog-prefix `CachePoint` (B-i's remaining piece). See the refreshed pre-Phase-2
+status block in `phase-1-execution-log.md`.
 **Settled principle it feeds:** A-NOW raises a calibration constant (no contract); E restores
 the `architecture.md §1.5` provenance rule (billed facts come from the framework, not the
 LLM); B-i is recorded as its own ADR (the locked provider surface — `provider-interface.md`).

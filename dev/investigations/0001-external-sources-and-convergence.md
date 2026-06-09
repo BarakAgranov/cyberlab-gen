@@ -3,6 +3,13 @@
 **Date:** 2026-06-08
 **Status:** Findings captured. No code/contract changed by this document. The fixes it
 recommends are pending and sign-off-gated (they touch `validation.md §6.4`).
+**Update (2026-06-09, pre-Phase-2 consolidation batch):** the NOW fixes (① MITRE ungate,
+② advisory.source) landed via ADR 0058; the structural-retry burn was reduced from both ends —
+the **registry digest** is now surfaced to the Extractor (E1, ADR 0062), and the no-progress bail
+(ADR 0057) + grounding-as-orchestrator-owned-retry (A3/B1, ADR 0060) bound the loop. **Still
+LATER (deferred):** the real `external_data_sources/<id>/` adapters (NVD client; MITRE ATT&CK with
+`lookup_by_id` + `lookup_by_description`; OSV) and the `advisory.source` retype. See the refreshed
+pre-Phase-2 status block in `phase-1-execution-log.md`.
 **Settled principle it feeds:** ADR 0055 (external sources are tool adapters, not
 proposable registries; unverifiable-but-well-formed identifiers never hard-fail).
 **Provenance:** reconstructed this session from the run store, the local Phoenix trace,
