@@ -179,6 +179,11 @@ class GroundingValidator:
         ``_check_search_before_claim`` and the jury's ``_check_api_trace``). It needs the
         CVE id, which the generic provenance walker loses (it uses list indices), so it
         runs explicitly against the CVE refs.
+
+        **Framework-enriched fields are exempt** (ADR 0052 / 0061): a ``framework_enriched``
+        ``external_api`` field is the framework's own authoritative NVD call — the API-response
+        citation IS the evidence, and the call is not (and need not be) in the agent's lookup
+        trace. Only *agent-claimed* ``external_api`` fields are held to search-before-claim.
         """
         findings: list[GroundingFinding] = []
         if spec.external_references is None:
@@ -193,6 +198,7 @@ class GroundingValidator:
                 if (
                     prov is not None
                     and prov.source is ProvenanceSource.EXTERNAL_API
+                    and not prov.framework_enriched
                     and cve.cve_id not in looked_up
                 ):
                     findings.append(

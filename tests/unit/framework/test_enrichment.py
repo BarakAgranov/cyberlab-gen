@@ -446,3 +446,66 @@ def test_every_enriched_field_is_external_api_authored() -> None:
     assert cve.cvss_score.source is ProvenanceSource.EXTERNAL_API
     assert cve.severity is not None
     assert cve.severity.source is ProvenanceSource.EXTERNAL_API
+
+
+# --- framework_enriched mark (ADR 0052 / 0061) -----------------------------
+
+
+def test_enriched_fields_are_marked_framework_enriched_clean_fill() -> None:
+    # The clean (non-discrepant) rewrite branch must stamp framework_enriched=True so the
+    # grounding stack + jury EXEMPT the framework's own NVD call from search-before-claim.
+    spec = _spec(cves=[_cve("CVE-2021-0010")])  # no blog cvss -> pure fill
+    client = _FakeNvd(
+        {"CVE-2021-0010": NvdCveData(cve_id="CVE-2021-0010", cvss_score=7.0, cvss_severity="HIGH")}
+    )
+    enrich(spec, _no_registry_config(nvd_client=client))
+    cve = spec.external_references.cves[0]  # type: ignore[union-attr]
+    assert cve.cvss_score is not None and cve.cvss_score.framework_enriched is True
+    assert cve.severity is not None and cve.severity.framework_enriched is True
+
+
+def test_enriched_fields_are_marked_framework_enriched_discrepant() -> None:
+    # The discrepant rewrite branch must also stamp framework_enriched=True.
+    spec = _spec(cves=[_cve("CVE-2021-0011", cvss=3.0, severity=Severity.LOW)])
+    client = _FakeNvd(
+        {
+            "CVE-2021-0011": NvdCveData(
+                cve_id="CVE-2021-0011", cvss_score=9.8, cvss_severity="CRITICAL"
+            )
+        }
+    )
+    enrich(spec, _no_registry_config(nvd_client=client))
+    cve = spec.external_references.cves[0]  # type: ignore[union-attr]
+    assert cve.cvss_score is not None and cve.cvss_score.framework_enriched is True
+    assert cve.cvss_score.discrepancy_with_blog is True  # both marks coexist
+    assert cve.severity is not None and cve.severity.framework_enriched is True
+
+
+def test_untouched_field_keeps_framework_enriched_false() -> None:
+    # A CVE field NVD does not enrich (no client) keeps framework_enriched=False.
+    spec = _spec(cves=[_cve("CVE-2021-0012", cvss=5.0)])
+    enrich(spec, _no_registry_config(nvd_client=None))
+    cve = spec.external_references.cves[0]  # type: ignore[union-attr]
+    assert cve.cvss_score is not None and cve.cvss_score.framework_enriched is False
+
+
+def test_re_enrichment_is_idempotent_no_double_discrepancy() -> None:
+    # C1 re-runs enrichment after a jury-revise patch. Re-running on an already-enriched spec
+    # must NOT double-append material_discrepancies, and the field stays framework_enriched.
+    spec = _spec(cves=[_cve("CVE-2021-0013", cvss=3.0, severity=Severity.LOW)])
+    client = _FakeNvd(
+        {
+            "CVE-2021-0013": NvdCveData(
+                cve_id="CVE-2021-0013", cvss_score=9.8, cvss_severity="CRITICAL"
+            )
+        }
+    )
+    enrich(spec, _no_registry_config(nvd_client=client))
+    first_count = len(spec.material_discrepancies)
+    assert first_count >= 1
+    enrich(spec, _no_registry_config(nvd_client=client))  # re-run on the already-enriched spec
+    assert len(spec.material_discrepancies) == first_count  # no double-append
+    cve = spec.external_references.cves[0]  # type: ignore[union-attr]
+    assert cve.cvss_score is not None and cve.cvss_score.framework_enriched is True
+    # the original field-level discrepancy marking survives the re-run (not clobbered)
+    assert cve.cvss_score.discrepancy_with_blog is True

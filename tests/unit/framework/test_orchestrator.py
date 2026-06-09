@@ -27,6 +27,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, Verdict
 from cyberlab_gen.errors import ValidationError
+from cyberlab_gen.framework.enrichment import EnrichmentConfig, NvdCveData
 from cyberlab_gen.framework.orchestrator import (
     GLOBAL_ITERATION_CAP,
     GRAPH_RECURSION_LIMIT,
@@ -45,7 +46,12 @@ from cyberlab_gen.schemas.attack_spec import (
     ExternalRefsBlock,
 )
 from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource, Severity
-from cyberlab_gen.schemas.provenance import CitationBlock, Provenance, ProvenanceString
+from cyberlab_gen.schemas.provenance import (
+    CitationBlock,
+    Provenance,
+    ProvenanceFloat,
+    ProvenanceString,
+)
 from cyberlab_gen.validators.grounding_validator import GroundingCode
 from cyberlab_gen.validators.static_schema_validator import (
     StaticSchemaCode,
@@ -591,8 +597,10 @@ async def test_global_iteration_cap_bounds_pathological_loop() -> None:
 
 def test_graph_recursion_limit_is_the_documented_backstop() -> None:
     # The recursion_limit is a fixed multiple of the global cap, sized so the semantic cap
-    # (which halts cleanly with a clear reason) always binds first in a legitimate run.
-    assert GRAPH_RECURSION_LIMIT == 4 * GLOBAL_ITERATION_CAP
+    # (which halts cleanly with a clear reason) always binds first in a legitimate run. The
+    # multiplier is 6x after the ADR-0052/0061 reorder added enrich + grounding to the per-iter
+    # path (extract -> validate -> enrich -> grounding -> jury = 5 super-steps/iteration).
+    assert GRAPH_RECURSION_LIMIT == 6 * GLOBAL_ITERATION_CAP
 
 
 async def test_recursion_limit_bounds_graph_when_app_caps_disabled() -> None:
@@ -826,6 +834,86 @@ def test_grounding_retry_feedback_rejects_wrong_payload() -> None:
         )
     with pytest.raises(PydanticValidationError):
         RefinementFeedback(kind=FeedbackKind.GROUNDING_RETRY)  # empty matching payload
+
+
+# --- C1: enrichment runs BEFORE the jury (shipped == reviewed, ADR 0052/0061) ----
+
+
+class _FakeNvd:
+    """A fake NvdClient that always returns a CRITICAL 9.0 record (enrichment rewrites to it)."""
+
+    def lookup_cve(self, cve_id: str) -> NvdCveData:
+        return NvdCveData(cve_id=cve_id, cvss_score=9.0, cvss_severity="CRITICAL")
+
+
+def _blog_cve_spec(cvss: float = 5.0) -> AttackSpec:
+    """A spec with a blog_explicit CVE cvss_score that enrichment will rewrite to external_api."""
+    spec = _spec(facets=["target:aws"])
+    spec.external_references = ExternalRefsBlock(
+        cves=[
+            CveReference(
+                cve_id="CVE-2021-44228",  # type: ignore[arg-type]
+                description=ProvenanceString(
+                    value="log4shell", source=ProvenanceSource.BLOG_EXPLICIT, citations=[_bcite()]
+                ),
+                cvss_score=ProvenanceFloat(
+                    value=cvss, source=ProvenanceSource.BLOG_EXPLICIT, citations=[_bcite()]
+                ),
+            )
+        ]
+    )
+    return spec
+
+
+def _enrich_cfg() -> EnrichmentConfig:
+    return EnrichmentConfig(nvd_client=_FakeNvd())
+
+
+async def test_enrichment_runs_before_the_jury() -> None:
+    # ADR 0052/0061: the jury must review the ENRICHED spec (shipped == reviewed). With an NVD
+    # client wired, the blog_explicit cvss_score is rewritten to external_api + framework_enriched
+    # BEFORE the jury sees it. The framework_enriched mark also keeps the grounding stack from
+    # false-flagging the framework's own call (the C1<->A3/B1 interlock).
+    ext = _FakeExtractor([_blog_cve_spec()])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(
+        extractor=ext, validator=_validator(), jury=jury, enrichment_config=_enrich_cfg()
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    reviewed = jury.reviewed_specs[0].external_references
+    assert reviewed is not None
+    cvss = reviewed.cves[0].cvss_score
+    assert cvss is not None
+    assert cvss.source is ProvenanceSource.EXTERNAL_API  # the jury saw the ENRICHED value
+    assert cvss.framework_enriched is True
+    assert cvss.value == 9.0  # the authoritative NVD value, not the blog's 5.0
+
+
+async def test_refinement_re_runs_enrichment_before_re_review() -> None:
+    # ADR 0052/0061: on a jury revise, the patched spec is re-enriched BEFORE the jury
+    # re-reviews, so the invariant holds across refinement iterations. The refine echoes the
+    # prior (enriched) spec; the re-review must still see an enriched spec.
+    ext = _FakeExtractor([_blog_cve_spec()])
+    jury = _FakeJury(
+        [
+            _verdict(Verdict.REVISE, feedback=[JuryFieldFeedback(field_path="x", problem="p")]),
+            _verdict(Verdict.APPROVE),
+        ]
+    )
+    run = build_pipeline(
+        extractor=ext, validator=_validator(), jury=jury, enrichment_config=_enrich_cfg()
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert jury.calls == 2
+    # BOTH jury reviews saw an enriched spec (enrichment re-ran on the patched spec)
+    for reviewed in jury.reviewed_specs:
+        refs = reviewed.external_references
+        assert refs is not None and refs.cves[0].cvss_score is not None
+        assert refs.cves[0].cvss_score.framework_enriched is True
 
 
 async def test_refine_producing_ungrounded_spec_routes_grounding_retry() -> None:

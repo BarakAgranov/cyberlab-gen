@@ -107,13 +107,14 @@ DEFAULT_GROUNDING_RETRY_ATTEMPTS = 2
 GLOBAL_ITERATION_CAP = 20
 
 #: The LangGraph ``recursion_limit`` (a super-step bound), set as the final graph-level
-#: backstop so the whole graph is bounded even if the application caps are mis-set. Each
-#: iteration costs at most 3 super-steps (extract → validate → jury) before the next run
-#: or a terminal node, so ``GLOBAL_ITERATION_CAP`` iterations consume well under
-#: ``4 * GLOBAL_ITERATION_CAP`` super-steps — sized so the *semantic* cap (which halts
-#: cleanly with a clear reason) always binds first in a legitimate run, leaving this to
-#: catch only a genuine routing loop. ADR 0056.
-GRAPH_RECURSION_LIMIT = 4 * GLOBAL_ITERATION_CAP
+#: backstop so the whole graph is bounded even if the application caps are mis-set. After the
+#: ADR-0052/0061 reorder a refinement iteration costs at most 5 super-steps
+#: (extract → validate → enrich → grounding → jury) before the next run, so
+#: ``GLOBAL_ITERATION_CAP`` iterations consume under ``6 * GLOBAL_ITERATION_CAP`` super-steps —
+#: sized so the *semantic* cap (which halts cleanly with a clear reason) always binds first in
+#: a legitimate run, leaving this to catch only a genuine routing loop. ADR 0056 (multiplier
+#: re-derived from 4x to 6x in ADR 0061 when the enrich + grounding nodes joined the per-iter path).
+GRAPH_RECURSION_LIMIT = 6 * GLOBAL_ITERATION_CAP
 
 
 # --- cross-stage feedback contract (pipeline.md §3.3) ----------------------
@@ -549,9 +550,11 @@ def build_pipeline(
             # Cleared: end this structural-failure streak so a *later* failure (e.g. after a
             # refinement patch) is judged fresh, not against this run's pre-pass findings.
             state.last_static_finding_signature = None
-            # Static schema passed → run the orchestrator-owned grounding stack next (the
-            # mechanical sibling layers, ADR 0051/0060), then the jury consumes its findings.
-            state.route = _Node.GROUNDING.value
+            # Static schema passed → ENRICH first (ADR 0052/0061: enrichment runs before the
+            # grounding stack + the jury, so the framework-written external_api fields reach
+            # the grounding stack — which exempts framework_enriched ones — and the jury
+            # reviews the enriched spec: *what ships equals what was reviewed*).
+            state.route = _Node.ENRICH.value
             return state
         # No-progress early-bail (ADR 0057, mirrors the ADR-0032 call-surface bail): a
         # structural retry that reproduced the *identical* finding set is not converging.
@@ -678,7 +681,10 @@ def build_pipeline(
         state.verdict_history = [*state.verdict_history, verdict.verdict]
 
         if verdict.verdict is Verdict.APPROVE:
-            state.route = _Node.ENRICH.value
+            # Enrichment already ran before this review (ADR 0052/0061), so an approve ships
+            # directly: the jury owns the ship decision (``architecture.md §1.5``).
+            state.status = PipelineStatus.SHIPPED
+            state.route = END
             return state
         if verdict.verdict is Verdict.REJECT:
             state.status = PipelineStatus.HALTED_REJECT
@@ -706,21 +712,27 @@ def build_pipeline(
             )
             return state
         # cap exhausted with a revise verdict — ship with low_jury_confidence
-        # (the disagreement-without-progress (b) case, pipeline.md §3.2.3). The run report's
+        # (the disagreement-without-progress (b) case, pipeline.md §3.2.3). Enrichment already
+        # ran before this review (ADR 0052/0061), so this ships directly. The run report's
         # unresolved_feedback is the structured feedback rendered to lines (an output boundary,
         # so stringifying here is fine — it now also preserves suggested_fix).
         state.status = PipelineStatus.SHIPPED_LOW_CONFIDENCE
         state.unresolved_feedback = feedback.feedback_lines()
-        state.route = _Node.ENRICH.value
+        state.route = END
         logger.info("refinement cap exhausted on revise; shipping with low_jury_confidence")
         return state
 
     def enrich_node(state: PipelineState) -> PipelineState:
-        """Run the pre-Planner enrichment framework pass (``pipeline.md §3.2.4``)."""
+        """Run the pre-Planner enrichment framework pass, *before* the grounding stack + jury.
+
+        ADR 0052/0061: enrichment now runs mid-pipeline (``extract → validate → enrich →
+        grounding → jury``), not as a terminal node, so the jury reviews the enriched spec and
+        *what ships equals what was reviewed*. It re-runs on each refinement iteration's patched
+        spec (idempotent on already-``framework_enriched`` fields). It no longer sets the terminal
+        ``SHIPPED`` status — the jury owns the ship decision; enrichment only produces content.
+        """
         assert state.spec is not None
         state.enrichment = enrich(state.spec, enrich_cfg)
-        if state.status is None:
-            state.status = PipelineStatus.SHIPPED
         return state
 
     # --- routing functions: pure readers of the node-decided destination ---
@@ -754,11 +766,14 @@ def build_pipeline(
         _Node.VALIDATE.value,
         route_after_validate,
         {
-            _Node.GROUNDING.value: _Node.GROUNDING.value,
+            _Node.ENRICH.value: _Node.ENRICH.value,
             _Node.EXTRACT.value: _Node.EXTRACT.value,
             END: END,
         },
     )
+    # Enrichment runs mid-pipeline (ADR 0052/0061): always proceed to the grounding stack,
+    # which sees the enriched spec (and exempts framework_enriched fields), then the jury.
+    graph.add_edge(_Node.ENRICH.value, _Node.GROUNDING.value)
     graph.add_conditional_edges(
         _Node.GROUNDING.value,
         route_after_grounding,
@@ -767,13 +782,8 @@ def build_pipeline(
     graph.add_conditional_edges(
         _Node.JURY.value,
         route_after_jury,
-        {
-            _Node.ENRICH.value: _Node.ENRICH.value,
-            _Node.EXTRACT.value: _Node.EXTRACT.value,
-            END: END,
-        },
+        {_Node.EXTRACT.value: _Node.EXTRACT.value, END: END},
     )
-    graph.add_edge(_Node.ENRICH.value, END)
     compiled = graph.compile(checkpointer=checkpointer)
 
     async def run(state: PipelineState | None, *, thread_id: str | None = None) -> PipelineState:

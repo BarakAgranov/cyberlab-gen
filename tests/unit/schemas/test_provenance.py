@@ -323,3 +323,56 @@ def test_provenance_confidence_bounds_enforced() -> None:
             confidence_source=ConfidenceSource.FRAMEWORK_COMPUTED,
             citations=[_citation()],
         )
+
+
+# --- framework_enriched (ADR 0052 / 0061) ----------------------------------
+
+
+def _api_citation() -> CitationBlock:
+    return CitationBlock(kind=CitationKind.EXTERNAL_API_RESPONSE, reference="nvd:CVE-2024-0001")
+
+
+def test_framework_enriched_defaults_false() -> None:
+    prov = Provenance[str](
+        value="x", source=ProvenanceSource.BLOG_EXPLICIT, citations=[_citation()]
+    )
+    assert prov.framework_enriched is False
+
+
+def test_framework_enriched_external_api_is_valid_and_round_trips() -> None:
+    prov = Provenance[str](
+        value="x",
+        source=ProvenanceSource.EXTERNAL_API,
+        citations=[_citation(), _api_citation()],
+        framework_enriched=True,
+    )
+    assert prov.framework_enriched is True
+    restored = Provenance[str].model_validate(prov.model_dump())
+    assert restored == prov
+    assert restored.framework_enriched is True
+
+
+def test_framework_enriched_requires_external_api_source() -> None:
+    # framework_enriched marks the framework's own authoritative external_api call; it is only
+    # meaningful on source=external_api (ADR 0052 / 0061). A blog_explicit field must not carry it.
+    with pytest.raises(ValidationError, match="framework_enriched"):
+        Provenance[str](
+            value="x",
+            source=ProvenanceSource.BLOG_EXPLICIT,
+            citations=[_citation()],
+            framework_enriched=True,
+        )
+
+
+def test_framework_enriched_does_not_let_external_api_carry_confidence() -> None:
+    # ADR 0005 is unperturbed: confidence stays exclusive to llm_inference even with the
+    # new boolean set.
+    with pytest.raises(ValidationError, match="confidence"):
+        Provenance[str](
+            value="x",
+            source=ProvenanceSource.EXTERNAL_API,
+            citations=[_citation(), _api_citation()],
+            framework_enriched=True,
+            confidence=0.9,
+            confidence_source=ConfidenceSource.FRAMEWORK_COMPUTED,
+        )

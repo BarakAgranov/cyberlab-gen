@@ -102,7 +102,7 @@ def _spec(*, mitre: list[str] | None = None) -> AttackSpec:
     )
 
 
-def _api_cve_severity(*, with_api_citation: bool) -> AttackSpec:
+def _api_cve_severity(*, with_api_citation: bool, framework_enriched: bool = False) -> AttackSpec:
     """A spec whose CVE severity claims ``source=external_api`` (optionally w/ api citation)."""
     spec = _spec()
     citations = [CitationBlock(kind=CitationKind.BLOG_PASSAGE, reference="§2")]
@@ -119,6 +119,7 @@ def _api_cve_severity(*, with_api_citation: bool) -> AttackSpec:
                     value=Severity.HIGH,
                     source=ProvenanceSource.EXTERNAL_API,
                     citations=citations,
+                    framework_enriched=framework_enriched,
                 ),
             )
         ]
@@ -160,6 +161,24 @@ def test_external_api_with_matching_trace_is_not_flagged() -> None:
     ]
     result = GroundingValidator().validate(spec, lookups=trace)
     assert not any(f.code is GroundingCode.SEARCH_BEFORE_CLAIM for f in result.findings)
+
+
+def test_framework_enriched_external_api_is_exempt_from_search_before_claim() -> None:
+    # The C1<->A3/B1 interlock (ADR 0052 / 0061): a framework_enriched external_api field is
+    # the framework's own NVD call — the API-response citation IS the evidence, so it must be
+    # EXEMPT from the agent-trace requirement (its call is not in the agent's lookup trace).
+    spec = _api_cve_severity(with_api_citation=True, framework_enriched=True)
+    result = GroundingValidator().validate(spec, lookups=[])  # no agent trace at all
+    assert not any(f.code is GroundingCode.SEARCH_BEFORE_CLAIM for f in result.findings)
+    assert result.needs_retry is False
+
+
+def test_agent_claimed_external_api_still_held_to_search_before_claim() -> None:
+    # The mirror of the exemption: an agent-claimed (framework_enriched=False) external_api
+    # field with no trace is STILL flagged — the exemption is precise to framework calls.
+    spec = _api_cve_severity(with_api_citation=True, framework_enriched=False)
+    result = GroundingValidator().validate(spec, lookups=[])
+    assert any(f.code is GroundingCode.SEARCH_BEFORE_CLAIM for f in result.findings)
 
 
 # --- MITRE pass-through (post-ADR-0058: no seed-membership hard-gate) -------

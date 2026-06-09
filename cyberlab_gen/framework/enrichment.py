@@ -501,6 +501,12 @@ def _rewrite_cvss_score(
     If the blog stated a numeric CVSS that differs, record a discrepancy and
     classify it via the ``cvss_score`` materiality rule.
     """
+    # Idempotency (ADR 0052 / 0061): C1 re-runs enrichment after a jury-revise patch. A field
+    # already framework_enriched by a prior pass is a no-op — re-stamping would lose the
+    # original field-level discrepancy marking, and re-reading it (now external_api, no
+    # blog_explicit value) would silently drop the discrepancy. Skip it.
+    if cve.cvss_score is not None and cve.cvss_score.framework_enriched:
+        return
     path = f"external_references.cves[{cve.cve_id}].cvss_score"
     blog = cve.cvss_score
     blog_value: float | None = None
@@ -516,6 +522,7 @@ def _rewrite_cvss_score(
             value=api_score,
             source=ProvenanceSource.EXTERNAL_API,
             citations=citations,
+            framework_enriched=True,
             discrepancy_with_blog=True,
             overridden_blog_value=blog_value,
             discrepancy_classification=classification,  # type: ignore[arg-type]
@@ -535,6 +542,7 @@ def _rewrite_cvss_score(
             value=api_score,
             source=ProvenanceSource.EXTERNAL_API,
             citations=citations,
+            framework_enriched=True,
         )
         result.enriched_field_paths.append(path)
 
@@ -556,6 +564,9 @@ def _rewrite_severity(
     if api_sev is None:
         return
 
+    # Idempotency (ADR 0052 / 0061): a no-op on an already-enriched field (see _rewrite_cvss_score).
+    if cve.severity is not None and cve.severity.framework_enriched:
+        return
     path = f"external_references.cves[{cve.cve_id}].severity"
     blog = cve.severity
     blog_value: Severity | None = None
@@ -571,6 +582,7 @@ def _rewrite_severity(
             value=api_sev,
             source=ProvenanceSource.EXTERNAL_API,
             citations=citations,
+            framework_enriched=True,
             discrepancy_with_blog=True,
             overridden_blog_value=blog_value,
             discrepancy_classification=classification,  # type: ignore[arg-type]
@@ -590,6 +602,7 @@ def _rewrite_severity(
             value=api_sev,
             source=ProvenanceSource.EXTERNAL_API,
             citations=citations,
+            framework_enriched=True,
         )
         result.enriched_field_paths.append(path)
 

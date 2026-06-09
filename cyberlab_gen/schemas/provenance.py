@@ -66,6 +66,13 @@ class Provenance[T](ArtifactModel):
     discrepancy_with_blog: bool = False
     overridden_blog_value: T | None = None
     discrepancy_classification: Literal["material", "non_material"] | None = None
+    # Set by the pre-Planner enrichment pass (``pipeline.md §3.2.4``) on every field it
+    # writes/rewrites: ``external_api`` + ``framework_enriched=True`` is the framework's own
+    # authoritative call (the API-response citation IS the evidence — no agent tool-call
+    # required), distinct from an agent-claimed ``external_api`` value (which must have matching
+    # trace evidence, search-before-claim). The grounding stack and the jury EXEMPT
+    # framework_enriched fields from the agent-trace requirement (ADR 0052 / 0061, schema.md §4.9).
+    framework_enriched: bool = False
 
     @model_validator(mode="after")
     def _source_rules(self) -> Self:
@@ -101,6 +108,15 @@ class Provenance[T](ArtifactModel):
         # The confidence-must-be-None case is covered by the LLM_INFERENCE-exclusive rule above.
         if self.source is ProvenanceSource.UNKNOWN_FROM_BLOG and self.citations:
             raise ValueError("citations must be empty when source is unknown_from_blog")
+
+        # framework_enriched marks the framework's own authoritative external_api call (ADR
+        # 0052 / 0061); it is only meaningful on source=external_api. enrichment is the only
+        # writer (``schema.md §4.9`` framework-only authorship).
+        if self.framework_enriched and self.source is not ProvenanceSource.EXTERNAL_API:
+            raise ValueError(
+                "framework_enriched is only valid when source is external_api "
+                f"(got source={self.source.value})"
+            )
 
         # Discrepancy-record invariants.
         if self.discrepancy_with_blog:
