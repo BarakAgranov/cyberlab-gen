@@ -284,9 +284,13 @@ class PipelineExtractRunner:
         # billed cost ~= the cost of the next feedback re-run, so the predictive everyday-budget
         # interrupt can fire before that next iteration would breach the budget. STOPGAP — the
         # end-state computes a live estimate *inside* the orchestrator loop (ADR 0063).
-        return _state_to_run_result(
+        result = _state_to_run_result(
             final_state, estimated_next_iteration_usd=ledger.total_usd - spend_before
         )
+        # Framework-stamp the billed model onto the spec (ADR 0065): the LLM never authors
+        # model-provenance, so the shipped + mirrored spec records the billed model, not the
+        # model's self-report. The on-abort partial spec is stamped in ``_persist_from_state``.
+        return result.model_copy(update={"spec": _stamp_billed_model(result.spec, ledger)})
 
 
 def _state_to_run_result(
@@ -793,18 +797,24 @@ def _drive_result(
 
 
 def _acceptance_context(
-    result: RunResult, *, overlay_dir: Path, handle: RunHandle | None
+    result: RunResult, *, overlay_dir: Path, handle: RunHandle | None, ledger: CostLedger
 ) -> AcceptanceContext:
     """Assemble the framework-known audit context for accepting this run's proposals.
 
-    ``source_blog`` and ``proposed_by_model`` come off the shipped spec; ``run_id``
-    (the proposal's ``proposed_in_run``) comes from the run store when present. No
-    ``source_lab`` — the lab does not exist at extraction time (ADR 0044).
+    ``proposed_by_model`` is the **billed** model from the cost ledger (a framework fact,
+    ``schema.md`` line 793; ADR 0065) — never the LLM-authored ``extraction_metadata.model``
+    (``architecture.md §1.5``; investigation 0002 §7). The spec self-report is only a
+    last-resort fallback because ``ProposalAuditBlock.proposed_by_model`` is a required
+    ``NonEmptyString``; in practice the ledger is non-empty at acceptance time (proposals
+    follow a billed extraction). ``source_blog`` comes off the spec; ``run_id`` (the proposal's
+    ``proposed_in_run``) comes from the run store when present. No ``source_lab`` — the lab does
+    not exist at extraction time (ADR 0044).
     """
     return AcceptanceContext(
         overlay_dir=overlay_dir,
         source_blog=str(result.spec.source.url),
-        proposed_by_model=str(result.spec.extraction_metadata.model),
+        proposed_by_model=_billed_extractor_model(ledger)
+        or str(result.spec.extraction_metadata.model),
         proposed_at=datetime.now(UTC),
         run_id=handle.record.run_id if handle is not None else None,
     )
@@ -838,13 +848,13 @@ def _drive_auto(
     _emit_run_report(result)
     path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
     _mirror_spec(handle, result.spec)
-    _promote_proposals_auto(result, overlay_dir=overlay_dir, handle=handle)
+    _promote_proposals_auto(result, overlay_dir=overlay_dir, handle=handle, ledger=ledger)
     output.print_info(f"\nwrote {path}")
     return path
 
 
 def _promote_proposals_auto(
-    result: RunResult, *, overlay_dir: Path, handle: RunHandle | None
+    result: RunResult, *, overlay_dir: Path, handle: RunHandle | None, ledger: CostLedger
 ) -> None:
     """Promote this run's proposals to the overlay **after the spec ships** (ADR 0050/0062).
 
@@ -865,7 +875,7 @@ def _promote_proposals_auto(
     )
     if total == 0:
         return
-    ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle)
+    ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle, ledger=ledger)
     accepted = auto_accept_to_overlay(
         value_type_proposals=result.value_type_proposals,
         facet_proposals=result.facet_proposals,
@@ -935,7 +945,7 @@ def _drive_interactive(
         _emit_run_report(result)
         path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
         _mirror_spec(handle, result.spec)
-        ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle)
+        ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle, ledger=ledger)
         _promote_proposals_interactive(collected, ctx=ctx)
         output.print_info(f"\nwrote {path}")
         return path
@@ -964,7 +974,7 @@ def _persist_run(
     come from the runner's last ``PipelineState`` (available even on a halt, before the
     halt errors are raised); a clean ship has already mirrored the post-edit spec.
     """
-    _persist_from_state(handle, getattr(runner, "last_state", None))
+    _persist_from_state(handle, getattr(runner, "last_state", None), ledger)
     handle.write_cost(ledger)
     _populate_lineage(handle, runner=runner, ledger=ledger)
     status, reason = _resolve_status(result=result, path=path, exc=sys.exc_info()[1])
@@ -987,6 +997,27 @@ def _billed_extractor_model(ledger: CostLedger) -> str | None:
     return pool[-1].model if pool else None
 
 
+def _stamp_billed_model(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:
+    """Return ``spec`` with ``extraction_metadata.model`` framework-stamped to the billed model.
+
+    The billed provider model is a **framework fact** (``architecture.md §1.5``; ``schema.md``
+    line 793, ADR 0065): the LLM-authored ``extraction_metadata.model`` is overridden so the
+    shipped/persisted spec records the model the framework actually billed, never the model's
+    self-report (investigation 0002 §7 — a real run self-reported "claude-sonnet" while the ledger
+    billed claude-opus-4-8). A surgical ``model_copy`` (every other field byte-identical). No-op
+    (keeps the spec's value as a last-resort fallback) when nothing is billed yet — the ledger is
+    non-empty in practice, so the spec value is never the real shipped model.
+    """
+    billed = _billed_extractor_model(ledger)
+    if billed is None:
+        return spec
+    return spec.model_copy(
+        update={
+            "extraction_metadata": spec.extraction_metadata.model_copy(update={"model": billed})
+        }
+    )
+
+
 def _populate_lineage(handle: RunHandle, *, runner: ExtractRunner, ledger: CostLedger) -> None:
     """Fill run lineage knowable even on a failed (pre-emit) run — what makes runs
     comparable (ADR 0039).
@@ -1005,19 +1036,22 @@ def _populate_lineage(handle: RunHandle, *, runner: ExtractRunner, ledger: CostL
     )
 
 
-def _persist_from_state(handle: RunHandle, state: PipelineState | None) -> None:
+def _persist_from_state(handle: RunHandle, state: PipelineState | None, ledger: CostLedger) -> None:
     """Persist the per-stage artifacts the pipeline produced (complete or partial)."""
     if state is None:
         return
     if state.spec is not None:
-        meta = state.spec.extraction_metadata
+        # Framework-stamp the billed model onto the on-abort partial spec too (ADR 0065): a halted
+        # run's persisted spec must record the billed model, not the LLM self-report.
+        spec = _stamp_billed_model(state.spec, ledger)
+        meta = spec.extraction_metadata
         # extractor_version is config/code provenance (legitimately spec-authored). model is
-        # NOT taken from the spec here: it is the billed provider model, sourced from the
-        # ledger in _populate_lineage (architecture.md §1.5; investigation 0002 §7).
+        # NOT taken from the spec here: it is the billed provider model (stamped above + sourced
+        # for lineage in _populate_lineage; architecture.md §1.5; investigation 0002 §7).
         handle.update_lineage(extractor_version=str(meta.extractor_version))
         # A clean ship already mirrored the post-edit spec; only fill in the partial.
         if SPEC_FILENAME not in handle.record.artifacts:
-            handle.write_artifact(SPEC_FILENAME, state.spec)
+            handle.write_artifact(SPEC_FILENAME, spec)
     if state.verdict is not None:
         handle.write_artifact(JURY_VERDICT_FILENAME, state.verdict)
     if state.enrichment is not None:

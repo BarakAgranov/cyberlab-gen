@@ -902,7 +902,7 @@ def test_persist_from_state_writes_all_stage_artifacts(tmp_path: Path) -> None:
     )
     handle = RunStore(tmp_path).start(kind=RunKind.EXTRACT, label="u")
 
-    _persist_from_state(handle, state)
+    _persist_from_state(handle, state, _ledger(None))
 
     assert (handle.directory / SPEC_FILENAME).is_file()
     assert (handle.directory / JURY_VERDICT_FILENAME).is_file()
@@ -1002,12 +1002,85 @@ def test_lineage_model_is_billed_ledger_model_not_spec_self_report(tmp_path: Pat
     handle = RunStore(tmp_path).start(kind=RunKind.EXTRACT, label="u")
     runner_obj = _RaisingRunner(MalformedOutput("unused"), content_hash="b" * 64)
 
-    _persist_from_state(handle, state)  # must NOT write model="m"
+    _persist_from_state(handle, state, ledger)  # must NOT write model="m"
     _populate_lineage(handle, runner=runner_obj, ledger=ledger)
 
     assert handle.record.lineage.model == "claude-opus-4-8"  # billed wins over the spec's "m"
     assert handle.record.lineage.extractor_version == "1.0.0"  # version still from the spec
     assert handle.record.lineage.input_hash == "b" * 64
+
+
+# --- provenance family: the framework stamps the billed model (ADR 0065) ----
+#
+# Three instances of LLM-authored model-provenance (architecture.md §1.5 violation):
+# extraction_metadata.model (a), proposed_by_model (b), lineage.model (c, already fixed).
+# The single mechanism: the framework reads the billed model from the cost ledger and the
+# LLM's self-report never wins.
+
+
+def _billed_entry(model: str) -> object:
+    from cyberlab_gen.providers import AgentLabel, CallOutcome, CapabilityHint, CostLedgerEntry
+    from cyberlab_gen.providers.base import TokenUsage
+
+    return CostLedgerEntry(
+        timestamp=datetime(2026, 6, 8, tzinfo=UTC),
+        agent_label=AgentLabel.EXTRACTOR,
+        provider="anthropic",
+        model=model,
+        capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        usage=TokenUsage(input_tokens=100, output_tokens=100, cost_usd=Decimal("1.2")),
+        outcome=CallOutcome.SUCCESS,
+        purpose="cli",
+    )
+
+
+def test_extraction_metadata_model_is_stamped_from_the_billed_ledger(tmp_path: Path) -> None:
+    """(a) The framework stamps extraction_metadata.model from the billed ledger; the spec's
+    LLM-authored self-report ("m") never wins (architecture.md §1.5; investigation 0002 §7)."""
+    from cyberlab_gen.cli.extract import _stamp_billed_model  # pyright: ignore[reportPrivateUsage]
+    from cyberlab_gen.providers.cost_ledger import CostLedgerEntry
+
+    del tmp_path
+    spec = _in_scope_spec()
+    assert spec.extraction_metadata.model == "m"  # the LLM self-report
+    ledger = _ledger(None)
+    entry = _billed_entry("claude-opus-4-8")
+    assert isinstance(entry, CostLedgerEntry)
+    ledger.record(entry)
+
+    stamped = _stamp_billed_model(spec, ledger)
+    assert stamped.extraction_metadata.model == "claude-opus-4-8"  # billed wins
+    # everything else on the spec is unchanged (model_copy is surgical)
+    assert (
+        stamped.extraction_metadata.extractor_version == spec.extraction_metadata.extractor_version
+    )
+    assert stamped.extraction_outcome is spec.extraction_outcome
+
+
+def test_stamp_billed_model_is_a_noop_on_an_empty_ledger() -> None:
+    """With nothing billed yet, the stamp is a no-op (keeps the spec's value) — the ledger
+    is non-empty in practice, so the spec value is only ever a last-resort fallback."""
+    from cyberlab_gen.cli.extract import _stamp_billed_model  # pyright: ignore[reportPrivateUsage]
+
+    spec = _in_scope_spec()
+    assert _stamp_billed_model(spec, _ledger(None)).extraction_metadata.model == "m"
+
+
+def test_proposed_by_model_is_billed_ledger_model_not_spec_self_report(tmp_path: Path) -> None:
+    """(b) proposed_by_model in the proposal audit block is the billed model, not the spec's
+    self-report (schema.md:793 — framework-recorded; investigation 0002 §7)."""
+    from cyberlab_gen.cli.extract import _acceptance_context  # pyright: ignore[reportPrivateUsage]
+    from cyberlab_gen.providers.cost_ledger import CostLedgerEntry
+
+    rr = RunResult(spec=_in_scope_spec())
+    assert rr.spec.extraction_metadata.model == "m"
+    ledger = _ledger(None)
+    entry = _billed_entry("claude-opus-4-8")
+    assert isinstance(entry, CostLedgerEntry)
+    ledger.record(entry)
+
+    ctx = _acceptance_context(rr, overlay_dir=tmp_path, handle=None, ledger=ledger)
+    assert ctx.proposed_by_model == "claude-opus-4-8"  # billed, not "m"
 
 
 # --- L4/G1: persistence recovers the partial spec from the checkpoint on abort ----
