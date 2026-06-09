@@ -80,7 +80,7 @@ ATTACK_SPEC_FILENAME = "attack-spec.yaml"
 #: Per-run cap on auto-accepted proposals in ``--auto`` mode (placeholder 5,
 #: ``implementation-plan.md §4.2``; revisited in Phase 4). ``--interactive`` has
 #: no cap — the user acts on every proposal individually.
-DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP = 20
+DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP = 5
 
 
 # --- the typed result the interrupt consumes (ADR 0024) --------------------
