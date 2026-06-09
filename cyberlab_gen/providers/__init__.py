@@ -28,6 +28,7 @@ from cyberlab_gen.providers.base import (
 )
 from cyberlab_gen.providers.cost_ledger import (
     DEFAULT_CATASTROPHE_CEILING_USD,
+    DEFAULT_EVERYDAY_BUDGET_USD,
     CallOutcome,
     CostLedger,
     CostLedgerEntry,
@@ -54,6 +55,7 @@ from cyberlab_gen.providers.retries import (
 
 __all__ = [
     "DEFAULT_CATASTROPHE_CEILING_USD",
+    "DEFAULT_EVERYDAY_BUDGET_USD",
     "TRANSIENT_RETRIES",
     "AgentLabel",
     "AnthropicProvider",

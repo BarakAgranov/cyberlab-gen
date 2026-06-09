@@ -37,7 +37,11 @@ import typer
 from cyberlab_gen.cli import output
 from cyberlab_gen.cli.context import CliContext
 from cyberlab_gen.logging_setup import setup_logging
-from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD, CostLedger
+from cyberlab_gen.providers import (
+    DEFAULT_CATASTROPHE_CEILING_USD,
+    DEFAULT_EVERYDAY_BUDGET_USD,
+    CostLedger,
+)
 from cyberlab_gen.runtime import persisting_signal_guard
 from cyberlab_gen.state import LocalState, RunStore
 from cyberlab_gen.tracing_setup import setup_tracing
@@ -100,8 +104,9 @@ def _main(  # pyright: ignore[reportUnusedFunction]
             "--max-llm-cost",
             metavar="USD",
             help=(
-                "Cap total LLM spend for this invocation. Used by LLM-spending verbs "
-                "(generate, fix); accepted but ignored by validate and telemetry submit."
+                "Set the soft everyday LLM budget for this invocation (default $10), enforced by "
+                "the predictive budget-overrun interrupt (ADR 0049). The $25 catastrophe ceiling "
+                "is a separate, fixed backstop. Used by LLM-spending verbs (generate, fix)."
             ),
         ),
     ] = None,
@@ -158,13 +163,19 @@ def _main(  # pyright: ignore[reportUnusedFunction]
     # (ADR 0041). Never blocks or crashes a run.
     setup_tracing()
     state = LocalState(root=state_dir) if state_dir is not None else LocalState()
-    # Default to the high catastrophe ceiling (ADR 0038), not "no cap": even without
-    # --max-llm-cost a runaway is bounded. --max-llm-cost lets the user set an
-    # informed lower limit once per-call costs are visible in the run log.
-    cap_usd: Decimal = (
-        Decimal(str(max_llm_cost)) if max_llm_cost is not None else DEFAULT_CATASTROPHE_CEILING_USD
+    # Two distinct cost caps (ADR 0049/0064): ``--max-llm-cost`` configures the SOFT everyday
+    # budget (default $10) that the predictive budget-overrun interrupt enforces; the $25
+    # catastrophe ceiling is a FIXED, unraisable backstop enforced on every billed call by
+    # ``CostRecordingProvider``. They are kept separate on the ledger so neither shadows the
+    # other (the old conflation set both to one number — the bug ADR 0049 exists to fix).
+    everyday_budget_usd: Decimal = (
+        Decimal(str(max_llm_cost)) if max_llm_cost is not None else DEFAULT_EVERYDAY_BUDGET_USD
     )
-    ledger = CostLedger(run_id="cli-session", cap_usd=cap_usd)
+    ledger = CostLedger(
+        run_id="cli-session",
+        cap_usd=DEFAULT_CATASTROPHE_CEILING_USD,
+        everyday_budget_usd=everyday_budget_usd,
+    )
     cli_ctx = CliContext(state=state, cost_ledger=ledger, show_cost=show_cost)
     ctx.obj = cli_ctx
     last_invocation_context = cli_ctx

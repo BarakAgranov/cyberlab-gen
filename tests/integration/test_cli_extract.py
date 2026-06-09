@@ -376,7 +376,12 @@ def test_material_discrepancies_reported_not_interrupted(
 
 
 def _ledger(cap: str | None) -> CostLedger:
-    return CostLedger(run_id="t", cap_usd=Decimal(cap) if cap is not None else None)
+    # These verb-level tests exercise the SOFT everyday-budget predictive interrupt (ADR 0064),
+    # so ``cap`` is the everyday budget. The $25 catastrophe ceiling (cap_usd) is the provider's
+    # job and is not exercised here, so it is left unset.
+    return CostLedger(
+        run_id="t", cap_usd=None, everyday_budget_usd=Decimal(cap) if cap is not None else None
+    )
 
 
 def test_spec_edit_revalidates_and_reopens_on_invalid() -> None:
@@ -485,6 +490,101 @@ def test_budget_overrun_proceeds_in_auto_when_under_cap(tmp_path: Path) -> None:
     )
     assert written is not None
     assert written.exists()
+
+
+def test_everyday_budget_trips_before_the_catastrophe_ceiling(tmp_path: Path) -> None:
+    """ADR 0049/0064: the SOFT everyday budget ($10) trips the predictive interrupt with a real
+    non-zero estimate, BEFORE and INDEPENDENT of the $25 ceiling — and --auto hard-stops on it."""
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("25"), everyday_budget_usd=Decimal("10"))
+    # est 12: 0 + 12 > 10 (soft budget breached) but 12 < 25 (ceiling not reached).
+    rr = RunResult(spec=_in_scope_spec(), estimated_next_stage_cost=Decimal("12"))
+    written = run_extract(
+        url="u",
+        interactive=False,
+        auto=True,
+        runner=_FakeRunner([rr]),
+        ledger=ledger,
+        stdin_is_tty=False,
+        out_dir=tmp_path,
+    )
+    assert written is None  # the soft budget hard-stopped --auto
+    assert not (tmp_path / ATTACK_SPEC_FILENAME).exists()
+    assert ledger.cap_usd == Decimal("25")  # the catastrophe ceiling is untouched + independent
+
+
+def test_production_runner_sets_a_real_nonzero_estimate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0064: the production runner sets the per-iteration estimate from the BILLED ledger
+    (un-hardwiring the former zero), so the predictive everyday-budget interrupt can fire."""
+    from cyberlab_gen.agents.extractor.extractor import Extractor
+    from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
+    from cyberlab_gen.agents.extractor_jury.schema import JuryScores, JuryVerdict, Verdict
+    from cyberlab_gen.cli.extract import PipelineExtractRunner
+    from cyberlab_gen.providers import (
+        AgentLabel,
+        CapabilityHint,
+        ModelRankings,
+        ProviderRegistry,
+        TokenUsage,
+    )
+    from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
+    from cyberlab_gen.providers.mock_provider import MockProvider
+    from cyberlab_gen.registries.merge import load_merged_registries
+    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
+    from tests.unit.framework.pipeline_fakes import install_stub_ingestion, make_ingestion
+
+    del tmp_path
+    rankings = ModelRankings.model_validate(
+        {
+            "by_capability": {
+                CapabilityHint.LONG_CONTEXT_EXTRACTION.value: [
+                    {"provider": "anthropic", "model": "model-x"}
+                ],
+                CapabilityHint.HIGH_QUALITY_REASONING.value: [
+                    {"provider": "anthropic", "model": "model-x"}
+                ],
+            }
+        }
+    )
+    registry = ProviderRegistry(rankings, frozenset({"anthropic"}))
+    registries = load_merged_registries()
+
+    mock = MockProvider()
+    mock.register(
+        capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        agent_label=AgentLabel.EXTRACTOR,
+        response=_in_scope_spec(facets=["target:aws"]),
+        usage=TokenUsage(input_tokens=1000, output_tokens=2000, cost_usd=Decimal("1.0")),
+        model="claude-opus-4-8",
+    )
+    mock.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.EXTRACTOR_JURY,
+        response=JuryVerdict(
+            verdict=Verdict.APPROVE,
+            scores=JuryScores(
+                fidelity=0.9, completeness=0.9, provenance_correctness=0.9, structural_validity=0.9
+            ),
+            retry_recommended=False,
+            rationale="clean",
+        ),
+        usage=TokenUsage(input_tokens=500, output_tokens=500, cost_usd=Decimal("0.5")),
+        model="claude-opus-4-8",
+    )
+
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("25"), everyday_budget_usd=Decimal("100"))
+    crp = CostRecordingProvider(mock, ledger, purpose="test")
+    install_stub_ingestion(monkeypatch, ingestion=make_ingestion(), blog_content="blog content")
+    runner_obj = PipelineExtractRunner(
+        extractor=Extractor(provider=crp, registry=registry, registries=registries),
+        validator=StaticSchemaValidator(registries=registries),
+        jury=ExtractorJury(provider=crp, registry=registry, registries=registries),
+    )
+    result = runner_obj.run("u", ledger=ledger)
+
+    assert ledger.total_usd == Decimal("1.5")  # extract 1.0 + jury 0.5 billed into the ledger
+    assert result.estimated_next_stage_cost == Decimal("1.5")  # the REAL estimate, not the old 0
 
 
 def test_auto_over_cap_writes_up_to_cap_and_reports_remainder(tmp_path: Path) -> None:

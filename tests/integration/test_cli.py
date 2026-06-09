@@ -87,26 +87,35 @@ def test_telemetry_submit_stub_exit_code_and_message() -> None:
     assert "Phase 5" in result.stdout
 
 
-def test_max_llm_cost_flag_sets_ledger_cap() -> None:
-    """``--max-llm-cost 5.00`` plumbs into ``ctx.obj.cost_ledger.cap_usd``."""
+def test_max_llm_cost_flag_sets_everyday_budget_not_the_ceiling() -> None:
+    """``--max-llm-cost 5.00`` sets the SOFT everyday budget; the $25 ceiling stays fixed.
+
+    ADR 0049/0064: the two caps are distinct. --max-llm-cost configures the everyday budget
+    (the predictive interrupt), NOT the catastrophe ceiling (which is fixed, unraisable).
+    """
+    from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD
+
     result = runner.invoke(app, ["--max-llm-cost", "5.00", "generate", "http://example.test"])
     assert result.exit_code == 1
     assert cli_main.last_invocation_context is not None
-    assert cli_main.last_invocation_context.cost_ledger.cap_usd == Decimal("5.00")
+    ledger = cli_main.last_invocation_context.cost_ledger
+    assert ledger.everyday_budget_usd == Decimal("5.00")  # the soft budget
+    assert ledger.cap_usd == DEFAULT_CATASTROPHE_CEILING_USD  # the ceiling is fixed, NOT 5.00
 
 
-def test_max_llm_cost_flag_omitted_defaults_to_catastrophe_ceiling() -> None:
-    """Omitting ``--max-llm-cost`` defaults the cap to the catastrophe ceiling (ADR 0038).
-
-    Not ``None``: even without a user-set cap, a runaway must be bounded by the high
-    backstop. ``--max-llm-cost`` lets the user lower it to an informed value.
-    """
-    from cyberlab_gen.providers import DEFAULT_CATASTROPHE_CEILING_USD
+def test_max_llm_cost_omitted_defaults_everyday_budget_and_keeps_ceiling() -> None:
+    """Omitting ``--max-llm-cost`` defaults the everyday budget to $10; the ceiling stays $25."""
+    from cyberlab_gen.providers import (
+        DEFAULT_CATASTROPHE_CEILING_USD,
+        DEFAULT_EVERYDAY_BUDGET_USD,
+    )
 
     result = runner.invoke(app, ["generate", "http://example.test"])
     assert result.exit_code == 1
     assert cli_main.last_invocation_context is not None
-    assert cli_main.last_invocation_context.cost_ledger.cap_usd == DEFAULT_CATASTROPHE_CEILING_USD
+    ledger = cli_main.last_invocation_context.cost_ledger
+    assert ledger.everyday_budget_usd == DEFAULT_EVERYDAY_BUDGET_USD  # $10 default soft budget
+    assert ledger.cap_usd == DEFAULT_CATASTROPHE_CEILING_USD  # $25 fixed ceiling
 
 
 def test_state_dir_flag_overrides_local_state_root(tmp_path: Path) -> None:

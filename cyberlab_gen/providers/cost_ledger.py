@@ -47,13 +47,21 @@ from cyberlab_gen.schemas.base import ArtifactModel
 
 _PER_MILLION = Decimal(1_000_000)
 
-#: The default **catastrophe ceiling** — a high, configurable backstop whose only
-#: job is to stop a pathological runaway, NOT an everyday brake (ADR 0038). It is
-#: deliberately high: a normal-but-failing run must not trip it. Once a user has
-#: observed real per-run costs (now visible per-call), they should replace this with
-#: an informed value via ``--max-llm-cost``. Enforced mid-run by the framework-side
-#: ``CostRecordingProvider`` (the ledger itself never raises, ``§5.3``).
+#: The default **catastrophe ceiling** — a high, FIXED, unraisable backstop whose only job
+#: is to stop a pathological runaway, NOT an everyday brake (ADR 0038/0047/0049). Enforced
+#: mid-run on every billed call by the framework-side ``CostRecordingProvider`` (the ledger
+#: itself never raises, ``§5.3``). It is carried on the ledger as ``cap_usd`` and is **no longer**
+#: what ``--max-llm-cost`` sets (ADR 0049/0064 separated the two caps).
 DEFAULT_CATASTROPHE_CEILING_USD = Decimal("25")
+
+#: The default **everyday refinement budget** — a SOFT, user-overridable cap (default $10,
+#: configurable via ``--max-llm-cost``) enforced *before* an iteration by the predictive
+#: budget-overrun interrupt (ADR 0049). Distinct from the $25 catastrophe ceiling: the everyday
+#: budget is the limit the user normally operates against; the ceiling is the hard runaway
+#: backstop above it. Carried on the ledger as ``everyday_budget_usd``; the predictive interrupt
+#: (``cli/extract.py``) reads it, while ``CostRecordingProvider`` keeps enforcing the ceiling
+#: (``cap_usd``). ADR 0064 (implementation); the *live* per-iteration estimate is ADR 0063.
+DEFAULT_EVERYDAY_BUDGET_USD = Decimal("10")
 
 
 class ModelPricing(ArtifactModel):
@@ -194,9 +202,20 @@ class CostLedger:
     :class:`CostReportBlock`.
     """
 
-    def __init__(self, run_id: str, cap_usd: Decimal | None) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        cap_usd: Decimal | None,
+        everyday_budget_usd: Decimal | None = None,
+    ) -> None:
         self.run_id = run_id
+        #: The **catastrophe ceiling** (hard, fixed, unraisable; ADR 0047). Enforced on every
+        #: billed call by ``CostRecordingProvider``. ``None`` disables the ceiling (eval/tests).
         self.cap_usd = cap_usd
+        #: The **everyday refinement budget** (soft, user-overridable; ADR 0049/0064). Read by the
+        #: predictive budget-overrun interrupt in ``cli/extract.py``, NOT by the provider. ``None``
+        #: disables the predictive interrupt (the default when no budget is set, e.g. eval).
+        self.everyday_budget_usd = everyday_budget_usd
         self._entries: list[CostLedgerEntry] = []
 
     def record(self, entry: CostLedgerEntry) -> None:
@@ -256,6 +275,7 @@ class CostLedger:
 
 __all__ = [
     "DEFAULT_CATASTROPHE_CEILING_USD",
+    "DEFAULT_EVERYDAY_BUDGET_USD",
     "CallOutcome",
     "CostLedger",
     "CostLedgerEntry",

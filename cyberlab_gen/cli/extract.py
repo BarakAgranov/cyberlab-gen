@@ -111,9 +111,12 @@ class RunResult(InternalModel):
     status: PipelineStatus = PipelineStatus.SHIPPED
     low_jury_confidence: bool = False
     unresolved_feedback: list[str] = Field(default_factory=list[str])
-    #: Estimated USD spend of the *next* stage (the Planner, once it ships). The
-    #: budget-overrun interrupt compares ``ledger.total_usd + this`` to the cap.
-    #: Phase 1 has no Planner, so the default runner supplies ``0``.
+    #: The real per-iteration cost estimate (ADR 0064): this run's billed cost ~= the cost of the
+    #: next feedback re-run. The predictive everyday-budget interrupt compares ``ledger.total_usd
+    #: + this`` to ``ledger.everyday_budget_usd``. The production runner sets it from the billed
+    #: ledger (the former hardwired ``0`` is gone); the default (test) runner defaults to ``0``.
+    #: STOPGAP — named for a Planner "next stage" that does not exist; the end-state computes a
+    #: live estimate *inside* the orchestrator loop (ADR 0063), firing between iterations.
     estimated_next_stage_cost: Decimal = Decimal("0")
 
     def is_out_of_scope(self) -> bool:
@@ -239,7 +242,9 @@ class PipelineExtractRunner:
             build_pipeline,
         )
 
-        del ledger  # the agents record into the ledger via the provider; not read here
+        # Snapshot cumulative spend before the run so the per-iteration estimate below is THIS
+        # run's billed cost (the agents record into the ledger via the provider). ADR 0064.
+        spend_before = ledger.total_usd
         assert self._ingestion is not None
         assert self._blog_content is not None
         summary = _ingestion_summary(self._ingestion)
@@ -274,15 +279,26 @@ class PipelineExtractRunner:
         # clean-return value in memory — that in-memory "second path" is what missed the
         # mid-graph abort case (G1/ADR 0053). ``_go`` may abort before returning; the
         # checkpoint still holds whatever the pipeline reached.
-        return _state_to_run_result(asyncio.run(_go()))
+        final_state = asyncio.run(_go())
+        # The real per-iteration estimate (ADR 0064, un-hardwiring the former zero): this run's
+        # billed cost ~= the cost of the next feedback re-run, so the predictive everyday-budget
+        # interrupt can fire before that next iteration would breach the budget. STOPGAP — the
+        # end-state computes a live estimate *inside* the orchestrator loop (ADR 0063).
+        return _state_to_run_result(
+            final_state, estimated_next_iteration_usd=ledger.total_usd - spend_before
+        )
 
 
-def _state_to_run_result(state: object) -> RunResult:
+def _state_to_run_result(
+    state: object, *, estimated_next_iteration_usd: Decimal = Decimal("0")
+) -> RunResult:
     """Map a terminal ``PipelineState`` onto the Task-7 ``RunResult`` (ADR 0024).
 
     Raises the orchestrator's halt errors (``ValidationError`` /
     ``JuryRejectionError``) so the verb maps them to a clean error + exit code;
-    only a *shipped* state produces a ``RunResult``.
+    only a *shipped* state produces a ``RunResult``. ``estimated_next_iteration_usd`` is the
+    real per-iteration cost estimate (this run's billed cost; ADR 0064) the predictive
+    everyday-budget interrupt consumes; ``0`` for the default (test) runner.
     """
     from cyberlab_gen.framework.orchestrator import (
         JuryRejectionError,
@@ -316,6 +332,7 @@ def _state_to_run_result(state: object) -> RunResult:
         status=state.status or PipelineStatus.SHIPPED,
         low_jury_confidence=state.status is PipelineStatus.SHIPPED_LOW_CONFIDENCE,
         unresolved_feedback=state.unresolved_feedback,
+        estimated_next_stage_cost=estimated_next_iteration_usd,
     )
 
 
@@ -580,46 +597,60 @@ def _proposal_to_yaml(model: ProposedValueType | ProposedFacet | ProposedThesisT
 
 
 def _would_overrun(result: RunResult, ledger: CostLedger) -> bool:
-    """True when the estimated next-stage spend would push past the cap."""
-    if ledger.cap_usd is None:
+    """True when the next iteration's estimated spend would breach the SOFT everyday budget.
+
+    Reads the everyday budget (ADR 0049/0064), NOT the catastrophe ceiling (``cap_usd``, which
+    ``CostRecordingProvider`` enforces independently). ``None`` budget disables the interrupt.
+    """
+    budget = ledger.everyday_budget_usd
+    if budget is None:
         return False
     projected = ledger.total_usd + result.estimated_next_stage_cost
-    return projected > ledger.cap_usd
+    return projected > budget
 
 
 def _handle_budget_overrun(result: RunResult, ledger: CostLedger, *, interactive: bool) -> bool:
-    """Surface the budget-overrun interrupt; return ``True`` to proceed.
+    """Surface the everyday-budget predictive interrupt; return ``True`` to proceed.
 
-    Honored in **both** modes (``pipeline.md §3.1.1`` — the one exception to
-    "``--auto`` has no interrupts"). In a headless/non-interactive context the
-    only safe non-hanging action is to abort. Returns ``True`` if the run should
-    continue, ``False`` if it must abort.
+    Honored in **both** modes (``pipeline.md §3.1.1``). Interactive: pause-and-ask (raise /
+    proceed / abort). ``--auto`` (no human to answer): **hard-stop** at the soft budget — the
+    budget's job is early-warning, so warn-and-proceed in unattended mode would silently ignore
+    the limit the user set. The $25 catastrophe ceiling (``cap_usd``) is a separate, fixed hard
+    backstop, unaffected here. Returns ``True`` to continue, ``False`` to abort.
+
+    STOPGAP (ADR 0064 → ADR 0063): the everyday budget is enforced only at the post-Extractor
+    boundary (the next *re-run*); the end-state fires the predictive interrupt *in-loop*, between
+    refinement iterations, with the ledger threaded into the orchestrator.
     """
     projected = ledger.total_usd + result.estimated_next_stage_cost
     output.print_info(
-        f"\nBUDGET OVERRUN: next stage est. ${result.estimated_next_stage_cost} would bring "
-        f"accumulated spend to ${projected}, past the cap of ${ledger.cap_usd}."
+        f"\nEVERYDAY BUDGET OVERRUN: the next iteration's est. "
+        f"${result.estimated_next_stage_cost} would bring accumulated spend to ${projected}, past "
+        f"the soft everyday budget of ${ledger.everyday_budget_usd}. (The $25 catastrophe ceiling "
+        "is separate and unaffected.)"
     )
     if not interactive:
-        # --auto: surface the choice; without a TTY we cannot prompt, so the
-        # framework's safe default is to abort rather than silently overspend.
+        # --auto: no human to answer. Hard-stop at the soft budget rather than silently overspend.
         output.print_info(
-            "Running in --auto: aborting rather than exceeding the cap. "
-            "Re-run with a higher --max-llm-cost to proceed."
+            "Running in --auto with no interactive session: halting at the soft everyday budget "
+            "rather than overspending. Re-run with a higher --max-llm-cost to proceed."
         )
         return False
     raw = (
-        typer.prompt("budget ([r]aise cap / [p]roceed past cap / a[b]ort)", default="b")
+        typer.prompt("everyday budget ([r]aise budget / [p]roceed past it / a[b]ort)", default="b")
         .strip()
         .lower()
     )
     if raw in ("r", "raise"):
-        new_cap = typer.prompt("new cap (USD)", default=str(projected))
-        ledger.cap_usd = Decimal(str(new_cap))
-        output.print_info(f"cap raised to ${ledger.cap_usd}; proceeding.")
+        new_budget = typer.prompt("new everyday budget (USD)", default=str(projected))
+        ledger.everyday_budget_usd = Decimal(str(new_budget))
+        output.print_info(
+            f"everyday budget raised to ${ledger.everyday_budget_usd}; proceeding "
+            "(the $25 catastrophe ceiling is unchanged)."
+        )
         return True
     if raw in ("p", "proceed"):
-        output.print_info("proceeding past the cap explicitly.")
+        output.print_info("proceeding past the everyday budget explicitly.")
         return True
     output.print_info("aborting on budget overrun.")
     return False
