@@ -9,9 +9,10 @@ each in-flight ``Proposed*`` to its registry entry, stamps a framework-authored
 Two entry points mirror the two modes (``pipeline.md §3.2.5``):
 
 - :func:`auto_accept_to_overlay` — ``--auto``: batch-accept up to the per-run cap,
-  returning what was accepted and what was deferred over the cap. The verb decides
-  the over-cap *halt* policy (``errors.ProposalCapExceeded``); this layer only
-  splits accepted from deferred and writes the accepted ones.
+  returning what was accepted and what was deferred over the cap. The verb *reports*
+  the deferred over-cap proposals (ADR 0050/0062: over-cap is bounded steering, not a
+  hard halt); this layer only splits accepted from deferred and writes the accepted ones,
+  and the write is gated on the spec shipping (the verb calls it post-ship).
 - :func:`accept_value_type` / :func:`accept_facet` — ``--interactive``: write one
   reviewed (and possibly user-edited) proposal at a time, marked human-approved.
 """
@@ -138,7 +139,8 @@ def auto_accept_to_overlay(
     Value-type proposals are accepted first, then facets, then thesis types (a stable
     order so the same proposals are accepted across re-runs). Each accepted entry is
     marked ``approval='auto'``. Proposals beyond the cap are *not* written and returned
-    in ``deferred`` for the caller's over-cap halt policy (ADR 0044).
+    in ``deferred`` for the caller to **report** (ADR 0050/0062: over-cap is bounded
+    steering, not a hard halt — the deferred ones are surfaced, not dropped or halted on).
     """
     accepted: list[str] = []
     deferred: list[str] = []

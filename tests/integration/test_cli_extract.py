@@ -37,7 +37,6 @@ from cyberlab_gen.cli.extract import (
     spec_to_yaml,
 )
 from cyberlab_gen.cli.main import app
-from cyberlab_gen.errors import ProposalCapExceeded
 from cyberlab_gen.providers.cost_ledger import CostLedger
 from cyberlab_gen.registries.loader import load_overlay_file
 from cyberlab_gen.schemas.attack_spec import (
@@ -488,8 +487,13 @@ def test_budget_overrun_proceeds_in_auto_when_under_cap(tmp_path: Path) -> None:
     assert written.exists()
 
 
-def test_auto_over_cap_halts_without_writing(tmp_path: Path) -> None:
-    """Over the per-run cap, ``--auto`` halts (ADR 0044) — no overlay, no spec."""
+def test_auto_over_cap_writes_up_to_cap_and_reports_remainder(tmp_path: Path) -> None:
+    """Over the per-run cap, ``--auto`` SHIPS, promotes up to the cap, and reports the rest.
+
+    ADR 0050/0062: over-cap is bounded steering, not a hard halt. The spec ships, exactly
+    ``cap`` proposals are promoted to the overlay, and the remainder are reported (not dropped
+    silently, not halted). Replaces the old ProposalCapExceeded behaviour.
+    """
     overlay = tmp_path / "overlay"
     n = DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP + 2
     rr = RunResult(
@@ -499,19 +503,21 @@ def test_auto_over_cap_halts_without_writing(tmp_path: Path) -> None:
         ],
     )
     fake = _FakeRunner([rr])
-    with pytest.raises(ProposalCapExceeded):
-        run_extract(
-            url="u",
-            interactive=False,
-            auto=True,
-            runner=fake,
-            ledger=_ledger(None),
-            stdin_is_tty=False,
-            out_dir=tmp_path,
-            overlay_dir=overlay,
-        )
-    assert not (tmp_path / ATTACK_SPEC_FILENAME).exists()
-    assert not overlay.exists()
+    written = run_extract(
+        url="u",
+        interactive=False,
+        auto=True,
+        runner=fake,
+        ledger=_ledger(None),
+        stdin_is_tty=False,
+        out_dir=tmp_path,
+        overlay_dir=overlay,
+    )
+    assert written is not None and written.exists()  # the spec SHIPPED
+    vts = load_overlay_file(overlay / "value_types.yaml", ValueTypeEntry)
+    assert (
+        len(vts.entries) == DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP
+    )  # exactly cap promoted, rest reported
 
 
 def test_auto_accepts_under_cap_writes_overlay(tmp_path: Path) -> None:
@@ -540,6 +546,64 @@ def test_auto_accepts_under_cap_writes_overlay(tmp_path: Path) -> None:
     assert [e.name for e in vts.entries] == ["s3_bucket_arn"]
     assert facets.proposals["target:fastly"].approval == "auto"
     assert facets.proposals["target:fastly"].source_lab is None
+
+
+def test_auto_budget_abort_promotes_nothing(tmp_path: Path) -> None:
+    """ADR 0050/0062: promotion is gated on ship — a budget abort in --auto writes no overlay."""
+    overlay = tmp_path / "overlay"
+    rr = RunResult(
+        spec=_in_scope_spec(),
+        value_type_proposals=[_proposal_vt()],
+        estimated_next_stage_cost=Decimal("10"),  # est 10 vs cap 1 -> overrun -> abort
+    )
+    fake = _FakeRunner([rr])
+    written = run_extract(
+        url="u",
+        interactive=False,
+        auto=True,
+        runner=fake,
+        ledger=_ledger("1.00"),
+        stdin_is_tty=False,
+        out_dir=tmp_path,
+        overlay_dir=overlay,
+    )
+    assert written is None
+    assert not (overlay / "value_types.yaml").exists()  # nothing promoted (gated on ship)
+
+
+def test_interactive_budget_abort_promotes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0050/0062: in --interactive, a budget abort AFTER per-proposal review writes no overlay.
+
+    This is the orphan-write fix: the review used to write each accepted proposal to the overlay
+    BEFORE the budget check, leaving overlay entries with no shipped spec on a budget abort.
+    """
+    rr = RunResult(
+        spec=_in_scope_spec(),
+        value_type_proposals=[_proposal_vt()],
+        estimated_next_stage_cost=Decimal("10"),
+    )
+    _install_runner(monkeypatch, _FakeRunner([rr]))
+    state_dir = tmp_path / "state"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_main, "stdin_tty_override", True)
+    # approve artifact -> accept the vt proposal (review, no write) -> budget overrun -> abort
+    result = runner.invoke(
+        app,
+        [
+            "--max-llm-cost",
+            "1",
+            "--state-dir",
+            str(state_dir),
+            "extract",
+            "https://example.com/blog",
+        ],
+        input="a\na\nb\n",
+    )
+    assert result.exit_code == 1, result.output
+    overlay = state_dir / "registry-overlay"
+    assert not (overlay / "value_types.yaml").exists()  # no orphan promotion on abort
 
 
 # --- run-store persistence on every exit path (ADR 0039) -------------------

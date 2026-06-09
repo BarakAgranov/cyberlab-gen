@@ -97,18 +97,19 @@ tools.
 
 ## Propose unknown vocabulary on the first pass
 
-You do **not** see the registries, and a `facets` entry, a `thesis.types` entry, or a
-value type that isn't registered is **rejected by structural validation** — which forces
-a full, costlier re-extraction. So when you introduce a vocabulary term that is specific
-to this blog and is **not** an obviously-standard, widely-used term — a coined or niche
-`thesis.types` (e.g. a named technique class the blog introduces), a `target:*` facet for
-a specific technology or service, or a value type with no clear standard match — call the
-matching `propose_*` tool **on this pass, as you write the field**. Do not wait for a
-rejection to tell you the term is unknown.
+A **REGISTRY DIGEST** of the already-registered vocabulary (`value_types`, `facets`,
+`thesis_types`, `execution_contexts`) is provided with the source below. **Consult it:** a
+term that already appears in the digest needs **no** proposal — just use it. A `facets` entry,
+a `thesis.types` entry, or a value type that is **not** in the digest is **rejected by
+structural validation** — which forces a full, costlier re-extraction. So when you introduce a
+vocabulary term that is **not** in the digest — a coined or niche `thesis.types` (e.g. a named
+technique class the blog introduces), a `target:*` facet for a specific technology or service,
+or a value type with no match in the digest — call the matching `propose_*` tool **on this
+pass, as you write the field**. Do not wait for a rejection to tell you the term is unknown.
 
-Proposing a term that already exists is harmless (the framework de-duplicates); failing to
-propose a genuinely new term costs a whole re-extraction. When in doubt for a blog-specific
-term, propose it now.
+Proposing a term that is already in the digest is unnecessary; proposing a genuinely new term
+(absent from the digest) on the first pass avoids a whole re-extraction. When in doubt for a
+blog-specific term that is not in the digest, propose it now.
 
 ## Per-step reproducibility (emergent lab class)
 

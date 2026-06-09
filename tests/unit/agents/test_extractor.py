@@ -334,6 +334,31 @@ def test_negative_max_output_tokens_rejected() -> None:
         _extractor(provider, max_output_tokens=0)
 
 
+# --- registry digest (E1, ADR 0062) ----------------------------------------
+
+
+def test_registry_digest_lists_known_vocabulary() -> None:
+    # E1: the Extractor must see a digest of the registered vocabulary so it can check novelty
+    # before proposing (rather than proposing blind, forcing a structural-retry re-extraction).
+    from cyberlab_gen.agents.extractor.extractor import build_registry_digest
+    from cyberlab_gen.registries.merge import load_merged_registries
+
+    digest = build_registry_digest(load_merged_registries())
+    assert "REGISTRY DIGEST" in digest
+    assert "vulnerability_chain" in digest  # a bundled thesis_type
+    for header in ("value_types:", "facets:", "thesis_types:", "execution_contexts:"):
+        assert header in digest
+    # bounded: names only, no full value_schema bodies (token cost discipline)
+    assert "value_schema" not in digest
+
+
+def test_user_turn_carries_the_registry_digest() -> None:
+    ext = _extractor(MockProvider())
+    turn = ext._build_user_turn(blog_content="blog", source_summary="url=...")  # pyright: ignore[reportPrivateUsage]
+    assert "REGISTRY DIGEST" in turn
+    assert "BLOG CONTENT" in turn  # the digest sits alongside the source, before the blog
+
+
 # --- refinement: targeted patch (ADR 0048 A1, ADR 0054) --------------------
 
 

@@ -278,9 +278,12 @@ class Extractor:
     # --- prompt assembly ---------------------------------------------------
 
     def _build_user_turn(self, *, blog_content: str, source_summary: str) -> str:
+        digest = build_registry_digest(self._registries)
+        digest_block = f"{digest}\n\n" if digest else ""
         return (
             "SOURCE METADATA:\n"
             f"{source_summary}\n\n"
+            f"{digest_block}"
             "BLOG CONTENT (verbatim; cite passages by quoting them in blog_excerpt):\n"
             f"{blog_content}"
         )
@@ -327,6 +330,38 @@ class Extractor:
         )
 
 
+def build_registry_digest(registries: object) -> str:
+    """Render a compact digest of the registered vocabulary the Extractor may reference (E1).
+
+    Names only — ``value_types`` / ``facets`` / ``thesis_types`` / ``execution_contexts`` — so
+    the Extractor can check novelty before proposing rather than proposing blind (which forces a
+    structural-retry re-extraction; investigation 0002 §6 / 0001, ADR 0050/0062). NOT
+    ``external_data_sources`` (a tool-adapter catalog, never LLM-proposable; ADR 0055/0058).
+    Bounded to entry names (no ``value_schema`` bodies) for token cost. Returns ``""`` when the
+    registries are not the merged view (defensive; the digest is then simply omitted).
+    """
+    from cyberlab_gen.registries.merge import MergedRegistries
+
+    if not isinstance(registries, MergedRegistries):
+        return ""
+
+    def _fmt(names: list[str]) -> str:
+        return ", ".join(names) if names else "(none)"
+
+    value_types = sorted(e.name for e in registries.value_types.entries)
+    facets = sorted(e.name for e in registries.facets.entries)
+    thesis_types = sorted(e.name for e in registries.thesis_types.entries)
+    execution_contexts = sorted(e.name for e in registries.execution_contexts.entries)
+    return (
+        "REGISTRY DIGEST (vocabulary already registered — use these as-is; propose ONLY "
+        "genuinely-novel terms NOT listed here):\n"
+        f"- value_types: {_fmt(value_types)}\n"
+        f"- facets: {_fmt(facets)}\n"
+        f"- thesis_types: {_fmt(thesis_types)}\n"
+        f"- execution_contexts: {_fmt(execution_contexts)}"
+    )
+
+
 __all__ = [
     "DEFAULT_EXTRACTOR_MAX_TOKENS",
     "DEFAULT_MAX_TOOL_ITERATIONS",
@@ -334,4 +369,5 @@ __all__ = [
     "EXTRACTOR_AGENT_DIR",
     "ExtractionResult",
     "Extractor",
+    "build_registry_digest",
 ]

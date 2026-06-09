@@ -80,7 +80,7 @@ ATTACK_SPEC_FILENAME = "attack-spec.yaml"
 #: Per-run cap on auto-accepted proposals in ``--auto`` mode (placeholder 5,
 #: ``implementation-plan.md §4.2``; revisited in Phase 4). ``--interactive`` has
 #: no cap — the user acts on every proposal individually.
-DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP = 5
+DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP = 20
 
 
 # --- the typed result the interrupt consumes (ADR 0024) --------------------
@@ -473,44 +473,63 @@ def _errors_as_comments(exc: Exception) -> str:
     return "\n".join(lines)
 
 
-def _review_proposals_interactive(
-    result: RunResult, *, editor: EditorFn, ctx: AcceptanceContext
-) -> None:
-    """Per-proposal Accept/Edit loop, writing each accepted entry to the overlay.
+def _collect_proposals_interactive(
+    result: RunResult, *, editor: EditorFn
+) -> tuple[list[ProposedValueType], list[ProposedFacet], list[ProposedThesisType]]:
+    """Per-proposal Accept/Edit review that **collects** the accepted entries — no overlay write.
 
-    ``pipeline.md §3.2.5`` / ADR 0044: each value-type and facet proposal is reviewed
-    individually — Accept (write the entry to the overlay, marked human-approved) or
-    Edit (re-open, edit, structurally revalidate, then write; an invalid edit reopens
-    the editor with error comments). No Reject — see :class:`ProposalChoice`. No cap in
-    interactive mode: the user acts on every proposal.
+    ``pipeline.md §3.2.5`` / ADR 0044/0050: each proposal is reviewed individually — Accept
+    (keep as-is) or Edit (re-open, edit, structurally revalidate; an invalid edit reopens the
+    editor with error comments). No Reject — see :class:`ProposalChoice`. No cap in interactive
+    mode. The actual overlay write is deferred to spec-ship time (ADR 0050/0062), so a budget/
+    user abort after this review promotes nothing.
     """
-    for vt in result.value_type_proposals:
-        reviewed = _review_one_proposal(
+    value_types = [
+        _review_one_proposal(
             label=f"value_type proposal {vt.name!r}",
             model=vt,
             parse=ProposedValueType.model_validate,
             editor=editor,
         )
-        accept_value_type(reviewed, ctx, approval="human")
-        output.print_info(f"  + accepted value_type {reviewed.name!r} into the overlay")
-    for facet in result.facet_proposals:
-        reviewed = _review_one_proposal(
+        for vt in result.value_type_proposals
+    ]
+    facets = [
+        _review_one_proposal(
             label=f"facet proposal {facet.name!r} (category={facet.category})",
             model=facet,
             parse=ProposedFacet.model_validate,
             editor=editor,
         )
-        accept_facet(reviewed, ctx, approval="human")
-        output.print_info(f"  + accepted facet {reviewed.name!r} into the overlay")
-    for thesis in result.thesis_type_proposals:
-        reviewed = _review_one_proposal(
+        for facet in result.facet_proposals
+    ]
+    thesis_types = [
+        _review_one_proposal(
             label=f"thesis_type proposal {thesis.name!r}",
             model=thesis,
             parse=ProposedThesisType.model_validate,
             editor=editor,
         )
-        accept_thesis_type(reviewed, ctx, approval="human")
-        output.print_info(f"  + accepted thesis_type {reviewed.name!r} into the overlay")
+        for thesis in result.thesis_type_proposals
+    ]
+    return value_types, facets, thesis_types
+
+
+def _promote_proposals_interactive(
+    collected: tuple[list[ProposedValueType], list[ProposedFacet], list[ProposedThesisType]],
+    *,
+    ctx: AcceptanceContext,
+) -> None:
+    """Write the reviewed proposals to the overlay (human-approved) **after the spec ships**."""
+    value_types, facets, thesis_types = collected
+    for vt in value_types:
+        accept_value_type(vt, ctx, approval="human")
+        output.print_info(f"  + promoted value_type {vt.name!r} to the overlay")
+    for facet in facets:
+        accept_facet(facet, ctx, approval="human")
+        output.print_info(f"  + promoted facet {facet.name!r} to the overlay")
+    for thesis in thesis_types:
+        accept_thesis_type(thesis, ctx, approval="human")
+        output.print_info(f"  + promoted thesis_type {thesis.name!r} to the overlay")
 
 
 def _default_proposal_choice_reader() -> str:
@@ -768,7 +787,12 @@ def _drive_auto(
     handle: RunHandle | None,
     overlay_dir: Path,
 ) -> Path | None:
-    """``--auto``: no interrupts except budget-overrun; out-of-scope halts (§3.1.1)."""
+    """``--auto``: no interrupts except budget-overrun; out-of-scope halts (§3.1.1).
+
+    Promotion to the shared overlay is **gated on the spec shipping** (ADR 0050/0062): the
+    overlay write happens only *after* ``write_attack_spec`` confirms the spec is on disk, so a
+    run that aborts (out-of-scope, budget) promotes nothing.
+    """
     if result.is_out_of_scope():
         output.print_info(
             "\nOut-of-scope content detected; halting in --auto "
@@ -780,45 +804,36 @@ def _drive_auto(
         result, ledger, interactive=False
     ):
         return None
-    # Over-cap proposals halt for inspection (schema.md §4.16 (c), ADR 0044) — raises
-    # ProposalCapExceeded before any overlay or spec write, so it is never a silent drop.
-    _auto_accept_proposals(result, overlay_dir=overlay_dir, handle=handle)
     _emit_run_report(result)
-    path = write_attack_spec(result.spec, directory=target_dir)
+    path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
     _mirror_spec(handle, result.spec)
+    _promote_proposals_auto(result, overlay_dir=overlay_dir, handle=handle)
     output.print_info(f"\nwrote {path}")
     return path
 
 
-def _auto_accept_proposals(
+def _promote_proposals_auto(
     result: RunResult, *, overlay_dir: Path, handle: RunHandle | None
 ) -> None:
-    """Auto-accept proposals into the overlay up to the per-run cap (ADR 0044).
+    """Promote this run's proposals to the overlay **after the spec ships** (ADR 0050/0062).
 
-    Beyond the cap the run **halts** with :class:`ProposalCapExceeded` (``schema.md
-    §4.16`` option (c)) — a clear report for inspection, not a silent drop. Writing
-    happens only when the run is within the cap, so the halt leaves the overlay
-    untouched and no ``attack-spec.yaml`` is produced.
+    Auto-accepts up to the per-run cap with a write-time dedup/overlap merge-check
+    (:func:`auto_accept_to_overlay` → :func:`write_overlay_entry`, replace-by-key). Over the cap
+    is **bounded in-loop steering, not a hard halt** (``schema.md §4.16``): the over-cap proposals
+    are reported, not promoted and not dropped silently.
+
+    STOPGAP (ADR 0062 → the loop-budget threading work-stream, ADR 0065): the proper over-cap fix
+    steers the Extractor *in-loop* to reuse/refactor instead of over-proposing, bounded by the
+    ADR-0049 caps. The registry digest (E1) is the first lever toward that; this report-the-
+    remainder behaviour is the interim, honest stopgap that replaces the old hard halt.
     """
     total = (
         len(result.value_type_proposals)
         + len(result.facet_proposals)
         + len(result.thesis_type_proposals)
     )
-    if total > DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP:
-        from cyberlab_gen.errors import ProposalCapExceeded
-
-        labels = (
-            [f"value_type {vt.name!r}" for vt in result.value_type_proposals]
-            + [f"facet {f.name!r}" for f in result.facet_proposals]
-            + [f"thesis_type {t.name!r}" for t in result.thesis_type_proposals]
-        )
-        raise ProposalCapExceeded(
-            f"--auto produced {total} registry proposals, over the per-run cap of "
-            f"{DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP}; halting for review (no overlay or "
-            "attack-spec.yaml written). Re-run with --interactive to review each. "
-            f"Proposals: {', '.join(labels)}"
-        )
+    if total == 0:
+        return
     ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle)
     accepted = auto_accept_to_overlay(
         value_type_proposals=result.value_type_proposals,
@@ -829,11 +844,19 @@ def _auto_accept_proposals(
     )
     if accepted.accepted:
         output.print_info(
-            f"\nauto-accepted {len(accepted.accepted)} proposal(s) into the overlay "
-            f"({overlay_dir}):"
+            f"\npromoted {len(accepted.accepted)} proposal(s) to the overlay "
+            f"({overlay_dir}) on ship:"
         )
         for label in accepted.accepted:
             output.print_info(f"  + {label}")
+    if accepted.deferred:
+        output.print_info(
+            f"\n{len(accepted.deferred)} proposal(s) over the per-run cap of "
+            f"{DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP} were NOT promoted (reported, not halted "
+            "— ADR 0050/0062 over-cap is bounded steering, not a hard halt):"
+        )
+        for label in accepted.deferred:
+            output.print_info(f"  - {label}")
 
 
 def _drive_interactive(
@@ -870,17 +893,19 @@ def _drive_interactive(
                 update={"spec": _edit_spec_with_revalidation(result.spec, editor=editor)}
             )
             continue  # re-show the menu against the edited spec
-        # APPROVE: review proposals (writing each accepted one to the overlay),
-        # check budget, write.
-        ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle)
-        _review_proposals_interactive(result, editor=editor, ctx=ctx)
+        # APPROVE: review proposals (NO overlay write yet), check budget, ship, THEN promote
+        # to the overlay (ADR 0050/0062: promotion gated on the spec shipping, so a budget abort
+        # after the review leaves no orphan overlay entries).
+        collected = _collect_proposals_interactive(result, editor=editor)
         if _would_overrun(result, ledger) and not _handle_budget_overrun(
             result, ledger, interactive=True
         ):
             return None
         _emit_run_report(result)
-        path = write_attack_spec(result.spec, directory=target_dir)
+        path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
         _mirror_spec(handle, result.spec)
+        ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle)
+        _promote_proposals_interactive(collected, ctx=ctx)
         output.print_info(f"\nwrote {path}")
         return path
 
