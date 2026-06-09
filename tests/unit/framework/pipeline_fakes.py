@@ -45,7 +45,7 @@ from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidato
 if TYPE_CHECKING:
     import pytest
 
-    from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
+    from cyberlab_gen.validators.grounding_validator import GroundingFinding
 
 HASH = "a" * 64
 
@@ -225,20 +225,29 @@ class ChangingBadExtractor:
 
 
 class FakeJury:
-    """Records every review() call and returns scripted verdicts in sequence."""
+    """Records every review() call and returns scripted verdicts in sequence.
+
+    ``reviewed_specs`` and ``reviewed_findings`` record what the jury *saw* at review
+    time, so a test can assert the jury consumes the orchestrator's grounding findings
+    (ADR 0051/0060) and reviews the enriched spec (ADR 0052).
+    """
 
     def __init__(self, verdicts: list[JuryVerdict]) -> None:
         self._verdicts = verdicts
         self.calls = 0
+        self.reviewed_specs: list[AttackSpec] = []
+        self.reviewed_findings: list[list[GroundingFinding] | None] = []
 
     async def review(
         self,
         *,
         spec: AttackSpec,
         blog_content: str,
-        lookups: list[ExternalLookupRecord] | None = None,
+        grounding_findings: list[GroundingFinding] | None = None,
     ) -> JuryVerdict:
-        del spec, blog_content, lookups
+        del blog_content
+        self.reviewed_specs.append(spec)
+        self.reviewed_findings.append(grounding_findings)
         idx = min(self.calls, len(self._verdicts) - 1)
         self.calls += 1
         return self._verdicts[idx]
@@ -256,9 +265,9 @@ class CrashOnceJury:
         *,
         spec: AttackSpec,
         blog_content: str,
-        lookups: list[ExternalLookupRecord] | None = None,
+        grounding_findings: list[GroundingFinding] | None = None,
     ) -> JuryVerdict:
-        del spec, blog_content, lookups
+        del spec, blog_content, grounding_findings
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("boom in jury")

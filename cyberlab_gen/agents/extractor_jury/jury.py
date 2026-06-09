@@ -8,10 +8,13 @@ judgment task, not long-context extraction). It has the *same tool inventory* as
 the Extractor so it can independently verify ``external_api`` responses
 (``agents.md §5.5``).
 
-The framework runs the mechanical provenance-structure verifier
-(``verification.verify_provenance``) before the LLM call and feeds the findings
-into the jury prompt as grounding; the LLM then makes the fidelity / semantic
-judgment and returns the verdict. The framework — not the jury — maps the
+The orchestrator-owned grounding stack (``validation.md §6.10.2``,
+:mod:`cyberlab_gen.validators.grounding_validator`) computes the mechanical
+findings (provenance-structure, search-before-claim, CVE) once; the jury
+**consumes** that findings set as prompt grounding and does *not* re-derive it
+(``agents.md §5.5``, ADR 0051/0060) — mirroring how the Critic reads the Validator
+report "without re-checking" (``§5.14``). The LLM then makes the fidelity /
+semantic judgment and returns the verdict. The framework — not the jury — maps the
 verdict to control flow (``architecture.md §1.5``); this stage only produces the
 judgment.
 
@@ -31,18 +34,14 @@ from cyberlab_gen.agents.extractor.tools import (
     extractor_tool_definitions,
 )
 from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict
-from cyberlab_gen.agents.extractor_jury.verification import (
-    ProvenanceFinding,
-    verify_provenance,
-)
 from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
 
 if TYPE_CHECKING:
-    from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
     from cyberlab_gen.framework.enrichment import NvdClient
     from cyberlab_gen.providers.base import Provider
     from cyberlab_gen.providers.ranking import ProviderRegistry
     from cyberlab_gen.schemas.attack_spec import AttackSpec
+    from cyberlab_gen.validators.grounding_validator import GroundingFinding
 
 EXTRACTOR_JURY_AGENT_DIR = "extractor_jury"
 
@@ -88,24 +87,24 @@ class ExtractorJury:
         *,
         spec: AttackSpec,
         blog_content: str,
-        lookups: list[ExternalLookupRecord] | None = None,
+        grounding_findings: list[GroundingFinding] | None = None,
     ) -> JuryVerdict:
-        """Review ``spec`` against ``blog_content`` and the Extractor's tool trace.
+        """Review ``spec`` against ``blog_content`` and the orchestrator's grounding findings.
 
-        Runs the mechanical provenance verifier first, then asks the LLM for the
-        verdict with the findings supplied as grounding. Returns a validated
-        ``JuryVerdict``; the framework reads ``verdict`` to route control flow.
+        ``grounding_findings`` is the orchestrator-owned mechanical-validator stack's findings
+        set (``validation.md §6.10.2``, ADR 0051/0060); the jury **consumes** it as prompt
+        grounding and does not re-derive it. Asks the LLM for the verdict and returns a
+        validated ``JuryVerdict``; the framework reads ``verdict`` to route control flow.
         """
         from cyberlab_gen.registries.merge import MergedRegistries
 
         if not isinstance(self._registries, MergedRegistries):  # pragma: no cover - guard
             raise TypeError("ExtractorJury.registries must be a MergedRegistries")
 
-        findings = verify_provenance(spec, lookups)
         source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
         executor = ExtractorToolExecutor(registries=self._registries, nvd_client=self._nvd_client)
         user_content = self._build_user_turn(
-            spec=spec, blog_content=blog_content, findings=findings
+            spec=spec, blog_content=blog_content, findings=grounding_findings or []
         )
         messages = self._runner.build_messages(
             capability=CapabilityHint.HIGH_QUALITY_REASONING,
@@ -126,18 +125,18 @@ class ExtractorJury:
         *,
         spec: AttackSpec,
         blog_content: str,
-        findings: list[ProvenanceFinding],
+        findings: list[GroundingFinding],
     ) -> str:
         if findings:
             findings_text = "\n".join(
-                f"- {f.field_path} ({f.source}): {f.detail}" for f in findings
+                f"- {f.location} ({f.code.value}): {f.detail}" for f in findings
             )
         else:
             findings_text = "(none — every provenance envelope is structurally grounded)"
         return (
             f"RUBRIC FLOOR: every dimension must score >= {self._rubric_floor}.\n\n"
-            "MECHANICAL PROVENANCE FINDINGS (framework-computed; treat as ground truth "
-            "for structure, then make your own fidelity judgment):\n"
+            "MECHANICAL GROUNDING FINDINGS (framework-computed by the orchestrator's stack; "
+            "treat as ground truth for structure, then make your own fidelity judgment):\n"
             f"{findings_text}\n\n"
             "ATTACKSPEC UNDER REVIEW (YAML):\n"
             f"{spec.to_yaml()}\n\n"

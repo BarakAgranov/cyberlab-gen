@@ -1,29 +1,29 @@
 """The Extractor stage: produce an AttackSpec from cached blog content.
 
-Architectural source: ``agents.md §5.4``, ``pipeline.md §3.2.2``, ADR 0021.
+Architectural source: ``agents.md §5.4``, ``pipeline.md §3.2.2``, ADR 0021,
+**ADR 0051/0060** (the Extractor stops self-validating).
 
 The Extractor is a typed-output agent (output type ``AttackSpec``) invoked via
-Task 2's capability-hint call surface (``long_context_extraction``). After the
-provider returns a structurally valid ``AttackSpec``, the *framework* (this
-module, never the LLM — ``architecture.md §1.5/§1.6``) runs three mechanical
-checks and, on failure, re-prompts the agent with the offending ids/fields
-flagged, decrementing a content-level retry budget distinct from the call
-surface's structural-malformation budget (ADR 0018, ADR 0021):
+Task 2's capability-hint call surface (``long_context_extraction``). It **produces
+content** and nothing more: it returns a structurally valid ``AttackSpec`` in one
+pass. The mechanical grounding checks (search-before-claim / MITRE / CVE) that this
+stage used to run on its own hidden ``hallucination_retry`` budget now live in the
+**orchestrator-owned grounding stack** (``validation.md §6.10.2``,
+:mod:`cyberlab_gen.validators.grounding_validator`); the *orchestrator* — never this
+LLM-producing stage — owns the route and the retry budget (``architecture.md
+§1.5``: LLMs never decide their own retry budgets).
 
-1. **search-before-claim** (``schema.md §4.15``) — every ``source: external_api``
-   field must have a matching ``external_lookup`` record in the tool trace.
-2. **MITRE pass-through** (ADR 0055/0058) — referenced technique ids are accepted
-   as-is. A well-formed-but-uncatalogued id is never rejected (the bundled seed is
-   not an authority; well-formedness is owned by the ``MitreTechniqueId`` type). This
-   check produces no findings until a real MITRE adapter is wired (LATER).
-3. **CVE hallucination** — every CVE id whose provenance claims a non-unknown
-   source must resolve against NVD (skipped, not failed, when no NVD client is
-   wired — the honest "couldn't check" posture).
+:meth:`extract` runs once and returns an ``ExtractionResult`` envelope wrapping the
+validated ``AttackSpec`` plus the side-channel the framework needs downstream (the
+registry proposals and the external-lookup trace the grounding stack consumes); only
+the ``AttackSpec`` is ever written to disk.
 
-On budget exhaustion the stage raises ``ExtractionError``. This is *retry*, not
-refinement (``architecture.md §1.7``). The stage returns an ``ExtractionResult``
-envelope wrapping the validated ``AttackSpec`` plus the collected proposals and
-trace; only the ``AttackSpec`` is ever written to disk.
+:meth:`refine` (the jury-``revise`` targeted-patch path, ADR 0048/0054) keeps a small,
+bounded re-prompt loop for one narrow concern only — a patch that does not *apply or
+validate* (a malformed-output recovery, ``validation.md §6.10.1`` mechanism 2). The
+mechanical grounding re-check of the patched spec (R2) is no longer run here; the
+patched spec re-enters the orchestrator's static-schema + grounding stack on the graph,
+so the whole-spec re-check is preserved without a hidden Extractor loop (ADR 0051/0060).
 """
 
 from __future__ import annotations
@@ -51,7 +51,6 @@ from cyberlab_gen.providers.base import (
 )
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
-from cyberlab_gen.schemas.enums import ProvenanceSource
 
 if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback
@@ -63,10 +62,12 @@ logger = logging.getLogger(__name__)
 
 EXTRACTOR_AGENT_DIR = "extractor"
 
-#: Content-level retry budget for hallucination / search-before-claim rejections.
-#: Distinct from the call surface's structural-malformation budget (ADR 0018).
-#: Placeholder per ``architecture.md §8.4``; calibrated from eval data later.
-DEFAULT_HALLUCINATION_RETRY_ATTEMPTS = 2
+#: Re-prompt budget for :meth:`Extractor.refine` when an emitted ``RefinementPatch``
+#: does not *apply or validate* (a malformed-output recovery, ``validation.md §6.10.1``
+#: mechanism 2 — distinct from the orchestrator-owned grounding-retry budget, ADR
+#: 0051/0060). It is NOT a content/hallucination retry; the grounding re-check of the
+#: patched spec is the orchestrator's job. Placeholder per ``architecture.md §8.4``.
+DEFAULT_PATCH_RETRY_ATTEMPTS = 2
 
 #: Tool-use loop depth for one Extractor pass (``provider-interface.md §4.1``).
 DEFAULT_MAX_TOOL_ITERATIONS = 12
@@ -93,22 +94,14 @@ DEFAULT_MAX_TOOL_ITERATIONS = 12
 DEFAULT_EXTRACTOR_MAX_TOKENS = 20000
 
 
-class CheckFinding(InternalModel):
-    """One framework-check rejection reason (search-before-claim or hallucination)."""
-
-    kind: str  # "search_before_claim" | "cve_hallucination"
-    field_path: str
-    detail: str
-
-
 class ExtractionResult(InternalModel):
     """The Extractor stage's output envelope (ADR 0021).
 
     Wraps the validated ``AttackSpec`` (the only piece that becomes an artifact)
     plus the side-channel the framework needs downstream: the registry proposals
-    the agent emitted, the external-lookup trace (for the jury's independent
-    provenance verification), how many content-level re-prompts it took, and the
-    framework findings from the final accepted pass (empty on a clean accept).
+    the agent emitted, the external-lookup trace (which the orchestrator-owned
+    grounding stack consumes for search-before-claim), and how many content-level
+    re-prompts the targeted patch took (0 for a clean first extract).
     """
 
     attack_spec: AttackSpec
@@ -129,12 +122,9 @@ class Extractor:
         registry: ProviderRegistry,
         registries: object,  # MergedRegistries; typed loosely to avoid a runtime import here
         nvd_client: NvdClient | None = None,
-        hallucination_retry_attempts: int = DEFAULT_HALLUCINATION_RETRY_ATTEMPTS,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
         max_output_tokens: int = DEFAULT_EXTRACTOR_MAX_TOKENS,
     ) -> None:
-        if hallucination_retry_attempts < 0:
-            raise ValueError("hallucination_retry_attempts must be >= 0")
         if max_output_tokens < 1:
             raise ValueError("max_output_tokens must be >= 1")
         self._runner = AgentRunner(
@@ -145,17 +135,17 @@ class Extractor:
         )
         self._registries = registries
         self._nvd_client = nvd_client
-        self._hallucination_retry_attempts = hallucination_retry_attempts
         self._max_tool_iterations = max_tool_iterations
         self._max_output_tokens = max_output_tokens
 
     async def extract(self, *, blog_content: str, source_summary: str) -> ExtractionResult:
-        """Run the Extractor over ``blog_content``; enforce the framework checks.
+        """Run the Extractor over ``blog_content`` once and return its output envelope.
 
-        ``source_summary`` is the Ingestion metadata the prompt needs (url,
-        publisher, fetched-at, content hash). Returns an ``ExtractionResult`` whose
-        ``AttackSpec`` passed search-before-claim + MITRE/CVE hallucination checks,
-        or raises ``ExtractionError`` when the content-level retry budget is spent.
+        ``source_summary`` is the Ingestion metadata the prompt needs (url, publisher,
+        fetched-at, content hash) — plus, on an orchestrator-routed retry, the structural
+        or grounding findings folded in by the orchestrator (``architecture.md §1.5``).
+        The Extractor produces content and does **not** self-validate; the orchestrator's
+        static-schema + grounding stack checks the output and decides any re-run.
         """
         from cyberlab_gen.registries.merge import MergedRegistries
 
@@ -163,53 +153,30 @@ class Extractor:
             raise TypeError("Extractor.registries must be a MergedRegistries")
 
         source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
-        base_user = self._build_user_turn(blog_content=blog_content, source_summary=source_summary)
-        max_attempts = 1 + self._hallucination_retry_attempts
-        feedback = ""
-        last_findings: list[CheckFinding] = []
-
-        for attempt in range(1, max_attempts + 1):
-            executor = ExtractorToolExecutor(
-                registries=self._registries, nvd_client=self._nvd_client
-            )
-            user_content = base_user if not feedback else f"{base_user}\n\n{feedback}"
-            messages = self._runner.build_messages(
-                capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
-                user_content=user_content,
-            )
-            response = await self._runner.run_with_tools(
-                messages,
-                output_schema=AttackSpec,
-                capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
-                tools=extractor_tool_definitions(registered_source_ids=source_ids),
-                tool_executor=executor,
-                max_iterations=self._max_tool_iterations,
-                max_tokens=self._max_output_tokens,
-            )
-            spec = response.output
-            findings = self._run_checks(spec, executor.lookups)
-            if not findings:
-                return ExtractionResult(
-                    attack_spec=spec,
-                    value_type_proposals=executor.value_type_proposals,
-                    facet_proposals=executor.facet_proposals,
-                    thesis_type_proposals=executor.thesis_type_proposals,
-                    lookups=executor.lookups,
-                    reprompts=attempt - 1,
-                )
-            last_findings = findings
-            feedback = self._feedback_for(findings)
-            logger.warning(
-                "extractor framework-check rejection on attempt %d/%d: %d finding(s)",
-                attempt,
-                max_attempts,
-                len(findings),
-            )
-
-        raise ExtractionError(
-            "Extractor exhausted its hallucination/search-before-claim retry budget "
-            f"({max_attempts} attempts); unresolved findings: "
-            + "; ".join(f"{f.kind}@{f.field_path}: {f.detail}" for f in last_findings)
+        executor = ExtractorToolExecutor(registries=self._registries, nvd_client=self._nvd_client)
+        user_content = self._build_user_turn(
+            blog_content=blog_content, source_summary=source_summary
+        )
+        messages = self._runner.build_messages(
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            user_content=user_content,
+        )
+        response = await self._runner.run_with_tools(
+            messages,
+            output_schema=AttackSpec,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            tools=extractor_tool_definitions(registered_source_ids=source_ids),
+            tool_executor=executor,
+            max_iterations=self._max_tool_iterations,
+            max_tokens=self._max_output_tokens,
+        )
+        return ExtractionResult(
+            attack_spec=response.output,
+            value_type_proposals=executor.value_type_proposals,
+            facet_proposals=executor.facet_proposals,
+            thesis_type_proposals=executor.thesis_type_proposals,
+            lookups=executor.lookups,
+            reprompts=0,
         )
 
     async def refine(
@@ -228,16 +195,15 @@ class Extractor:
         prior spec and re-validates the **whole** spec
         (:func:`~cyberlab_gen.framework.refinement.apply_field_patch`). Refinement is
         convergent by construction — every unflagged field stays byte-identical, so a patch
-        cannot regress a field nobody flagged (the field-rerolling bounce of full
-        re-extraction). Reserved for the jury-``revise`` refinement path; the static-schema
-        structural retry and the interactive natural-language-feedback path still re-extract
-        from scratch (``architecture.md §1.7``, ``validation.md §6.10``).
+        cannot regress a field nobody flagged.
 
-        The mechanical content checks (search-before-claim / MITRE / CVE) run over the
-        **whole** patched spec, so a patch can't introduce an undetected cross-field problem
-        (R2). The re-prompt loop on an unapplyable or framework-rejected patch is bounded by
-        the same content-retry budget as :meth:`extract` (R1); on exhaustion it raises
-        ``ExtractionError`` (a clean halt, never an unbounded spin).
+        The only re-prompt loop here recovers from a patch that does not *apply or validate*
+        (R1, a malformed-output bound), capped by :data:`DEFAULT_PATCH_RETRY_ATTEMPTS`; on
+        exhaustion it raises ``ExtractionError`` (a clean halt, never an unbounded spin). The
+        mechanical grounding re-check of the patched spec (R2) is **not** run here — the
+        patched spec re-enters the orchestrator's static-schema + grounding stack on the
+        graph, so the whole-spec re-check is preserved without a hidden Extractor loop
+        (ADR 0051/0060).
         """
         # Lazy import: ``cyberlab_gen.framework`` imports this module (the orchestrator needs
         # ``ExtractionResult``), so a top-level framework import here would be a load-time
@@ -259,7 +225,7 @@ class Extractor:
             blog_content=blog_content,
             source_summary=source_summary,
         )
-        max_attempts = 1 + self._hallucination_retry_attempts
+        max_attempts = 1 + DEFAULT_PATCH_RETRY_ATTEMPTS
         extra = ""
         last_problem = "no patch produced"
 
@@ -285,7 +251,7 @@ class Extractor:
                 patched = apply_field_patch(prior_spec, response.output)
             except (RefinementPathError, PydanticValidationError) as exc:
                 # A bad path or a mis-shaped/invalid patch: re-prompt with the error, bounded
-                # by the same budget as a content rejection (R1) — never an unbounded retry.
+                # by the patch-apply budget (R1) — never an unbounded retry.
                 last_problem = f"patch did not apply/validate: {exc}"
                 extra = self._patch_rejected_feedback(str(exc))
                 logger.warning(
@@ -295,23 +261,13 @@ class Extractor:
                     exc,
                 )
                 continue
-            findings = self._run_checks(patched, executor.lookups)  # whole-spec re-check (R2)
-            if not findings:
-                return ExtractionResult(
-                    attack_spec=patched,
-                    value_type_proposals=executor.value_type_proposals,
-                    facet_proposals=executor.facet_proposals,
-                    thesis_type_proposals=executor.thesis_type_proposals,
-                    lookups=executor.lookups,
-                    reprompts=attempt - 1,
-                )
-            last_problem = "; ".join(f"{f.kind}@{f.field_path}: {f.detail}" for f in findings)
-            extra = self._feedback_for(findings)
-            logger.warning(
-                "extractor refine: framework-check rejection on attempt %d/%d: %d finding(s)",
-                attempt,
-                max_attempts,
-                len(findings),
+            return ExtractionResult(
+                attack_spec=patched,
+                value_type_proposals=executor.value_type_proposals,
+                facet_proposals=executor.facet_proposals,
+                thesis_type_proposals=executor.thesis_type_proposals,
+                lookups=executor.lookups,
+                reprompts=attempt - 1,
             )
 
         raise ExtractionError(
@@ -370,132 +326,12 @@ class Extractor:
             f"{detail}"
         )
 
-    def _feedback_for(self, findings: list[CheckFinding]) -> str:
-        lines = ["FRAMEWORK REJECTION — fix these before resubmitting:"]
-        for f in findings:
-            lines.append(f"- [{f.kind}] {f.field_path}: {f.detail}")
-        lines.append(
-            "For any external_api value you keep, call external_lookup first. For any "
-            "id you cannot ground, set the field to unknown_from_blog with a reason."
-        )
-        return "\n".join(lines)
-
-    # --- framework checks (mechanical, never LLM — architecture.md §1.6) ---
-
-    def _run_checks(
-        self, spec: AttackSpec, lookups: list[ExternalLookupRecord]
-    ) -> list[CheckFinding]:
-        findings: list[CheckFinding] = []
-        findings.extend(self._check_search_before_claim(spec, lookups))
-        findings.extend(self._check_mitre(spec))
-        findings.extend(self._check_cves(spec, lookups))
-        return findings
-
-    def _check_search_before_claim(
-        self, spec: AttackSpec, lookups: list[ExternalLookupRecord]
-    ) -> list[CheckFinding]:
-        """Every ``source: external_api`` field needs a matching tool call (``§4.15``)."""
-        findings: list[CheckFinding] = []
-        if spec.external_references is None:
-            return findings
-        looked_up_cves = {
-            str(rec.params.get("cve_id", "")).strip() for rec in lookups if rec.source_id == "nvd"
-        }
-        for cve in spec.external_references.cves:
-            for label, prov in (("cvss_score", cve.cvss_score), ("severity", cve.severity)):
-                if (
-                    prov is not None
-                    and prov.source is ProvenanceSource.EXTERNAL_API
-                    and cve.cve_id not in looked_up_cves
-                ):
-                    findings.append(
-                        CheckFinding(
-                            kind="search_before_claim",
-                            field_path=f"external_references.cves[{cve.cve_id}].{label}",
-                            detail=(
-                                f"claims source=external_api but no external_lookup "
-                                f"call recorded for {cve.cve_id}"
-                            ),
-                        )
-                    )
-        return findings
-
-    def _check_mitre(self, spec: AttackSpec) -> list[CheckFinding]:
-        """MITRE technique ids are never hard-rejected against a local list (ADR 0055/0058).
-
-        Well-formedness is already owned by the ``MitreTechniqueId`` type (``primitives.py``),
-        enforced at AttackSpec construction — a malformed id can never reach this check. The
-        old 8-entry seed-catalog membership gate rejected real, current ATT&CK ids (e.g. the
-        blog-central T1195/T1199) as "hallucinations"; per ADR 0055 P2 an unverifiable-but-
-        well-formed identifier must pass THROUGH unverified, never be rejected. Phase 1 wires
-        no MITRE verification adapter, so this mirrors ``_check_cves``'s skip-when-unwired
-        posture and returns no findings — it only logs which ids went unverified. Verifying
-        (and fetching) technique ids via a wired ``external_data_sources/mitre_attack`` adapter
-        is the LATER work named in findings doc 0001 §5.
-        """
-        refs = self._collect_technique_refs(spec)
-        if refs:
-            logger.info(
-                "extractor: %d MITRE technique id(s) passed unverified (no MITRE adapter wired "
-                "this phase): %s",
-                len(refs),
-                ", ".join(tech for _, tech in refs),
-            )
-        return []
-
-    def _check_cves(
-        self, spec: AttackSpec, lookups: list[ExternalLookupRecord]
-    ) -> list[CheckFinding]:
-        """Every grounded CVE id must resolve against NVD (skipped when no client)."""
-        if spec.external_references is None or self._nvd_client is None:
-            return []
-        findings: list[CheckFinding] = []
-        found_cves = {
-            str(rec.params.get("cve_id", "")).strip()
-            for rec in lookups
-            if rec.source_id == "nvd" and rec.found
-        }
-        for cve in spec.external_references.cves:
-            source = cve.description.source
-            if source is ProvenanceSource.UNKNOWN_FROM_BLOG:
-                continue
-            if cve.cve_id not in found_cves:
-                findings.append(
-                    CheckFinding(
-                        kind="cve_hallucination",
-                        field_path=f"external_references.cves[{cve.cve_id}]",
-                        detail=(
-                            f"{cve.cve_id} did not resolve against NVD; a real CVE must be "
-                            "confirmed via external_lookup before it is claimed"
-                        ),
-                    )
-                )
-        return findings
-
-    def _collect_technique_refs(self, spec: AttackSpec) -> list[tuple[str, str]]:
-        """Gather (field_path, technique_id) for every MITRE reference in the spec."""
-        out: list[tuple[str, str]] = []
-        if spec.chain is not None:
-            for step in spec.chain.chain_steps:
-                for tech in step.techniques.mitre:
-                    out.append((f"chain.chain_steps[{step.id}].techniques.mitre", tech))
-        if spec.external_references is not None:
-            for ref in spec.external_references.mitre_techniques:
-                out.append(
-                    (
-                        f"external_references.mitre_techniques[{ref.technique_id}]",
-                        ref.technique_id,
-                    )
-                )
-        return out
-
 
 __all__ = [
     "DEFAULT_EXTRACTOR_MAX_TOKENS",
-    "DEFAULT_HALLUCINATION_RETRY_ATTEMPTS",
     "DEFAULT_MAX_TOOL_ITERATIONS",
+    "DEFAULT_PATCH_RETRY_ATTEMPTS",
     "EXTRACTOR_AGENT_DIR",
-    "CheckFinding",
     "ExtractionResult",
     "Extractor",
 ]

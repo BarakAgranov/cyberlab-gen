@@ -56,6 +56,11 @@ from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.tracing_setup import stage_span
+from cyberlab_gen.validators.grounding_validator import (
+    GroundingFinding,
+    GroundingResult,
+    GroundingValidator,
+)
 from cyberlab_gen.validators.static_schema_validator import (
     PendingProposals,
     StaticSchemaFinding,
@@ -70,7 +75,6 @@ if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from cyberlab_gen.agents.extractor.extractor import Extractor
-    from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
     from cyberlab_gen.schemas.ingestion import IngestionResult
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
@@ -86,6 +90,14 @@ DEFAULT_STRUCTURAL_RETRY_ATTEMPTS = 3
 #: §1.7`` names a per-agent cap of 5 as the eventual default, but the Task-6
 #: brief pins 3 for the minimal Phase-1 coordinator.
 DEFAULT_REFINEMENT_CAP = 3
+
+#: Total Extractor re-runs the orchestrator-owned grounding stack may request on a
+#: grounding (search-before-claim / CVE-hallucination) failure (ADR 0051/0060). This is
+#: the relocation of the Extractor's former internal ``hallucination_retry_attempts`` budget
+#: (``architecture.md §1.5``: the orchestrator owns the budget now, not the agent). Grounding
+#: is a *retry* mechanism (``validation.md §6.10.1``), distinct from the static-schema and
+#: refinement budgets.
+DEFAULT_GROUNDING_RETRY_ATTEMPTS = 2
 
 #: Total Extractor runs across the whole pipeline (structural retries + refinements +
 #: the first run). ``architecture.md §6`` "Total iteration cap (default 20)" — the
@@ -108,9 +120,16 @@ GRAPH_RECURSION_LIMIT = 4 * GLOBAL_ITERATION_CAP
 
 
 class FeedbackKind(StrEnum):
-    """Why the Extractor is being re-run (the two distinct mechanisms, §1.7)."""
+    """Why the Extractor is being re-run (``§1.7``; ADR 0051/0060 added grounding).
+
+    ``STRUCTURAL_RETRY`` and ``GROUNDING_RETRY`` are both *retry*-class re-runs
+    (``validation.md §6.10.1``): a full re-extract with the findings folded into the
+    prompt, each bounded by its own orchestrator-owned budget. ``REFINEMENT`` is the
+    quality-driven targeted-patch path (jury ``revise``). The three never cross.
+    """
 
     STRUCTURAL_RETRY = "structural_retry"
+    GROUNDING_RETRY = "grounding_retry"
     REFINEMENT = "refinement"
 
 
@@ -135,18 +154,24 @@ class RefinementFeedback(InternalModel):
 
     kind: FeedbackKind
     static_findings: list[StaticSchemaFinding] = Field(default_factory=list[StaticSchemaFinding])
+    grounding_findings: list[GroundingFinding] = Field(default_factory=list[GroundingFinding])
     jury_feedback: list[JuryFieldFeedback] = Field(default_factory=list[JuryFieldFeedback])
 
     @model_validator(mode="after")
     def _payload_matches_kind(self) -> Self:
         if self.kind is FeedbackKind.STRUCTURAL_RETRY:
-            if self.jury_feedback:
-                raise ValueError("a structural_retry feedback must not carry jury_feedback")
+            if self.grounding_findings or self.jury_feedback:
+                raise ValueError("a structural_retry feedback must carry only static_findings")
             if not self.static_findings:
                 raise ValueError("a structural_retry feedback must carry static_findings")
+        elif self.kind is FeedbackKind.GROUNDING_RETRY:
+            if self.static_findings or self.jury_feedback:
+                raise ValueError("a grounding_retry feedback must carry only grounding_findings")
+            if not self.grounding_findings:
+                raise ValueError("a grounding_retry feedback must carry grounding_findings")
         else:  # REFINEMENT
-            if self.static_findings:
-                raise ValueError("a refinement feedback must not carry static_findings")
+            if self.static_findings or self.grounding_findings:
+                raise ValueError("a refinement feedback must carry only jury_feedback")
             if not self.jury_feedback:
                 raise ValueError("a refinement feedback must carry jury_feedback")
         return self
@@ -155,25 +180,36 @@ class RefinementFeedback(InternalModel):
         """The per-finding one-line renderings (also reused for the run report).
 
         For a structural retry each line is the ``StaticSchemaFinding``'s own
-        ``code@location: detail`` render; for a refinement each line is
-        ``field_path: problem`` with the jury's ``suggested_fix`` appended when present
-        (the part the old stringified boundary discarded).
+        ``code@location: detail`` render; for a grounding retry each line is the
+        ``GroundingFinding``'s render; for a refinement each line is ``field_path: problem``
+        with the jury's ``suggested_fix`` appended when present (the part the old
+        stringified boundary discarded).
         """
         if self.kind is FeedbackKind.STRUCTURAL_RETRY:
             return [finding.render() for finding in self.static_findings]
+        if self.kind is FeedbackKind.GROUNDING_RETRY:
+            return [finding.render() for finding in self.grounding_findings]
         return [_render_jury_feedback(item) for item in self.jury_feedback]
 
     def render(self) -> str:
         """Render the feedback as the prompt addendum the Extractor re-run sees."""
-        header = (
-            "STRUCTURAL VALIDATION FAILURE — the previous AttackSpec failed Validator "
-            "static schema validation. Fix every item before resubmitting:"
-            if self.kind is FeedbackKind.STRUCTURAL_RETRY
-            else (
+        if self.kind is FeedbackKind.STRUCTURAL_RETRY:
+            header = (
+                "STRUCTURAL VALIDATION FAILURE — the previous AttackSpec failed Validator "
+                "static schema validation. Fix every item before resubmitting:"
+            )
+        elif self.kind is FeedbackKind.GROUNDING_RETRY:
+            header = (
+                "GROUNDING / SEARCH-BEFORE-CLAIM FAILURE — the previous AttackSpec claimed "
+                "external_api values with no matching tool-call evidence in the trace, or an "
+                "unresolved CVE. Call external_lookup for any external_api value you keep, or set "
+                "the field to unknown_from_blog with a reason. Fix every item:"
+            )
+        else:  # REFINEMENT
+            header = (
                 "JURY REVISION REQUESTED — the previous AttackSpec was reviewed and needs "
                 "field-targeted fixes. Address every item:"
             )
-        )
         lines = [header, *(f"- {line}" for line in self.feedback_lines())]
         return "\n".join(lines)
 
@@ -217,14 +253,16 @@ class PipelineState(BaseModel):
     extraction: ExtractionResult | None = None
     spec: AttackSpec | None = None
     static_schema: StaticSchemaResult | None = None
+    grounding: GroundingResult | None = None
     verdict: JuryVerdict | None = None
     enrichment: EnrichmentResult | None = None
 
     # routing counters
     structural_attempts: int = 0
+    grounding_attempts: int = 0
     refinement_iterations: int = 0
-    # total Extractor runs across the whole pipeline (structural + refinement + first);
-    # bounded by the global iteration cap (``architecture.md §6``, L3).
+    # total Extractor runs across the whole pipeline (structural + grounding + refinement +
+    # first); bounded by the global iteration cap (``architecture.md §6``, L3).
     total_iterations: int = 0
 
     # accumulated feedback for the next re-run (cleared after the re-run consumes)
@@ -233,6 +271,9 @@ class PipelineState(BaseModel):
     # signature of the prior failed static-schema attempt's finding set, for the
     # no-progress early-bail (ADR 0057); reset to None whenever validation passes.
     last_static_finding_signature: str | None = None
+    # the same no-progress guard for the grounding-retry loop (ADR 0057/0060); reset to
+    # None whenever the grounding stack produces no retry-triggering findings.
+    last_grounding_finding_signature: str | None = None
 
     # the node-decided next destination, read by the (pure) conditional edges.
     # LangGraph discards mutations made inside routing functions, so every
@@ -313,7 +354,7 @@ class _JuryLike(Protocol):
         *,
         spec: AttackSpec,
         blog_content: str,
-        lookups: list[ExternalLookupRecord] | None = None,
+        grounding_findings: list[GroundingFinding] | None = None,
     ) -> JuryVerdict: ...
 
 
@@ -323,6 +364,7 @@ class _JuryLike(Protocol):
 class _Node(StrEnum):
     EXTRACT = "extract"
     VALIDATE = "validate_static_schema"
+    GROUNDING = "grounding"
     JURY = "jury"
     ENRICH = "enrich"
 
@@ -377,8 +419,10 @@ def build_pipeline(
     extractor: _ExtractorLike,
     validator: StaticSchemaValidator,
     jury: _JuryLike,
+    grounding_validator: GroundingValidator | None = None,
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
+    grounding_retry_attempts: int = DEFAULT_GROUNDING_RETRY_ATTEMPTS,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
     global_iteration_cap: int = GLOBAL_ITERATION_CAP,
     # ``BaseCheckpointSaver`` is generic over its version type; we hold any concrete
@@ -407,11 +451,17 @@ def build_pipeline(
     """
     if structural_retry_attempts < 1:
         raise ValueError("structural_retry_attempts must be >= 1")
+    if grounding_retry_attempts < 0:
+        raise ValueError("grounding_retry_attempts must be >= 0")
     if refinement_cap < 0:
         raise ValueError("refinement_cap must be >= 0")
     if global_iteration_cap < 1:
         raise ValueError("global_iteration_cap must be >= 1")
     enrich_cfg = enrichment_config
+    # The grounding stack is orchestrator-owned (ADR 0051/0060). A default is constructed
+    # when the caller does not inject one so existing call sites stay unchanged; for a spec
+    # with no external_api claims it produces no findings (a behaviour-neutral no-op).
+    grounding = grounding_validator if grounding_validator is not None else GroundingValidator()
 
     def _global_cap_reached(state: PipelineState) -> bool:
         """True when the run has used its whole end-to-end iteration budget (L3)."""
@@ -467,12 +517,13 @@ def build_pipeline(
             result = await extractor.extract(
                 blog_content=state.blog_content, source_summary=summary
             )
-            # Only a first/structural-retry extract spends the structural-retry budget. A
-            # jury-revise refinement re-run is bounded by its OWN counter
-            # (``refinement_iterations``, bumped in ``jury_node``), so it must NOT charge the
-            # structural counter here — refinement and structural retry have independent
-            # budgets (``architecture.md §1.7`` retry/refinement table; L2).
-            state.structural_attempts += 1
+            # Only a first run or a *structural*-retry extract spends the structural-retry
+            # budget. A grounding retry is bounded by its OWN counter (``grounding_attempts``,
+            # bumped in ``grounding_node``) and a jury-revise refinement by ``refinement_iterations``
+            # (bumped in ``jury_node``); neither may charge the structural counter — the three
+            # retry/refinement mechanisms have independent budgets (``architecture.md §1.7``; L2).
+            if pending is None or pending.kind is FeedbackKind.STRUCTURAL_RETRY:
+                state.structural_attempts += 1
         state.extraction = result
         state.spec = result.attack_spec
         # the feedback (if any) has now been consumed by this re-run
@@ -498,7 +549,9 @@ def build_pipeline(
             # Cleared: end this structural-failure streak so a *later* failure (e.g. after a
             # refinement patch) is judged fresh, not against this run's pre-pass findings.
             state.last_static_finding_signature = None
-            state.route = _Node.JURY.value
+            # Static schema passed → run the orchestrator-owned grounding stack next (the
+            # mechanical sibling layers, ADR 0051/0060), then the jury consumes its findings.
+            state.route = _Node.GROUNDING.value
             return state
         # No-progress early-bail (ADR 0057, mirrors the ADR-0032 call-surface bail): a
         # structural retry that reproduced the *identical* finding set is not converging.
@@ -544,18 +597,82 @@ def build_pipeline(
         state.route = END
         return state
 
+    def grounding_node(state: PipelineState) -> PipelineState:
+        """Run the orchestrator-owned grounding stack and decide the next destination.
+
+        The mechanical sibling layers (provenance-structure, search-before-claim, CVE,
+        MITRE pass-through) run here, once, producing one findings set (``validation.md
+        §6.10.2``, ADR 0051/0060). A *retry*-triggering finding (a hallucination —
+        search-before-claim / CVE-hallucination) re-runs the Extractor with the findings
+        folded into the prompt, bounded by the orchestrator-owned grounding-retry budget
+        (the relocation of the Extractor's old hidden loop). Informational-only findings
+        (provenance-structure) are carried to the jury, which *consumes* them — it does not
+        re-derive them (``agents.md §5.5``). This is framework routing, never the LLM
+        (``architecture.md §1.5``).
+        """
+        assert state.spec is not None
+        lookups = state.extraction.lookups if state.extraction is not None else []
+        state.grounding = grounding.validate(state.spec, lookups)
+        retry_findings = state.grounding.retry_findings()
+        if not retry_findings:
+            # Clean of hallucinations (any structure findings travel to the jury as grounding).
+            state.last_grounding_finding_signature = None
+            state.route = _Node.JURY.value
+            return state
+        # No-progress early-bail (ADR 0057, mirroring the static-schema bail): a grounding
+        # retry that reproduced the *identical* retry-finding set is not converging — halt now
+        # rather than spending the rest of the (~$3-4) retry budget re-extracting toward a
+        # finding that can never clear. This only ever halts *earlier* — same terminal status.
+        signature = _grounding_signature(retry_findings)
+        if signature == state.last_grounding_finding_signature:
+            state.status = PipelineStatus.HALTED_VALIDATION
+            state.halt_reason = (
+                "Grounding made no progress — the same search-before-claim/CVE findings "
+                "recurred on consecutive Extractor attempts: "
+                f"{'; '.join(f.render() for f in retry_findings)}"
+            )
+            state.route = END
+            logger.info("grounding retry made no progress (identical findings); halting early")
+            return state
+        state.last_grounding_finding_signature = signature
+        if state.grounding_attempts < grounding_retry_attempts:
+            # Global backstop: never start another Extractor run past the end-to-end cap (L3).
+            if _global_cap_reached(state):
+                return _halt_global_cap(state)
+            state.grounding_attempts += 1
+            state.pending_feedback = RefinementFeedback(
+                kind=FeedbackKind.GROUNDING_RETRY, grounding_findings=retry_findings
+            )
+            state.route = _Node.EXTRACT.value
+            logger.info(
+                "grounding failed; routing to Extractor RETRY (grounding attempt %d/%d)",
+                state.grounding_attempts,
+                grounding_retry_attempts,
+            )
+            return state
+        # grounding-retry budget exhausted — halt (the former Extractor ``ExtractionError``,
+        # now an orchestrator-owned clean halt; never escalate to refinement).
+        state.status = PipelineStatus.HALTED_VALIDATION
+        state.halt_reason = (
+            f"Grounding still failing after {grounding_retry_attempts} Extractor retry "
+            f"attempt(s): {'; '.join(f.render() for f in retry_findings)}"
+        )
+        state.route = END
+        return state
+
     async def jury_node(state: PipelineState) -> PipelineState:
         """Run the Extractor-Jury and decide the next destination.
 
         ``approve`` → enrich; ``revise`` → bounded refinement (re-run Extractor) or
         ship-with-``low_jury_confidence`` on cap exhaustion; ``reject`` → halt
         (``pipeline.md §3.2.3``). The verdict is the jury's judgment; this node (the
-        framework) maps it to control flow (``architecture.md §1.5``).
+        framework) maps it to control flow (``architecture.md §1.5``). The jury *consumes*
+        the orchestrator-owned grounding findings (``agents.md §5.5``, ADR 0051/0060).
         """
         assert state.spec is not None
-        lookups = state.extraction.lookups if state.extraction is not None else None
+        findings = state.grounding.findings if state.grounding is not None else None
         verdict = await jury.review(
-            spec=state.spec, blog_content=state.blog_content, lookups=lookups
+            spec=state.spec, blog_content=state.blog_content, grounding_findings=findings
         )
         state.verdict = verdict
         state.verdict_history = [*state.verdict_history, verdict.verdict]
@@ -612,6 +729,10 @@ def build_pipeline(
         assert state.route is not None  # validate_node always sets it
         return state.route
 
+    def route_after_grounding(state: PipelineState) -> str:
+        assert state.route is not None  # grounding_node always sets it
+        return state.route
+
     def route_after_jury(state: PipelineState) -> str:
         assert state.route is not None  # jury_node always sets it
         return state.route
@@ -623,6 +744,7 @@ def build_pipeline(
     # by default — an additive, traced-only touch of the ADR-0023-locked builder.
     graph.add_node(_Node.EXTRACT.value, _traced_async(_Node.EXTRACT.value, extract_node))
     graph.add_node(_Node.VALIDATE.value, _traced_sync(_Node.VALIDATE.value, validate_node))
+    graph.add_node(_Node.GROUNDING.value, _traced_sync(_Node.GROUNDING.value, grounding_node))
     graph.add_node(_Node.JURY.value, _traced_async(_Node.JURY.value, jury_node))
     graph.add_node(_Node.ENRICH.value, _traced_sync(_Node.ENRICH.value, enrich_node))
 
@@ -631,6 +753,15 @@ def build_pipeline(
     graph.add_conditional_edges(
         _Node.VALIDATE.value,
         route_after_validate,
+        {
+            _Node.GROUNDING.value: _Node.GROUNDING.value,
+            _Node.EXTRACT.value: _Node.EXTRACT.value,
+            END: END,
+        },
+    )
+    graph.add_conditional_edges(
+        _Node.GROUNDING.value,
+        route_after_grounding,
         {_Node.JURY.value: _Node.JURY.value, _Node.EXTRACT.value: _Node.EXTRACT.value, END: END},
     )
     graph.add_conditional_edges(
@@ -680,8 +811,10 @@ async def run_pipeline(
     extractor: Extractor,
     validator: StaticSchemaValidator,
     jury: ExtractorJury,
+    grounding_validator: GroundingValidator | None = None,
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
+    grounding_retry_attempts: int = DEFAULT_GROUNDING_RETRY_ATTEMPTS,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
 ) -> PipelineOutcome:
     """Run the full Phase-1 pipeline and return a ``PipelineOutcome``.
@@ -706,8 +839,10 @@ async def run_pipeline(
         extractor=extractor,
         validator=validator,
         jury=jury,
+        grounding_validator=grounding_validator,
         enrichment_config=enrichment_config,
         structural_retry_attempts=structural_retry_attempts,
+        grounding_retry_attempts=grounding_retry_attempts,
         refinement_cap=refinement_cap,
     )
     source_summary = _ingestion_summary(ingestion)
@@ -756,6 +891,16 @@ def _finding_signature(result: StaticSchemaResult) -> str:
     return "\n".join(sorted(result.rendered_findings()))
 
 
+def _grounding_signature(findings: list[GroundingFinding]) -> str:
+    """An order-independent signature of a grounding-retry attempt's finding set (ADR 0057/0060).
+
+    Two consecutive grounding attempts with the same signature are not converging. Sorting
+    makes it insensitive to finding order so only a genuine change in *which* findings fired
+    counts as progress (mirrors :func:`_finding_signature`).
+    """
+    return "\n".join(sorted(f.render() for f in findings))
+
+
 def _pending_from_extraction(extraction: ExtractionResult | None) -> PendingProposals:
     """Build the static-schema provisional-resolution set from this run's proposals (ADR 0044).
 
@@ -798,6 +943,7 @@ class JuryRejectionError(ValidationError):
 
 
 __all__ = [
+    "DEFAULT_GROUNDING_RETRY_ATTEMPTS",
     "DEFAULT_REFINEMENT_CAP",
     "DEFAULT_STRUCTURAL_RETRY_ATTEMPTS",
     "GLOBAL_ITERATION_CAP",

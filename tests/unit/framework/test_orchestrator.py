@@ -39,7 +39,14 @@ from cyberlab_gen.framework.orchestrator import (
     reject_interactive_when_headless,
     run_pipeline,
 )
-from cyberlab_gen.schemas.attack_spec import AttackSpec
+from cyberlab_gen.schemas.attack_spec import (
+    AttackSpec,
+    CveReference,
+    ExternalRefsBlock,
+)
+from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource, Severity
+from cyberlab_gen.schemas.provenance import CitationBlock, Provenance, ProvenanceString
+from cyberlab_gen.validators.grounding_validator import GroundingCode
 from cyberlab_gen.validators.static_schema_validator import (
     StaticSchemaCode,
     StaticSchemaFinding,
@@ -648,3 +655,196 @@ async def test_progressing_structural_retry_is_not_bailed() -> None:
     assert state.status is PipelineStatus.HALTED_VALIDATION  # exhaustion, not no-progress
     assert "no progress" not in (state.halt_reason or "").lower()
     assert len(ext.calls) == 3  # full budget used (findings kept changing)
+
+
+# --- A3/B1: one orchestrator-owned grounding stack (ADR 0051/0060) ----------
+#
+# The mechanical grounding checks (search-before-claim / MITRE / CVE) used to run inside
+# the Extractor on its own hidden hallucination_retry budget, and the jury independently
+# re-ran the search-before-claim trace check. They are now ONE orchestrator-owned stack:
+# the orchestrator routes its findings (retry on a hallucination) and the jury CONSUMES
+# them without re-deriving. These tests pin that ownership move.
+
+
+def _bcite() -> CitationBlock:
+    return CitationBlock(kind=CitationKind.BLOG_PASSAGE, reference="§2")
+
+
+def _ungrounded_cve_spec() -> AttackSpec:
+    """A valid spec whose CVE severity claims ``external_api`` with NO matching trace.
+
+    The grounding stack flags this as search-before-claim (a hallucination) — a
+    retry-triggering finding the orchestrator must route, not the Extractor.
+    """
+    spec = _spec(facets=["target:aws"])
+    spec.external_references = ExternalRefsBlock(
+        cves=[
+            CveReference(
+                cve_id="CVE-2024-9999",  # type: ignore[arg-type]
+                description=ProvenanceString(
+                    value="v", source=ProvenanceSource.BLOG_EXPLICIT, citations=[_bcite()]
+                ),
+                severity=Provenance[Severity](
+                    value=Severity.HIGH,
+                    source=ProvenanceSource.EXTERNAL_API,
+                    citations=[
+                        _bcite(),
+                        CitationBlock(
+                            kind=CitationKind.EXTERNAL_API_RESPONSE, reference="nvd:CVE-2024-9999"
+                        ),
+                    ],
+                ),
+            )
+        ]
+    )
+    return spec
+
+
+def _structure_finding_spec() -> AttackSpec:
+    """A valid spec with an external_api field missing its api-response citation.
+
+    Produces an informational PROVENANCE_STRUCTURE finding (not a CVE, so no
+    search-before-claim) — it must NOT trigger a retry and must reach the jury.
+    """
+    spec = _spec(facets=["target:aws"])
+    spec.thesis.summary = Provenance[str](  # type: ignore[union-attr]
+        value="an inferred-but-api-sourced summary",
+        source=ProvenanceSource.EXTERNAL_API,
+        citations=[_bcite()],  # blog citation only — missing the external_api_response citation
+    )
+    return spec
+
+
+async def test_grounding_failure_routes_orchestrator_owned_retry_then_recovers() -> None:
+    # extract#1 -> ungrounded external_api CVE (search-before-claim) -> the ORCHESTRATOR
+    # routes a retry (the Extractor did NOT self-validate) -> extract#2 -> clean -> jury -> ship.
+    ext = _FakeExtractor([_ungrounded_cve_spec(), _spec(facets=["target:aws"])])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert len(ext.calls) == 2  # the orchestrator re-ran the Extractor on the grounding finding
+    assert state.grounding_attempts == 1
+    # the grounding retry carried GROUNDING feedback (a full re-extract, not a refine patch)
+    assert not ext.refine_calls
+    assert "GROUNDING / SEARCH-BEFORE-CLAIM FAILURE" in ext.calls[1]
+    assert jury.calls == 1  # the jury only saw the clean, recovered spec
+
+
+async def test_grounding_retry_does_not_consume_structural_budget() -> None:
+    # The grounding retry must be bounded by its OWN counter, never the structural one (L2).
+    ext = _FakeExtractor([_ungrounded_cve_spec(), _spec(facets=["target:aws"])])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert state.grounding_attempts == 1
+    assert state.structural_attempts == 1  # the grounding retry did NOT bump this
+
+
+async def test_persistent_grounding_failure_halts_orchestrator_owned() -> None:
+    # The Extractor keeps emitting the same ungrounded spec -> the ORCHESTRATOR halts the run
+    # (HALTED_VALIDATION), and the jury is NEVER consulted. Proves the orchestrator owns the
+    # budget + the halt (the old behaviour raised ExtractionError hidden inside extract()).
+    ext = _FakeExtractor([_ungrounded_cve_spec()])  # same ungrounded spec every attempt
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])  # must never be consulted
+    run = build_pipeline(
+        extractor=ext, validator=_validator(), jury=jury, grounding_retry_attempts=3
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.HALTED_VALIDATION
+    assert "grounding" in (state.halt_reason or "").lower()
+    assert jury.calls == 0
+
+
+async def test_jury_consumes_grounding_findings_without_rederiving() -> None:
+    # An informational provenance-structure finding (no retry) must reach the jury as the
+    # orchestrator-computed findings set — the jury consumes it, it does not re-derive it.
+    ext = _FakeExtractor([_structure_finding_spec()])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert len(ext.calls) == 1  # informational finding did NOT trigger a retry
+    assert jury.calls == 1
+    # the jury received the orchestrator's grounding findings (not None) at review time
+    seen = jury.reviewed_findings[0]
+    assert seen is not None
+    assert any(f.code is GroundingCode.PROVENANCE_STRUCTURE for f in seen)
+
+
+async def test_uncatalogued_mitre_ships_no_grounding_retry() -> None:
+    # POST-0058 GUARD: a well-formed-but-uncatalogued MITRE id (T1195) must produce NO grounding
+    # finding and ship — proving no seed-membership hard-gate was reintroduced in the relocation.
+    spec = _spec(facets=["target:aws"])
+    spec.chain.chain_steps[0].techniques.mitre = ["T1195"]  # type: ignore[union-attr,list-item]
+    ext = _FakeExtractor([spec])
+    jury = _FakeJury([_verdict(Verdict.APPROVE)])
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert len(ext.calls) == 1  # no retry
+    assert state.grounding_attempts == 0
+    assert state.grounding is not None
+    assert state.grounding.findings == []
+
+
+def test_grounding_retry_feedback_round_trips_and_renders() -> None:
+    from cyberlab_gen.validators.grounding_validator import GroundingFinding
+
+    fb = RefinementFeedback(
+        kind=FeedbackKind.GROUNDING_RETRY,
+        grounding_findings=[
+            GroundingFinding(
+                code=GroundingCode.SEARCH_BEFORE_CLAIM,
+                location="external_references.cves[CVE-2024-9999].severity",
+                detail="no external_lookup call recorded",
+            )
+        ],
+    )
+    restored = RefinementFeedback.model_validate(fb.model_dump())
+    assert restored == fb
+    rendered = fb.render()
+    assert "GROUNDING / SEARCH-BEFORE-CLAIM FAILURE" in rendered
+    assert "search_before_claim@external_references.cves[CVE-2024-9999].severity" in rendered
+
+
+def test_grounding_retry_feedback_rejects_wrong_payload() -> None:
+    with pytest.raises(PydanticValidationError):
+        RefinementFeedback(
+            kind=FeedbackKind.GROUNDING_RETRY,
+            static_findings=[
+                StaticSchemaFinding(
+                    code=StaticSchemaCode.UNKNOWN_FACET, location="facets[0]", detail="x"
+                )
+            ],
+        )
+    with pytest.raises(PydanticValidationError):
+        RefinementFeedback(kind=FeedbackKind.GROUNDING_RETRY)  # empty matching payload
+
+
+async def test_refine_producing_ungrounded_spec_routes_grounding_retry() -> None:
+    # R2 (whole-spec re-check, ADR 0051/0060): the Extractor's refine() no longer self-checks
+    # grounding; a jury-revise PATCH that introduces an ungrounded external_api field must be
+    # caught by the ORCHESTRATOR's grounding stack on the patched spec, which then routes a
+    # grounding retry (a full re-extract) that recovers. Proves R2 coverage survives the
+    # relocation without a hidden Extractor loop.
+    ext = _FakeExtractor([_spec(facets=["target:aws"])], refine_specs=[_ungrounded_cve_spec()])
+    jury = _FakeJury(
+        [
+            _verdict(Verdict.REVISE, feedback=[JuryFieldFeedback(field_path="x", problem="p")]),
+            _verdict(Verdict.APPROVE),
+        ]
+    )
+    run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert len(ext.refine_calls) == 1  # the jury-revise patch ran
+    assert state.grounding_attempts == 1  # the patched spec's ungrounded field was caught
+    assert len(ext.calls) == 2  # the grounding retry was a full re-extract, not another patch

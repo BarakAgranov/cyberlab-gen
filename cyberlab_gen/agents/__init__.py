@@ -11,7 +11,7 @@ from cyberlab_gen.agents.call_surface import (
     AgentRunner,
 )
 from cyberlab_gen.agents.extractor import (
-    DEFAULT_HALLUCINATION_RETRY_ATTEMPTS,
+    DEFAULT_PATCH_RETRY_ATTEMPTS,
     ExtractionResult,
     Extractor,
     ExtractorToolExecutor,
@@ -23,9 +23,7 @@ from cyberlab_gen.agents.extractor_jury import (
     JuryFieldFeedback,
     JuryScores,
     JuryVerdict,
-    ProvenanceFinding,
     Verdict,
-    verify_provenance,
 )
 from cyberlab_gen.agents.prompts import (
     BASE_PROMPT_FILENAME,
@@ -39,7 +37,7 @@ from cyberlab_gen.agents.proposals import (
 
 __all__ = [
     "BASE_PROMPT_FILENAME",
-    "DEFAULT_HALLUCINATION_RETRY_ATTEMPTS",
+    "DEFAULT_PATCH_RETRY_ATTEMPTS",
     "DEFAULT_RUBRIC_FLOOR",
     "DEFAULT_STRUCTURAL_RETRY_ATTEMPTS",
     "OVERLAY_DIRNAME",
@@ -53,9 +51,7 @@ __all__ = [
     "JuryVerdict",
     "ProposedFacet",
     "ProposedValueType",
-    "ProvenanceFinding",
     "Verdict",
     "extractor_tool_definitions",
     "load_prompt",
-    "verify_provenance",
 ]

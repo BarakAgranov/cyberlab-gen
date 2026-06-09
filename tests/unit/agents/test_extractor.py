@@ -1,18 +1,17 @@
-"""Tests for the Extractor stage (``agents.md §5.4``, ``pipeline.md §3.2.2``, ADR 0021).
+"""Tests for the Extractor stage (``agents.md §5.4``, ``pipeline.md §3.2.2``, ADR 0021/0060).
 
-Covers the Task 5 exit criteria for the Extractor:
-- produces a schema-valid AttackSpec with provenance on every content field;
-- an external_api field with no tool-call trace is rejected (search-before-claim);
-- a well-formed-but-uncatalogued MITRE technique id passes through unverified, never
-  rejected (ADR 0055/0058 — the 8-entry seed is not an authority); a malformed id is
-  rejected at construction by the MitreTechniqueId type, not by _check_mitre;
-- out-of-scope content sets extraction_outcome.
+Covers the Task 5 exit criteria for the Extractor, as amended by ADR 0051/0060 (the
+Extractor stops self-validating; the orchestrator owns the grounding stack):
+- produces a schema-valid AttackSpec with provenance on every content field, in ONE pass;
+- it does NOT self-validate grounding — an external_api field with no tool-call trace is
+  returned as-is (the orchestrator-owned grounding stack flags it, tested in
+  ``tests/unit/validators/test_grounding_validator.py`` and ``test_orchestrator.py``);
+- a malformed MITRE id is rejected at construction by the MitreTechniqueId type;
+- out-of-scope content sets extraction_outcome;
+- ``refine`` keeps only a bounded patch-apply re-prompt loop (R1).
 
 The MockProvider does not drive the tool-use loop (it returns the registered
-response), so the executor's lookup trace is empty under the mock. That is
-exactly what exercises the search-before-claim rejection: an external_api field
-with no matching lookup. The recovery case uses a message_matcher keyed on the
-framework's re-prompt text to return a clean spec on the second attempt.
+response), so the executor's lookup trace is empty under the mock.
 """
 
 from __future__ import annotations
@@ -290,69 +289,49 @@ async def test_out_of_scope_sets_extraction_outcome() -> None:
     assert result.attack_spec.extraction_outcome_reason is not None
 
 
-async def test_external_api_field_without_trace_is_rejected() -> None:
-    # external_api severity claim + empty lookup trace (mock doesn't drive tools)
-    # => search-before-claim rejection on every attempt => ExtractionError.
+async def test_extract_is_single_pass_and_does_not_self_validate_grounding() -> None:
+    # ADR 0051/0060: the Extractor no longer runs its own search-before-claim loop. An
+    # external_api severity claim with an empty lookup trace is returned AS-IS in one pass;
+    # flagging it is the orchestrator-owned grounding stack's job, not this stage's.
     provider = MockProvider()
     _register(provider, _spec(external=_external_api_cve()))
-    extractor = _extractor(provider, hallucination_retry_attempts=1)
-    with pytest.raises(ExtractionError, match="search-before-claim"):
-        await extractor.extract(blog_content="blog", source_summary="url=...")
+    result = await _extractor(provider).extract(blog_content="blog", source_summary="url=...")
+    assert result.reprompts == 0  # one pass, no self-validation re-prompt
+    assert result.attack_spec.external_references is not None
+    assert result.attack_spec.external_references.cves[0].cve_id == "CVE-2024-0001"
 
 
 async def test_uncatalogued_mitre_id_passes_unverified() -> None:
     # ADR 0055/0058: a real, current ATT&CK id absent from the bundled seed is well-formed
-    # but unverifiable here — it must pass THROUGH unverified, never be rejected/re-prompted
-    # (the seed is not an authority; the LATER MITRE adapter verifies). No re-prompt, no drop.
+    # but unverifiable here — it must pass THROUGH unverified, never be rejected. The
+    # Extractor returns it in one pass; the grounding stack also never flags it.
     provider = MockProvider()
     _register(provider, _spec(tech=_UNCATALOGUED_TECH))
-    result = await _extractor(provider, hallucination_retry_attempts=2).extract(
-        blog_content="blog", source_summary="url=..."
-    )
-    assert result.reprompts == 0  # no MITRE re-prompt was needed
+    result = await _extractor(provider).extract(blog_content="blog", source_summary="url=...")
+    assert result.reprompts == 0
     assert result.attack_spec.chain.chain_steps[0].techniques.mitre == [_UNCATALOGUED_TECH]  # type: ignore[union-attr]
 
 
-async def test_uncatalogued_mitre_id_does_not_hard_fail_even_with_zero_budget() -> None:
-    # P2: a well-formed-but-unverifiable id is never a hard finding, even with no retry
-    # budget left. _check_mitre no longer produces mitre_hallucination for any well-formed id.
+async def test_unverifiable_mitre_id_passes_unverified() -> None:
+    # P2: a well-formed-but-unverifiable id (T9999) is never a hard finding — the Extractor
+    # returns it; the grounding stack's MITRE layer is a no-op pass-through (ADR 0058).
     provider = MockProvider()
     _register(provider, _spec(tech=_UNVERIFIABLE_TECH))
-    result = await _extractor(provider, hallucination_retry_attempts=0).extract(
-        blog_content="blog", source_summary="url=..."
-    )
+    result = await _extractor(provider).extract(blog_content="blog", source_summary="url=...")
     assert result.attack_spec.chain.chain_steps[0].techniques.mitre == [_UNVERIFIABLE_TECH]  # type: ignore[union-attr]
 
 
 def test_malformed_mitre_id_rejected_at_construction() -> None:
     # Well-formedness is owned by the MitreTechniqueId type (primitives.py) and enforced at
-    # AttackSpec construction — NOT re-checked in _check_mitre (ADR 0058). A malformed id
-    # never reaches the framework check; it fails here.
+    # AttackSpec construction. A malformed id never reaches any framework check; it fails here.
     with pytest.raises(PydanticValidationError):
         ChainStepTechniques(mitre=["T12"])  # type: ignore[list-item]
 
 
-def test_negative_retry_budget_rejected() -> None:
+def test_negative_max_output_tokens_rejected() -> None:
     provider = MockProvider()
-    with pytest.raises(ValueError, match="hallucination_retry_attempts"):
-        _extractor(provider, hallucination_retry_attempts=-1)
-
-
-async def test_blog_explicit_cve_with_nvd_client_unverified_is_rejected() -> None:
-    # A CVE whose description is blog_explicit (a grounded claim) but which NVD
-    # has no record of => cve_hallucination when an NVD client is wired.
-    class _NvdMiss:
-        def lookup_cve(self, cve_id: str) -> None:
-            return None
-
-    external = ExternalRefsBlock(
-        cves=[CveReference(cve_id="CVE-2024-0002", description=_pstr("claimed real CVE"))]
-    )
-    provider = MockProvider()
-    _register(provider, _spec(external=external))
-    extractor = _extractor(provider, nvd_client=_NvdMiss(), hallucination_retry_attempts=0)
-    with pytest.raises(ExtractionError, match="cve_hallucination"):
-        await extractor.extract(blog_content="blog", source_summary="url=...")
+    with pytest.raises(ValueError, match="max_output_tokens"):
+        _extractor(provider, max_output_tokens=0)
 
 
 # --- refinement: targeted patch (ADR 0048 A1, ADR 0054) --------------------
@@ -425,25 +404,25 @@ async def test_refine_reprompts_on_an_unapplyable_patch_then_succeeds() -> None:
 
 async def test_refine_exhausts_budget_on_a_persistently_unapplyable_patch() -> None:
     # R1 (inner bound): a patch that can never apply must NOT spin — refine()'s own
-    # re-prompt loop is bounded and raises ExtractionError on exhaustion.
+    # patch-apply re-prompt loop is bounded (DEFAULT_PATCH_RETRY_ATTEMPTS) and raises
+    # ExtractionError on exhaustion.
     provider = MockProvider()
     _register_patch(
         provider,
         RefinementPatch(patches=[FieldPatch(field_path="thesis.no_such_field", new_value="x")]),
     )
-    extractor = _extractor(provider, hallucination_retry_attempts=1)  # 2 attempts total
     with pytest.raises(ExtractionError):
-        await extractor.refine(
+        await _extractor(provider).refine(
             prior_spec=_spec(), feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
         )
 
 
-async def test_refine_runs_mechanical_checks_whole_spec_and_catches_ungrounded_external_api() -> (
-    None
-):
-    # R2: the surviving mechanical checks (search-before-claim / CVE) run over the WHOLE
-    # patched spec, so a patch that introduces an ungrounded external_api field is caught.
-    # (MITRE is no longer a catching check after ADR 0058; search-before-claim still is.)
+async def test_refine_returns_patched_spec_without_self_validating_grounding() -> None:
+    # ADR 0051/0060: refine no longer runs the grounding re-check (R2). A patch that
+    # introduces an ungrounded external_api field is APPLIED and returned in one pass —
+    # the orchestrator's grounding stack re-checks the patched spec on the graph
+    # (whole-spec R2 coverage preserved without a hidden Extractor loop; see
+    # test_orchestrator.py::test_refine_producing_ungrounded_spec_routes_grounding_retry).
     provider = MockProvider()
     _register_patch(
         provider,
@@ -456,8 +435,8 @@ async def test_refine_runs_mechanical_checks_whole_spec_and_catches_ungrounded_e
             ]
         ),
     )
-    extractor = _extractor(provider, hallucination_retry_attempts=0)  # 1 attempt
-    with pytest.raises(ExtractionError, match="search_before_claim"):
-        await extractor.refine(
-            prior_spec=_spec(), feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
-        )
+    result = await _extractor(provider).refine(
+        prior_spec=_spec(), feedback=_FEEDBACK, blog_content="blog", source_summary="url=..."
+    )
+    assert result.reprompts == 0
+    assert result.attack_spec.external_references is not None  # the patch applied, no raise

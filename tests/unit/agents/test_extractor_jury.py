@@ -1,11 +1,12 @@
 """Tests for the Extractor-Jury (``agents.md §5.5``, ``pipeline.md §3.2.3``, ADR 0021).
 
-Covers the Task 5 exit criteria for the Jury:
+Covers the Task 5 exit criteria for the Jury (as amended by ADR 0051/0060):
 - approve / revise / reject each fire on constructed AttackSpecs (the jury LLM
   returns each verdict via the mock; the framework reads it);
 - the JuryVerdict validator enforces verdict<->feedback consistency;
-- provenance-mismatch detection (`verify_provenance`) works per source kind,
-  including the external_api trace cross-check the model cannot see.
+- the jury CONSUMES the orchestrator-owned grounding findings set and does not
+  re-derive it (the mechanical provenance/trace checks now live in the
+  GroundingValidator — see tests/unit/validators/test_grounding_validator.py).
 """
 
 from __future__ import annotations
@@ -15,14 +16,12 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
 from cyberlab_gen.agents.extractor_jury import (
     ExtractorJury,
     JuryFieldFeedback,
     JuryScores,
     JuryVerdict,
     Verdict,
-    verify_provenance,
 )
 from cyberlab_gen.providers import (
     AgentLabel,
@@ -37,8 +36,6 @@ from cyberlab_gen.schemas.attack_spec import (
     ChainBlock,
     ChainStep,
     ChainStepTechniques,
-    CveReference,
-    ExternalRefsBlock,
     ExtractionMetadataBlock,
     PerStepReproducibility,
     PublisherBlock,
@@ -47,16 +44,13 @@ from cyberlab_gen.schemas.attack_spec import (
 )
 from cyberlab_gen.schemas.enums import (
     CitationKind,
-    ConfidenceSource,
     ExtractionOutcome,
     ProvenanceSource,
     ProvisioningMechanism,
     ReproducibilityTier,
-    Severity,
 )
 from cyberlab_gen.schemas.provenance import (
     CitationBlock,
-    Provenance,
     ProvenanceString,
 )
 
@@ -252,89 +246,27 @@ async def test_jury_reject_fires() -> None:
     assert out.verdict is Verdict.REJECT
 
 
-# --- provenance verification per source kind -------------------------------
+async def test_jury_consumes_supplied_grounding_findings() -> None:
+    # ADR 0051/0060: the jury CONSUMES the orchestrator's grounding findings (it no longer
+    # re-derives them). A supplied finding reaches the prompt; the jury still returns its
+    # verdict. (The mechanical provenance/trace checks now live in the GroundingValidator —
+    # see tests/unit/validators/test_grounding_validator.py.)
+    from cyberlab_gen.validators.grounding_validator import GroundingCode, GroundingFinding
 
-
-def test_verify_provenance_clean_blog_explicit_spec() -> None:
-    findings = verify_provenance(_spec())
-    assert findings == []
-
-
-def test_verify_external_api_missing_api_citation_flagged() -> None:
-    spec = _spec()
-    spec.external_references = ExternalRefsBlock(
-        cves=[
-            CveReference(
-                cve_id="CVE-2024-0001",
-                description=_pstr("v"),
-                severity=Provenance[Severity](
-                    value=Severity.HIGH,
-                    source=ProvenanceSource.EXTERNAL_API,
-                    # only a blog citation, no external_api_response citation
-                    citations=[CitationBlock(kind=CitationKind.BLOG_PASSAGE, reference="§2")],
-                ),
-            )
-        ]
+    provider = MockProvider()
+    provider.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.EXTRACTOR_JURY,
+        response=JuryVerdict(
+            verdict=Verdict.APPROVE, scores=_scores(0.9), retry_recommended=False, rationale="ok"
+        ),
     )
-    findings = verify_provenance(spec)
-    assert any("external_api_response citation" in f.detail for f in findings)
-
-
-def test_verify_external_api_no_trace_flagged() -> None:
-    spec = _spec()
-    spec.external_references = ExternalRefsBlock(
-        cves=[
-            CveReference(
-                cve_id="CVE-2024-0001",
-                description=_pstr("v"),
-                severity=Provenance[Severity](
-                    value=Severity.HIGH,
-                    source=ProvenanceSource.EXTERNAL_API,
-                    citations=[
-                        CitationBlock(kind=CitationKind.BLOG_PASSAGE, reference="§2"),
-                        CitationBlock(
-                            kind=CitationKind.EXTERNAL_API_RESPONSE, reference="nvd:CVE-2024-0001"
-                        ),
-                    ],
-                ),
-            )
-        ]
+    finding = GroundingFinding(
+        code=GroundingCode.PROVENANCE_STRUCTURE,
+        location="thesis.summary",
+        detail="external_api field lacks an external_api_response citation",
     )
-    # No lookup trace for this CVE => flagged.
-    findings_no_trace = verify_provenance(spec, lookups=[])
-    assert any("no matching external_lookup" in f.detail for f in findings_no_trace)
-
-    # With a matching lookup in the trace => not flagged for trace.
-    trace = [
-        ExternalLookupRecord(
-            source_id="nvd", params={"cve_id": "CVE-2024-0001"}, found=True, detail="ok"
-        )
-    ]
-    findings_with_trace = verify_provenance(spec, lookups=trace)
-    assert not any("no matching external_lookup" in f.detail for f in findings_with_trace)
-
-
-def test_verify_llm_inference_without_confidence_flagged() -> None:
-    spec = _spec()
-    # An llm_inference field requires confidence (the Provenance validator enforces
-    # confidence at construction, so build a valid one then assert the verifier
-    # accepts it, and a missing-citation variant is caught).
-    spec.thesis.summary = Provenance[str](  # type: ignore[union-attr]
-        value="inferred summary",
-        source=ProvenanceSource.LLM_INFERENCE,
-        confidence=0.7,
-        confidence_source=ConfidenceSource.MODEL_SELF_REPORTED,
-        citations=[_cite()],
+    out = await _jury(provider).review(
+        spec=_spec(), blog_content="the blog", grounding_findings=[finding]
     )
-    assert verify_provenance(spec) == []
-
-
-def test_verify_unknown_from_blog_requires_reason() -> None:
-    spec = _spec()
-    spec.thesis.duration_as_described = Provenance[str](  # type: ignore[union-attr]
-        value="",
-        source=ProvenanceSource.UNKNOWN_FROM_BLOG,
-        reason="requires external research",
-    )
-    # Well-formed unknown_from_blog => clean.
-    assert verify_provenance(spec) == []
+    assert out.verdict is Verdict.APPROVE

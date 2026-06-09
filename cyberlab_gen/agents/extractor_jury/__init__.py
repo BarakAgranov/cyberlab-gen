@@ -12,10 +12,6 @@ from cyberlab_gen.agents.extractor_jury.schema import (
     JuryVerdict,
     Verdict,
 )
-from cyberlab_gen.agents.extractor_jury.verification import (
-    ProvenanceFinding,
-    verify_provenance,
-)
 
 __all__ = [
     "DEFAULT_RUBRIC_FLOOR",
@@ -23,7 +19,5 @@ __all__ = [
     "JuryFieldFeedback",
     "JuryScores",
     "JuryVerdict",
-    "ProvenanceFinding",
     "Verdict",
-    "verify_provenance",
 ]
