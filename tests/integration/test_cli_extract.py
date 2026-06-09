@@ -663,6 +663,33 @@ def test_real_runner_raises_on_inconsistent_approve(monkeypatch: pytest.MonkeyPa
         runner_obj.run("u", ledger=ledger)
 
 
+def test_load_spec_refuses_unsupported_version() -> None:
+    """``architecture.md §0.6``: a spec on disk whose ``spec_version`` differs from
+    ``CURRENT_SPEC_VERSION`` is refused at load, never migrated (ADR 0069).
+    """
+    from cyberlab_gen.cli.extract import (
+        _load_spec_from_yaml,  # pyright: ignore[reportPrivateUsage]
+        spec_to_yaml,
+    )
+    from cyberlab_gen.errors import SpecVersionError
+
+    text = spec_to_yaml(_in_scope_spec().model_copy(update={"spec_version": 99}))
+    with pytest.raises(SpecVersionError):
+        _load_spec_from_yaml(text)
+
+
+def test_load_spec_accepts_current_version() -> None:
+    """A current-version spec round-trips through the editor revalidation path unharmed."""
+    from cyberlab_gen.cli.extract import (
+        _load_spec_from_yaml,  # pyright: ignore[reportPrivateUsage]
+        spec_to_yaml,
+    )
+
+    spec = _in_scope_spec()  # produced at CURRENT_SPEC_VERSION
+    loaded = _load_spec_from_yaml(spec_to_yaml(spec))
+    assert loaded.spec_version == spec.spec_version
+
+
 def test_auto_over_cap_writes_up_to_cap_and_reports_remainder(tmp_path: Path) -> None:
     """Over the per-run cap, ``--auto`` SHIPS, promotes up to the cap, and reports the rest.
 

@@ -428,6 +428,12 @@ class ExtrasEntry(ArtifactModel):
 
 # --- The envelope ----------------------------------------------------------
 
+#: The schema version the framework writes for every AttackSpec it produces. The framework
+#: *stamps* this value (the LLM never authors it — ``architecture.md §1.5``); on load, a spec whose
+#: ``spec_version`` differs is **refused, never migrated** (``architecture.md §0.6``; ``schema.md``).
+#: Bump this only with a coordinated load-gate update; old-schema artifacts stop loading by design.
+CURRENT_SPEC_VERSION = 1
+
 
 class AttackSpec(ArtifactModel):
     """The structured artifact produced by the Extractor.
@@ -439,6 +445,10 @@ class AttackSpec(ArtifactModel):
     ``schema.md`` §4.8.
     """
 
+    # Framework-stamped, not LLM-authored: the model emits a value (``ge=1``) but the framework
+    # overrides it to ``CURRENT_SPEC_VERSION`` at the ship/persist seam (ADR 0069), the same
+    # discipline as the model-provenance family (ADR 0065). The floor stays so a hand-built spec
+    # is never version 0; the equality gate lives in the load path (``architecture.md §0.6``).
     spec_version: int = Field(ge=1)
     spec_kind: Literal[SpecKind.ATTACK_SPEC] = SpecKind.ATTACK_SPEC
 
@@ -504,6 +514,7 @@ class AttackSpec(ArtifactModel):
 
 
 __all__ = [
+    "CURRENT_SPEC_VERSION",
     "AdvisoryReference",
     "AlternativePath",
     "AttackSpec",

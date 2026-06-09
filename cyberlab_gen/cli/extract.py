@@ -48,12 +48,16 @@ from cyberlab_gen.framework.proposal_acceptance import (
     accept_value_type,
     auto_accept_to_overlay,
 )
-from cyberlab_gen.schemas.attack_spec import AttackSpec, MaterialDiscrepancy
+from cyberlab_gen.schemas.attack_spec import (
+    CURRENT_SPEC_VERSION,
+    AttackSpec,
+    MaterialDiscrepancy,
+)
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.state.run_persistence import (
     billed_model,
     persist_pipeline_artifacts,
-    stamp_billed_model,
+    stamp_framework_provenance,
 )
 from cyberlab_gen.state.run_store import (
     SPEC_FILENAME,
@@ -289,10 +293,11 @@ class PipelineExtractRunner:
         result = _state_to_run_result(
             final_state, estimated_next_iteration_usd=ledger.total_usd - spend_before
         )
-        # Framework-stamp the billed model onto the spec (ADR 0065): the LLM never authors
-        # model-provenance, so the shipped + mirrored spec records the billed model, not the
-        # model's self-report. The on-abort partial spec is stamped in ``_persist_from_state``.
-        return result.model_copy(update={"spec": stamp_billed_model(result.spec, ledger)})
+        # Framework-stamp the LLM-must-not-author provenance fields onto the spec before it ships:
+        # the billed model (ADR 0065) and the schema version (ADR 0069). The shared seam stamps
+        # both, so the cwd-written + mirrored spec carries framework facts, never the model's
+        # self-report. The on-abort partial spec is stamped via the shared persistence service.
+        return result.model_copy(update={"spec": stamp_framework_provenance(result.spec, ledger)})
 
 
 def _state_to_run_result(
@@ -415,11 +420,18 @@ def write_attack_spec(spec: AttackSpec, *, directory: Path) -> Path:
 def _load_spec_from_yaml(text: str) -> AttackSpec:
     """Parse + structurally revalidate edited YAML into an ``AttackSpec``.
 
-    Raises ``pydantic.ValidationError`` (or a YAML parse error) on a structurally
-    invalid edit; the caller turns that into editor-reopening comments.
+    Raises ``pydantic.ValidationError`` (or a YAML parse error) on a structurally invalid edit; the
+    caller turns that into editor-reopening comments. After structural validation, the spec's
+    ``spec_version`` must equal ``CURRENT_SPEC_VERSION`` — an old-schema artifact is refused, never
+    migrated (``architecture.md §0.6``; ADR 0069), surfacing as ``SpecVersionError``.
     """
+    from cyberlab_gen.errors import SpecVersionError
+
     data = _yaml().load(StringIO(text))
-    return AttackSpec.model_validate(data)
+    spec = AttackSpec.model_validate(data)
+    if spec.spec_version != CURRENT_SPEC_VERSION:
+        raise SpecVersionError(found=spec.spec_version, expected=CURRENT_SPEC_VERSION)
+    return spec
 
 
 # --- the post-Extractor interrupt (interactive mode) -----------------------

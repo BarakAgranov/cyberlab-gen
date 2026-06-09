@@ -391,6 +391,34 @@ class ValidationError(CyberlabGenError):
         self.findings = findings or []
 
 
+class SpecVersionError(CyberlabGenError):
+    """A spec loaded from disk declares a ``spec_version`` the framework does not support.
+
+    ``architecture.md §0.6``: old-schema artifacts are **refused at load, never migrated**. The
+    framework stamps ``CURRENT_SPEC_VERSION`` onto everything it writes (ADR 0069); a loaded spec
+    whose version differs is rejected here rather than silently re-interpreted under the current
+    schema. Pins ``stage='load'``.
+    """
+
+    def __init__(
+        self,
+        *,
+        found: int,
+        expected: int,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(
+            f"spec_version {found} is not supported (expected {expected}); old-schema artifacts "
+            "are refused, never migrated (architecture.md §0.6)",
+            stage="load",
+            run_id=run_id,
+            cause=cause,
+        )
+        self.found = found
+        self.expected = expected
+
+
 class EnrichmentError(CyberlabGenError):
     """Pre-Planner enrichment failed in a non-recoverable way (``pipeline.md §3.2.4``).
 

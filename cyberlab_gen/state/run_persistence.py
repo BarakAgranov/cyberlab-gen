@@ -71,6 +71,32 @@ def stamp_billed_model(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:
     )
 
 
+def stamp_spec_version(spec: AttackSpec) -> AttackSpec:
+    """Return ``spec`` with ``spec_version`` framework-stamped to ``CURRENT_SPEC_VERSION``.
+
+    The schema version is a framework fact, not LLM content (``architecture.md §1.5``; ADR 0069):
+    the model emits a value (floor ``ge=1``), but the framework overrides it so everything written
+    to disk carries the current version — and the load gate (``architecture.md §0.6``) can then
+    refuse anything else without ever migrating. Idempotent; a surgical ``model_copy``.
+    """
+    from cyberlab_gen.schemas.attack_spec import CURRENT_SPEC_VERSION
+
+    if spec.spec_version == CURRENT_SPEC_VERSION:
+        return spec
+    return spec.model_copy(update={"spec_version": CURRENT_SPEC_VERSION})
+
+
+def stamp_framework_provenance(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:
+    """Stamp every framework-owned provenance field the LLM must not author, in one call.
+
+    The single place that applies the framework's stamps to a spec before it ships or persists:
+    the billed model (ADR 0065) and the schema version (ADR 0069). Callers use this rather than the
+    individual stampers so a new framework-owned field is added in exactly one place and can never
+    be forgotten at a ship/persist site.
+    """
+    return stamp_spec_version(stamp_billed_model(spec, ledger))
+
+
 def persist_pipeline_artifacts(
     handle: RunHandle,
     *,
@@ -95,7 +121,7 @@ def persist_pipeline_artifacts(
     """
     spec = shipped_spec if shipped_spec is not None else (state.spec if state is not None else None)
     if spec is not None:
-        spec = stamp_billed_model(spec, ledger)
+        spec = stamp_framework_provenance(spec, ledger)
         # A clean ship already mirrored the post-edit spec; only fill in the partial.
         if SPEC_FILENAME not in handle.record.artifacts:
             handle.write_artifact(SPEC_FILENAME, spec)
@@ -117,4 +143,6 @@ __all__ = [
     "billed_model",
     "persist_pipeline_artifacts",
     "stamp_billed_model",
+    "stamp_framework_provenance",
+    "stamp_spec_version",
 ]

@@ -19,6 +19,7 @@ from cyberlab_gen.state.run_persistence import (
     billed_model,
     persist_pipeline_artifacts,
     stamp_billed_model,
+    stamp_spec_version,
 )
 from cyberlab_gen.state.run_store import SPEC_FILENAME, RunKind, RunLineage, RunStore
 from tests.unit.framework.pipeline_fakes import make_spec
@@ -93,6 +94,39 @@ def test_persist_records_billed_model_for_partial_spec(tmp_path: Path) -> None:
     assert handle.record.lineage.model == "opus-billed"
     persisted = AttackSpec.from_yaml((handle.directory / SPEC_FILENAME).read_text(encoding="utf-8"))
     assert persisted.extraction_metadata.model == "opus-billed"
+
+
+def test_stamp_spec_version_sets_current() -> None:
+    """The framework stamps ``spec_version`` to ``CURRENT_SPEC_VERSION``; the model never owns it."""
+    from cyberlab_gen.schemas.attack_spec import CURRENT_SPEC_VERSION
+
+    spec = make_spec().model_copy(update={"spec_version": 99})
+    assert stamp_spec_version(spec).spec_version == CURRENT_SPEC_VERSION
+
+
+def test_persist_stamps_current_spec_version(tmp_path: Path) -> None:
+    """A persisted spec always carries ``CURRENT_SPEC_VERSION`` — the framework owns it (ADR 0069),
+    so the LLM-emitted value (here a stray 99) never reaches disk.
+    """
+    from cyberlab_gen.framework.orchestrator import PipelineState
+    from cyberlab_gen.schemas.attack_spec import CURRENT_SPEC_VERSION
+
+    store = RunStore(tmp_path / "runs")
+    handle = store.start(kind=RunKind.EXTRACT, label="x", lineage=RunLineage(input_ref="x"))
+    state = PipelineState(
+        blog_content="b",
+        source_summary="s",
+        spec=make_spec().model_copy(update={"spec_version": 99}),
+    )
+    persist_pipeline_artifacts(
+        handle,
+        state=state,
+        shipped_spec=None,
+        ledger=_ledger_billing("opus-billed"),
+        content_hash="a" * 64,
+    )
+    persisted = AttackSpec.from_yaml((handle.directory / SPEC_FILENAME).read_text(encoding="utf-8"))
+    assert persisted.spec_version == CURRENT_SPEC_VERSION
 
 
 def test_persist_prefers_shipped_spec_and_still_stamps(tmp_path: Path) -> None:
