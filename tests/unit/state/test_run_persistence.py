@@ -19,6 +19,7 @@ from cyberlab_gen.state.run_persistence import (
     billed_model,
     persist_pipeline_artifacts,
     stamp_billed_model,
+    stamp_framework_provenance,
     stamp_spec_version,
 )
 from cyberlab_gen.state.run_store import SPEC_FILENAME, RunKind, RunLineage, RunStore
@@ -94,6 +95,19 @@ def test_persist_records_billed_model_for_partial_spec(tmp_path: Path) -> None:
     assert handle.record.lineage.model == "opus-billed"
     persisted = AttackSpec.from_yaml((handle.directory / SPEC_FILENAME).read_text(encoding="utf-8"))
     assert persisted.extraction_metadata.model == "opus-billed"
+
+
+def test_framework_provenance_does_not_author_completeness_score() -> None:
+    """The framework stamps model + spec_version but must NEVER author ``completeness_score`` — it
+    is the LLM's self-report, not a framework fact (ADR 0070). Regression guard: if a future change
+    folds completeness_score into the provenance stamp, this fails.
+    """
+    spec = make_spec()  # completeness_score == 0.8
+    stamped = stamp_framework_provenance(spec, _ledger_billing("opus-billed"))
+    assert (
+        stamped.extraction_metadata.completeness_score
+        == spec.extraction_metadata.completeness_score
+    )
 
 
 def test_stamp_spec_version_sets_current() -> None:

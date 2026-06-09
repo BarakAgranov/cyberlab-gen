@@ -92,6 +92,16 @@ def _metadata() -> ExtractionMetadataBlock:
     )
 
 
+def test_completeness_score_is_explicitly_non_authoritative() -> None:
+    """``completeness_score`` is an LLM self-report, marked non-authoritative — it must never be
+    mistaken for a framework-computed fact or a ship gate (ADR 0070). Pinned on the field's
+    description so the marker can't be silently dropped.
+    """
+    desc = (ExtractionMetadataBlock.model_fields["completeness_score"].description or "").lower()
+    assert "self-report" in desc
+    assert "non-authoritative" in desc
+
+
 def _per_step(tier: ReproducibilityTier = ReproducibilityTier.FULL) -> PerStepReproducibility:
     return PerStepReproducibility(
         classification=tier,

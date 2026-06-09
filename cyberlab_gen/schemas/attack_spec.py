@@ -403,11 +403,30 @@ class MaterialDiscrepancy(ArtifactModel):
 
 
 class ExtractionMetadataBlock(ArtifactModel):
-    """Run metadata for the extraction. schema.md §4.8."""
+    """Run metadata for the extraction (``schema.md §4.8``).
+
+    Authorship is mixed and must not be confused (``architecture.md §1.5``):
+
+    - ``model`` is **framework-stamped** from the billed cost ledger (ADR 0065) — never the LLM's
+      self-report.
+    - ``completeness_score``, ``unknown_fields``, ``citations_count``, ``notes_for_planner`` are
+      **LLM self-reports**: the model's own assessment of its run, *not* framework-computed facts and
+      *not* ship gates (ADR 0070). The substantive completeness gate is the Extractor-Jury's
+      0.7-floored ``completeness`` rubric dimension (``agents.md §5.5``), never this number.
+    """
 
     extractor_version: SemVer
-    model: NonEmptyString  # whatever the provider layer resolved
-    completeness_score: float = Field(ge=0.0, le=1.0)
+    model: NonEmptyString  # framework-stamped from the billed ledger (ADR 0065); not LLM-authored
+    completeness_score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "LLM self-report (non-authoritative): the Extractor's own completeness estimate — not a "
+            "framework-computed fact and not a ship gate (ADR 0070). The eval harness records it "
+            "alongside its independently-computed structural_completeness; the framework never "
+            "stamps, gates, or consumes it."
+        ),
+    )
     unknown_fields: list[NonEmptyString] = Field(default_factory=list[NonEmptyString])
     citations_count: int = Field(ge=0)
     notes_for_planner: NonEmptyString | None = None
