@@ -29,6 +29,36 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: The framework state-channel types registered with the checkpoint serializer's msgpack
+#: allowlist (ADR 0066). These ride the PipelineState channels and serialize via the
+#: EXT_PYDANTIC_V2 / Enum ext paths; registering them removes the "Deserializing unregistered
+#: type … will be blocked in a future version" warning every run logged, and pins them to the
+#: registered (not pickle-fallback) path. Listed as ``(module, name)`` string tuples — NOT
+#: imported classes — so this module keeps its lazy import graph (it deliberately never imports
+#: the orchestrator/validators/jury/enrichment at module scope; the ext_hook ``import_module``s
+#: them on read). Nested models (StaticSchemaFinding, GroundingFinding, JuryFieldFeedback,
+#: JuryScores) ride as plain dicts inside their parent's ``model_dump`` payload and need NOT be
+#: listed; the ``AttackSpec``/``ExtractionResult`` subtree carries ``HttpUrl`` and still goes via
+#: ``pickle_fallback`` (so it is intentionally absent from the msgpack allowlist).
+#:
+#: MAINTENANCE OBLIGATION: passing an explicit allowlist flips the serializer out of permissive
+#: "allow-all-with-warning" mode, so any *new* msgpack-serialized top-level PipelineState channel
+#: type added later MUST be added here or it will be silently BLOCKED (returned as raw data,
+#: failing resume). The no-warning round-trip tests in ``test_checkpointing.py`` guard this.
+_REGISTERED_CHECKPOINT_TYPES: tuple[tuple[str, str], ...] = (
+    ("cyberlab_gen.validators.static_schema_validator", "StaticSchemaResult"),
+    ("cyberlab_gen.validators.static_schema_validator", "StaticSchemaCode"),
+    ("cyberlab_gen.validators.grounding_validator", "GroundingResult"),
+    ("cyberlab_gen.validators.grounding_validator", "GroundingCode"),
+    ("cyberlab_gen.agents.extractor_jury.schema", "Verdict"),
+    ("cyberlab_gen.agents.extractor_jury.schema", "JuryVerdict"),
+    ("cyberlab_gen.framework.enrichment", "EnrichmentResult"),
+    ("cyberlab_gen.framework.orchestrator", "PipelineStatus"),
+    ("cyberlab_gen.framework.orchestrator", "FeedbackKind"),
+    ("cyberlab_gen.framework.orchestrator", "RefinementFeedback"),
+    ("cyberlab_gen.framework.orchestrator", "PipelineState"),
+)
+
 
 @asynccontextmanager
 async def open_sqlite_checkpointer(db_path: Path) -> AsyncGenerator[BaseCheckpointSaver[Any]]:
@@ -42,8 +72,13 @@ async def open_sqlite_checkpointer(db_path: Path) -> AsyncGenerator[BaseCheckpoi
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
     async with AsyncSqliteSaver.from_conn_string(str(db_path)) as saver:
-        # Handle HttpUrl & friends (see module docstring) — local checkpoints only.
-        saver.serde = JsonPlusSerializer(pickle_fallback=True)
+        # Register our framework state types (ADR 0066) so they round-trip via the registered
+        # msgpack path — no unregistered-type warning, no future-block risk. ``pickle_fallback``
+        # stays on for the HttpUrl-bearing AttackSpec subtree (ADR 0040 security note: local,
+        # code-created checkpoints only). The explicit allowlist is independent of pickle_fallback.
+        saver.serde = JsonPlusSerializer(
+            pickle_fallback=True, allowed_msgpack_modules=_REGISTERED_CHECKPOINT_TYPES
+        )
         yield saver
 
 
