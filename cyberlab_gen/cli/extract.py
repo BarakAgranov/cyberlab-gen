@@ -305,6 +305,7 @@ def _state_to_run_result(
     everyday-budget interrupt consumes; ``0`` for the default (test) runner.
     """
     from cyberlab_gen.framework.orchestrator import (
+        JuryInconsistencyError,
         JuryRejectionError,
         PipelineState,
         PipelineStatus,
@@ -324,6 +325,12 @@ def _state_to_run_result(
         )
     if state.status is PipelineStatus.HALTED_REJECT:
         raise JuryRejectionError(state.halt_reason or "Extractor-Jury rejected the AttackSpec")
+    # The rubric-floor backstop (ADR 0067) must halt on the CLI ship path too: this mapping is a
+    # parallel of run_pipeline's _finalize, so a sub-floor approve must raise here, not ship.
+    if state.status is PipelineStatus.HALTED_JURY_INCONSISTENT:
+        raise JuryInconsistencyError(
+            state.halt_reason or "Extractor-Jury approved a spec with sub-floor rubric scores"
+        )
 
     assert state.spec is not None
     extraction = state.extraction

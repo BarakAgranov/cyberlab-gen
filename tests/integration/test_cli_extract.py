@@ -587,6 +587,82 @@ def test_production_runner_sets_a_real_nonzero_estimate(
     assert result.estimated_next_stage_cost == Decimal("1.5")  # the REAL estimate, not the old 0
 
 
+def test_real_runner_raises_on_inconsistent_approve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real CLI ship path honors the rubric-floor backstop (ADR 0067).
+
+    Drives ``PipelineExtractRunner`` (ingestion stubbed, MockProvider, no network) with a jury
+    that returns ``approve`` while a dimension is below the floor. The runner maps terminal state
+    via ``_state_to_run_result`` (a parallel of ``run_pipeline``'s ``_finalize``), so the backstop
+    must raise here too — a sub-floor approve must NOT ship on the CLI path.
+    """
+    from cyberlab_gen.agents.extractor.extractor import Extractor
+    from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
+    from cyberlab_gen.agents.extractor_jury.schema import JuryScores, JuryVerdict, Verdict
+    from cyberlab_gen.cli.extract import PipelineExtractRunner
+    from cyberlab_gen.framework.orchestrator import JuryInconsistencyError
+    from cyberlab_gen.providers import (
+        AgentLabel,
+        CapabilityHint,
+        ModelRankings,
+        ProviderRegistry,
+        TokenUsage,
+    )
+    from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
+    from cyberlab_gen.providers.mock_provider import MockProvider
+    from cyberlab_gen.registries.merge import load_merged_registries
+    from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
+    from tests.unit.framework.pipeline_fakes import install_stub_ingestion, make_ingestion
+
+    rankings = ModelRankings.model_validate(
+        {
+            "by_capability": {
+                CapabilityHint.LONG_CONTEXT_EXTRACTION.value: [
+                    {"provider": "anthropic", "model": "model-x"}
+                ],
+                CapabilityHint.HIGH_QUALITY_REASONING.value: [
+                    {"provider": "anthropic", "model": "model-x"}
+                ],
+            }
+        }
+    )
+    registry = ProviderRegistry(rankings, frozenset({"anthropic"}))
+    registries = load_merged_registries()
+
+    mock = MockProvider()
+    mock.register(
+        capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        agent_label=AgentLabel.EXTRACTOR,
+        response=_in_scope_spec(facets=["target:aws"]),
+        usage=TokenUsage(input_tokens=1000, output_tokens=2000, cost_usd=Decimal("1.0")),
+        model="claude-opus-4-8",
+    )
+    mock.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.EXTRACTOR_JURY,
+        response=JuryVerdict(
+            verdict=Verdict.APPROVE,  # approve, but a sub-floor dimension — self-contradictory
+            scores=JuryScores(
+                fidelity=0.1, completeness=0.9, provenance_correctness=0.9, structural_validity=0.9
+            ),
+            retry_recommended=False,
+            rationale="claims clean",
+        ),
+        usage=TokenUsage(input_tokens=500, output_tokens=500, cost_usd=Decimal("0.5")),
+        model="claude-opus-4-8",
+    )
+
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("25"), everyday_budget_usd=Decimal("100"))
+    crp = CostRecordingProvider(mock, ledger, purpose="test")
+    install_stub_ingestion(monkeypatch, ingestion=make_ingestion(), blog_content="blog content")
+    runner_obj = PipelineExtractRunner(
+        extractor=Extractor(provider=crp, registry=registry, registries=registries),
+        validator=StaticSchemaValidator(registries=registries),
+        jury=ExtractorJury(provider=crp, registry=registry, registries=registries),
+    )
+    with pytest.raises(JuryInconsistencyError):
+        runner_obj.run("u", ledger=ledger)
+
+
 def test_auto_over_cap_writes_up_to_cap_and_reports_remainder(tmp_path: Path) -> None:
     """Over the per-run cap, ``--auto`` SHIPS, promotes up to the cap, and reports the rest.
 
