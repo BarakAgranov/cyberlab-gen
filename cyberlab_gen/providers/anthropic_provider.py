@@ -13,11 +13,12 @@ What this module does (and what it deliberately does not):
   tools whose implementation calls back into our ``ToolExecutor``, and drives it
   via ``agent.iter`` so token usage is captured on success **and** on failure
   (ADR 0036 spike: ``run.usage`` survives a raise; the exception does not carry it).
-- **Model resolution.** The ``Provider`` ABC hands the adapter a ``CapabilityHint``,
-  not a model id. The adapter resolves it the same way ``ProviderRegistry`` does:
-  the first ``anthropic`` entry for that capability in the bundled
-  ``model_rankings.yaml``. The resolved id is what we price and report; the actual
-  pydantic-ai model is built from it (or an injected test model is used).
+- **Model resolution happens once, upstream.** The ``Provider`` ABC hands the adapter the
+  concrete ``model`` id the call surface already resolved via ``ProviderRegistry`` (ADR 0071);
+  the adapter never re-reads ``model_rankings.yaml``. The passed id is what we price, report, and
+  build the pydantic-ai model from (or an injected test model is used). Removing the adapter's own
+  resolution closes the divergence where the registry (configured-aware) and the adapter
+  (anthropic-first) could pick different models for the same capability.
 - **Cost stays ours.** Token counts come from pydantic-ai's ``RunUsage``; the USD
   figure is computed by ``cost_ledger.compute_cost`` (Decimal, our ``pricing.yaml``)
   — not pydantic-ai's float ``genai-prices`` — so by-agent/by-model rollups stay
@@ -83,7 +84,6 @@ from cyberlab_gen.providers.base import (
     ToolExecutor,
 )
 from cyberlab_gen.providers.cost_ledger import PricingTable, compute_cost, load_pricing_table
-from cyberlab_gen.providers.ranking import load_model_rankings
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
@@ -132,7 +132,6 @@ class AnthropicProvider(Provider):
         self._client = client
         self._injected_model = model
         self._output_retries = output_retries
-        self._rankings = load_model_rankings()
         self._pricing: PricingTable | None = None
         self._aclient_cache: Any | None = None
 
@@ -148,14 +147,18 @@ class AnthropicProvider(Provider):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
-        del agent_label  # used only for ledger attribution, which the call surface owns
+        # agent_label (ledger attribution) and capability (resolution) are the call surface's
+        # concern; the adapter uses the already-resolved ``model`` and never re-reads rankings
+        # (ADR 0071).
+        del agent_label, capability
         return await self._invoke(
             messages,
             output_schema=output_schema,
-            capability=capability,
+            model=model,
             tools=[],
             tool_executor=None,
             max_tokens=max_tokens,
@@ -168,20 +171,21 @@ class AnthropicProvider(Provider):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
         max_iterations: int,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
-        del agent_label
+        del agent_label, capability  # resolution + attribution are the call surface's (ADR 0071)
         # Each loop iteration is one model request; allow max_iterations tool turns
         # plus the final emit turn. Exceeding it raises UsageLimitExceeded, which we
         # map to ToolLoopError (provider-interface.md §6.4).
         return await self._invoke(
             messages,
             output_schema=output_schema,
-            capability=capability,
+            model=model,
             tools=tools,
             tool_executor=tool_executor,
             max_tokens=max_tokens,
@@ -195,13 +199,13 @@ class AnthropicProvider(Provider):
         messages: list[Message],
         *,
         output_schema: type[T_Output],
-        capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor | None,
         max_tokens: int | None,
         request_limit: int | None,
     ) -> ProviderResponse[T_Output]:
-        model_id = self._resolve_model(capability)
+        model_id = model  # the registry-resolved id, passed down (ADR 0071); never re-resolved here
         pyd_model = self._pydantic_model(model_id)
         instructions, history, prompt = _translate_messages(messages)
         pyd_tools = [_make_tool(t, tool_executor) for t in tools if tool_executor is not None]
@@ -307,22 +311,6 @@ class AnthropicProvider(Provider):
             anthropic_cache_instructions=True,
             anthropic_cache_tool_definitions=True,
             anthropic_cache_messages=True,
-        )
-
-    def _resolve_model(self, capability: CapabilityHint) -> str:
-        """Resolve a capability to the first ``anthropic`` model id in the rankings.
-
-        The adapter is only invoked once ``ProviderRegistry`` resolved the capability
-        to an anthropic model, so the first anthropic entry agrees by construction
-        (provider-interface.md §3.4). Raises ``HardFailure`` if none exists.
-        """
-        entries = self._rankings.by_capability.get(capability, [])
-        for entry in entries:
-            if entry.provider == _PROVIDER_NAME:
-                return entry.model
-        raise HardFailure(
-            f"No anthropic model ranked for capability {capability.value!r}; "
-            f"the adapter was invoked for a capability it cannot serve."
         )
 
     def _pydantic_model(self, model_id: str) -> Model:

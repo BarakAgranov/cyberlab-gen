@@ -108,6 +108,9 @@ class MockProvider(Provider):
         #: call, so a test can assert an agent passes the output budget it intends
         #: (the mock itself does not constrain output length).
         self.last_max_tokens: int | None = None
+        #: The resolved ``model`` from the most recent call — so a test can assert the call surface
+        #: passed the registry-resolved model down (ADR 0071), not a re-resolved one.
+        self.last_model: str | None = None
 
     @property
     def name(self) -> str:
@@ -164,10 +167,12 @@ class MockProvider(Provider):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str = "mock-model",  # test double: a default keeps direct-call tests model-agnostic
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
         self.last_max_tokens = max_tokens  # recorded; mock does not constrain output length
+        self.last_model = model  # recorded; the mock routes by capability+agent_label, not model
         registration = self._find(messages, capability=capability, agent_label=agent_label)
         return self._build_response(
             messages=messages,
@@ -183,6 +188,7 @@ class MockProvider(Provider):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str = "mock-model",  # test double: a default keeps direct-call tests model-agnostic
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
@@ -191,6 +197,7 @@ class MockProvider(Provider):
     ) -> ProviderResponse[T_Output]:
         del tools, tool_executor, max_iterations
         self.last_max_tokens = max_tokens  # recorded; mock does not constrain output length
+        self.last_model = model  # recorded; the mock routes by capability+agent_label, not model
         registration = self._find(messages, capability=capability, agent_label=agent_label)
         return self._build_response(
             messages=messages,

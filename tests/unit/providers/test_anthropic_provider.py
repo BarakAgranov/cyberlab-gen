@@ -77,12 +77,16 @@ async def _complete(
     provider: AnthropicProvider,
     *,
     capability: CapabilityHint = CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+    model: str = _HAIKU,
     max_tokens: int | None = None,
 ) -> ProviderResponse[Greeting]:
+    # ``model`` is the registry-resolved id the call surface passes down (ADR 0071); it defaults to
+    # the model the default capability resolves to, so existing model assertions are unchanged.
     return await provider.complete(
         _messages(),
         output_schema=Greeting,
         capability=capability,
+        model=model,
         agent_label=AgentLabel.EXTRACTOR,
         max_tokens=max_tokens,
     )
@@ -126,19 +130,24 @@ def test_name_is_anthropic() -> None:
     assert AnthropicProvider().name == "anthropic"
 
 
-@pytest.mark.parametrize(
-    ("capability", "expected_model"),
-    [
-        (CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT, _HAIKU),
-        (CapabilityHint.HIGH_QUALITY_REASONING, _OPUS),
-        (CapabilityHint.LONG_CONTEXT_EXTRACTION, _OPUS),
-    ],
-)
-async def test_capability_resolves_to_ranked_anthropic_model(
-    capability: CapabilityHint, expected_model: str
-) -> None:
-    resp = await _complete(_provider(_emit_ok), capability=capability)
-    assert resp.model == expected_model
+@pytest.mark.parametrize("model", [_HAIKU, _OPUS])
+async def test_complete_uses_the_passed_model(model: str) -> None:
+    """The adapter prices + reports the model it is *given*, not one it re-resolves (ADR 0071)."""
+    resp = await _complete(_provider(_emit_ok), model=model)
+    assert resp.model == model
+
+
+async def test_complete_uses_passed_model_over_the_capability_default() -> None:
+    """The capability no longer picks the model: passing _OPUS with the FAST_CHEAP capability (which
+    the old adapter would have re-resolved to _HAIKU) reports _OPUS. This is the divergence ADR 0071
+    closes — the adapter honours the registry-resolved id, never its own anthropic-first walk.
+    """
+    resp = await _complete(
+        _provider(_emit_ok),
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        model=_OPUS,
+    )
+    assert resp.model == _OPUS
 
 
 async def test_complete_reads_cache_tokens_into_usage() -> None:
@@ -352,12 +361,17 @@ def _lookup_tool() -> ToolDefinition:
 
 
 async def _complete_with_tools(
-    provider: AnthropicProvider, executor: _EchoExecutor, *, max_iterations: int = 5
+    provider: AnthropicProvider,
+    executor: _EchoExecutor,
+    *,
+    model: str = _OPUS,
+    max_iterations: int = 5,
 ) -> ProviderResponse[Greeting]:
     return await provider.complete_with_tools(
         _messages(),
         output_schema=Greeting,
         capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        model=model,
         tools=[_lookup_tool()],
         tool_executor=executor,
         agent_label=AgentLabel.EXTRACTOR,
@@ -457,13 +471,10 @@ async def test_4xx_maps_to_hard_failure() -> None:
 # --- pricing safety --------------------------------------------------------
 
 
-async def test_missing_pricing_entry_raises_hard_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_missing_pricing_entry_raises_hard_failure() -> None:
+    # The passed model is what we price (ADR 0071): a model absent from the pricing table is a
+    # HardFailure, no re-resolution involved.
     provider = _provider(_emit_ok)
-
-    def _bad_resolve(_capability: CapabilityHint) -> str:
-        return "model-not-in-pricing"
-
-    monkeypatch.setattr(provider, "_resolve_model", _bad_resolve)
     with pytest.raises(HardFailure) as exc_info:
-        await _complete(provider)
+        await _complete(provider, model="model-not-in-pricing")
     assert "pricing" in str(exc_info.value).lower()

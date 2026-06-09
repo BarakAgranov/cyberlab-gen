@@ -356,6 +356,7 @@ class _FakeInnerProvider:
         *,
         output_schema: type[_Out],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> object:
@@ -368,6 +369,7 @@ class _FakeInnerProvider:
         *,
         output_schema: type[_Out],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
@@ -391,6 +393,7 @@ async def test_cost_recording_provider_records_each_call_into_the_ledger() -> No
         [],
         output_schema=_Out,
         capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        model="claude-test",
         agent_label=AgentLabel.EXTRACTOR,
     )
     assert ledger.total_usd == Decimal("0.50")  # real cost flowed into the ledger
@@ -398,6 +401,7 @@ async def test_cost_recording_provider_records_each_call_into_the_ledger() -> No
         [],
         output_schema=_Out,
         capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+        model="claude-test",
         tools=[],
         tool_executor=_unused_executor(),
         agent_label=AgentLabel.EXTRACTOR,
@@ -441,6 +445,7 @@ class _RaisingInnerProvider:
         *,
         output_schema: type[_Out],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> object:  # pragma: no cover - not exercised here
@@ -452,6 +457,7 @@ class _RaisingInnerProvider:
         *,
         output_schema: type[_Out],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
@@ -484,6 +490,7 @@ async def test_cost_recording_provider_records_billed_usage_when_the_call_raises
             [],
             output_schema=_Out,
             capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            model="claude-test",
             tools=[],
             tool_executor=_unused_executor(),
             agent_label=AgentLabel.EXTRACTOR,
@@ -516,6 +523,7 @@ async def test_cost_recording_provider_logs_a_billed_failure_live(
             [],
             output_schema=_Out,
             capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            model="claude-test",
             tools=[],
             tool_executor=_unused_executor(),
             agent_label=AgentLabel.EXTRACTOR,
@@ -543,6 +551,7 @@ async def test_cost_recording_provider_on_call_echoes_each_call() -> None:
         [],
         output_schema=_Out,
         capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        model="claude-test",
         agent_label=AgentLabel.EXTRACTOR,
     )
     assert len(seen) == 1
@@ -566,6 +575,7 @@ async def test_cost_recording_provider_skips_failure_with_no_billed_usage() -> N
             [],
             output_schema=_Out,
             capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            model="claude-test",
             tools=[],
             tool_executor=_unused_executor(),
             agent_label=AgentLabel.EXTRACTOR,
@@ -590,6 +600,7 @@ async def test_cost_recording_provider_aborts_mid_run_at_catastrophe_ceiling() -
         [],
         output_schema=_Out,
         capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        model="claude-test",
         agent_label=AgentLabel.EXTRACTOR,
     )
     # Second call: $1.20 cumulative crosses the ceiling — abort.
@@ -598,6 +609,7 @@ async def test_cost_recording_provider_aborts_mid_run_at_catastrophe_ceiling() -
             [],
             output_schema=_Out,
             capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            model="claude-test",
             agent_label=AgentLabel.EXTRACTOR,
         )
     assert ledger.total_usd == Decimal("1.20")  # the crossing call is still recorded
@@ -630,6 +642,7 @@ async def test_cost_recording_provider_trips_ceiling_on_billed_failures() -> Non
             [],
             output_schema=_Out,
             capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            model="claude-test",
             tools=[],
             tool_executor=_unused_executor(),
             agent_label=AgentLabel.EXTRACTOR,
@@ -677,6 +690,7 @@ async def test_cost_recording_provider_logs_each_call_with_cumulative(
             [],
             output_schema=_Out,
             capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            model="claude-test",
             agent_label=AgentLabel.EXTRACTOR,
         )
     line = next((r.getMessage() for r in caplog.records if "LLM call #1" in r.getMessage()), "")

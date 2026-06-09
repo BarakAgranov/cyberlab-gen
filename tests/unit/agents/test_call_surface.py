@@ -39,8 +39,10 @@ from cyberlab_gen.providers import (
     ProviderResponse,
     RankingEntry,
     TokenUsage,
+    ToolCall,
     ToolDefinition,
     ToolExecutor,
+    ToolResult,
 )
 
 
@@ -116,6 +118,56 @@ def test_no_concrete_model_name_in_call_surface_source() -> None:
             assert needle not in src, f"{module.__name__} mentions a model name: {needle}"
 
 
+class _NoopExecutor:
+    """A ToolExecutor the mock never actually drives (it short-circuits the loop)."""
+
+    async def execute(self, call: ToolCall) -> ToolResult:  # pragma: no cover - never called
+        raise AssertionError("the mock provider does not run the tool loop")
+
+
+async def test_run_passes_registry_resolved_model_to_provider() -> None:
+    """The call surface resolves capability→model ONCE and hands the provider that concrete id
+    (ADR 0071). With both providers configured the registry resolves the TOP-ranked openai entry
+    (``model-top``); the provider must receive exactly that, never the first anthropic entry
+    (``model-second``) an adapter-side anthropic-first walk would have picked — the mis-billing
+    divergence ADR 0071 closes.
+    """
+    provider = MockProvider()
+    provider.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.EXTRACTOR,
+        response=_Out(value="x"),
+    )
+    runner = _runner(provider, configured=frozenset({"anthropic", "openai"}))
+    await runner.run(
+        [Message(role=MessageRole.USER, content="x")],
+        output_schema=_Out,
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+    )
+    assert provider.last_model == "model-top"  # the registry-resolved id, not "model-second"
+
+
+async def test_run_with_tools_passes_registry_resolved_model_to_provider() -> None:
+    """``run_with_tools`` (the path the Extractor + Jury use) resolves once and passes the model
+    down too (ADR 0071)."""
+    provider = MockProvider()
+    provider.register(
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        agent_label=AgentLabel.EXTRACTOR,
+        response=_Out(value="x"),
+    )
+    runner = _runner(provider, configured=frozenset({"anthropic", "openai"}))
+    await runner.run_with_tools(
+        [Message(role=MessageRole.USER, content="x")],
+        output_schema=_Out,
+        capability=CapabilityHint.HIGH_QUALITY_REASONING,
+        tools=[],
+        tool_executor=_NoopExecutor(),
+        max_iterations=2,
+    )
+    assert provider.last_model == "model-top"
+
+
 # --- happy path ----------------------------------------------------------------
 
 
@@ -188,6 +240,7 @@ class _FailingProvider(Provider):
         *,
         output_schema: type[T],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T]:
@@ -199,6 +252,7 @@ class _FailingProvider(Provider):
         *,
         output_schema: type[T],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
@@ -263,6 +317,7 @@ class _IdenticalFailingProvider(Provider):
         *,
         output_schema: type[T],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T]:
@@ -274,6 +329,7 @@ class _IdenticalFailingProvider(Provider):
         *,
         output_schema: type[T],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
@@ -337,6 +393,7 @@ class _TruncatingProvider(Provider):
         *,
         output_schema: type[T],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T]:
@@ -348,6 +405,7 @@ class _TruncatingProvider(Provider):
         *,
         output_schema: type[T],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,

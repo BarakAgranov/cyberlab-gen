@@ -92,6 +92,7 @@ class CostRecordingProvider(Provider):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
@@ -100,6 +101,7 @@ class CostRecordingProvider(Provider):
                 messages,
                 output_schema=output_schema,
                 capability=capability,
+                model=model,
                 agent_label=agent_label,
                 max_tokens=max_tokens,
             )
@@ -115,6 +117,7 @@ class CostRecordingProvider(Provider):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
@@ -126,6 +129,7 @@ class CostRecordingProvider(Provider):
                 messages,
                 output_schema=output_schema,
                 capability=capability,
+                model=model,
                 tools=tools,
                 tool_executor=tool_executor,
                 agent_label=agent_label,

@@ -95,6 +95,7 @@ async def test_complete_against_real_anthropic_api() -> None:
         messages,
         output_schema=Greeting,
         capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        model="claude-haiku-4-5-20251001",  # the registry-resolved model for this capability
         agent_label=AgentLabel.EXTRACTOR,
         max_tokens=256,
     )

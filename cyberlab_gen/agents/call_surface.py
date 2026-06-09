@@ -143,12 +143,16 @@ class AgentRunner:
         already exhausted), retries the stage up to the structural-retry budget;
         on exhaustion raises AgentFailure (ADR 0018).
         """
+        # Resolve capability -> concrete model ONCE, here in the single resolver, and pass the id
+        # down; the provider must not re-resolve rankings (ADR 0071, the mis-billing trap).
+        _, model = self.resolve_model(capability)
 
         async def _call() -> ProviderResponse[T_Output]:
             return await self._provider.complete(
                 messages,
                 output_schema=output_schema,
                 capability=capability,
+                model=model,
                 agent_label=self._agent_label,
                 max_tokens=max_tokens,
             )
@@ -167,12 +171,15 @@ class AgentRunner:
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
         """Tool-using-loop structured call. Same structural-retry semantics as `run`."""
+        # Resolve capability -> concrete model ONCE (see :meth:`run`); pass it down (ADR 0071).
+        _, model = self.resolve_model(capability)
 
         async def _call() -> ProviderResponse[T_Output]:
             return await self._provider.complete_with_tools(
                 messages,
                 output_schema=output_schema,
                 capability=capability,
+                model=model,
                 tools=tools,
                 tool_executor=tool_executor,
                 agent_label=self._agent_label,

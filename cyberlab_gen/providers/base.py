@@ -213,15 +213,23 @@ class Provider(ABC):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str,
         agent_label: AgentLabel,
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
         """Run a single-turn structured-output completion. No tools.
 
+        ``model`` is the **concrete model id the registry already resolved** for
+        ``capability`` — capability→model resolution happens exactly once, in the
+        call surface (``ProviderRegistry.resolve``). The provider MUST use ``model``
+        for the actual call and pricing; it MUST NOT re-resolve ``capability`` to a
+        model of its own (ADR 0071 — a second resolution algorithm is how the billed
+        model could diverge from the resolved/priced one). ``capability`` is retained
+        for cost attribution and response routing, not for resolution.
+
         Agents that need tools call ``complete_with_tools`` instead. On
         structured-output parse failure, the implementation retries per
-        ``provider-interface.md`` §6.2; final failure raises
-        ``MalformedOutput``.
+        ``provider-interface.md`` §6.2; final failure raises ``MalformedOutput``.
         """
 
     @abstractmethod
@@ -231,6 +239,7 @@ class Provider(ABC):
         *,
         output_schema: type[T_Output],
         capability: CapabilityHint,
+        model: str,
         tools: list[ToolDefinition],
         tool_executor: ToolExecutor,
         agent_label: AgentLabel,
@@ -238,6 +247,9 @@ class Provider(ABC):
         max_tokens: int | None = None,
     ) -> ProviderResponse[T_Output]:
         """Run a tool-using loop ending with a structured output.
+
+        ``model`` is the registry-resolved concrete model id (see :meth:`complete`);
+        the provider uses it and never re-resolves ``capability`` (ADR 0071).
 
         ``max_iterations`` is a required parameter (no default) — callers
         choose a per-agent value calibrated to the agent's expected loop
