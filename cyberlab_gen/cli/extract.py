@@ -863,7 +863,7 @@ def _promote_proposals_auto(
     is **bounded in-loop steering, not a hard halt** (``schema.md §4.16``): the over-cap proposals
     are reported, not promoted and not dropped silently.
 
-    STOPGAP (ADR 0062 → the loop-budget threading work-stream, ADR 0065): the proper over-cap fix
+    STOPGAP (ADR 0062 → the loop-budget threading work-stream, ADR 0063): the proper over-cap fix
     steers the Extractor *in-loop* to reuse/refactor instead of over-proposing, bounded by the
     ADR-0049 caps. The registry digest (E1) is the first lever toward that; this report-the-
     remainder behaviour is the interim, honest stopgap that replaces the old hard halt.
