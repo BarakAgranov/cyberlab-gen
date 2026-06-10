@@ -28,18 +28,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cyberlab_gen.agents.call_surface import AgentRunner
-from cyberlab_gen.agents.extractor.tools import (
-    ExtractorToolExecutor,
-    extractor_tool_definitions,
-)
 from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict
+from cyberlab_gen.agents.tool_agent import ToolUsingAgent
 from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
 
 if TYPE_CHECKING:
     from cyberlab_gen.framework.enrichment import NvdClient
     from cyberlab_gen.providers.base import Provider
     from cyberlab_gen.providers.ranking import ProviderRegistry
+    from cyberlab_gen.registries.merge import MergedRegistries
     from cyberlab_gen.schemas.attack_spec import AttackSpec
     from cyberlab_gen.validators.grounding_validator import GroundingFinding
 
@@ -52,31 +49,37 @@ DEFAULT_RUBRIC_FLOOR = 0.7
 DEFAULT_MAX_TOOL_ITERATIONS = 8
 
 
-class ExtractorJury:
-    """Drives one Extractor-Jury review of an AttackSpec (``agents.md §5.5``)."""
+class ExtractorJury(ToolUsingAgent):
+    """Drives one Extractor-Jury review of an AttackSpec (``agents.md §5.5``).
+
+    The six-step tool-loop sequence lives in :class:`ToolUsingAgent` (ADR 0072); this stage supplies
+    the ``high_quality_reasoning`` capability, the ``JuryVerdict`` output schema, and the review
+    user turn, then returns the verdict. It shares the Extractor's tool inventory (so it can
+    independently verify ``external_api`` responses), which the base wires.
+    """
 
     def __init__(
         self,
         *,
         provider: Provider,
         registry: ProviderRegistry,
-        registries: object,  # MergedRegistries; loose to avoid a runtime import here
+        registries: MergedRegistries,
         nvd_client: NvdClient | None = None,
         rubric_floor: float = DEFAULT_RUBRIC_FLOOR,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
     ) -> None:
         if not 0.0 <= rubric_floor <= 1.0:
             raise ValueError("rubric_floor must be in [0, 1]")
-        self._runner = AgentRunner(
-            agent_label=AgentLabel.EXTRACTOR_JURY,
-            agent_dir=EXTRACTOR_JURY_AGENT_DIR,
+        super().__init__(
             provider=provider,
             registry=registry,
+            registries=registries,
+            agent_label=AgentLabel.EXTRACTOR_JURY,
+            agent_dir=EXTRACTOR_JURY_AGENT_DIR,
+            max_tool_iterations=max_tool_iterations,
+            nvd_client=nvd_client,
         )
-        self._registries = registries
-        self._nvd_client = nvd_client
         self._rubric_floor = rubric_floor
-        self._max_tool_iterations = max_tool_iterations
 
     @property
     def rubric_floor(self) -> float:
@@ -96,27 +99,13 @@ class ExtractorJury:
         grounding and does not re-derive it. Asks the LLM for the verdict and returns a
         validated ``JuryVerdict``; the framework reads ``verdict`` to route control flow.
         """
-        from cyberlab_gen.registries.merge import MergedRegistries
-
-        if not isinstance(self._registries, MergedRegistries):  # pragma: no cover - guard
-            raise TypeError("ExtractorJury.registries must be a MergedRegistries")
-
-        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
-        executor = ExtractorToolExecutor(registries=self._registries, nvd_client=self._nvd_client)
         user_content = self._build_user_turn(
             spec=spec, blog_content=blog_content, findings=grounding_findings or []
         )
-        messages = self._runner.build_messages(
+        response, _ = await self._emit(
             capability=CapabilityHint.HIGH_QUALITY_REASONING,
-            user_content=user_content,
-        )
-        response = await self._runner.run_with_tools(
-            messages,
             output_schema=JuryVerdict,
-            capability=CapabilityHint.HIGH_QUALITY_REASONING,
-            tools=extractor_tool_definitions(registered_source_ids=source_ids),
-            tool_executor=executor,
-            max_iterations=self._max_tool_iterations,
+            user_content=user_content,
         )
         return response.output
 

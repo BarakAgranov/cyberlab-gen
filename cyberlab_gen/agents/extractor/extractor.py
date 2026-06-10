@@ -33,17 +33,12 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError as PydanticValidationError
 
-from cyberlab_gen.agents.call_surface import AgentRunner
-from cyberlab_gen.agents.extractor.tools import (
-    ExternalLookupRecord,
-    ExtractorToolExecutor,
-    extractor_tool_definitions,
-)
-
-# Runtime import (not TYPE_CHECKING): ExtractionResult is a Pydantic model whose
-# fields are typed with these, so Pydantic must resolve them at class-definition
-# time. ruff's TC001 false-fires under `from __future__ import annotations`.
+# Runtime import (not TYPE_CHECKING): ExtractionResult is a Pydantic model whose ``lookups`` field
+# is typed with ExternalLookupRecord, so Pydantic must resolve it at class-definition time. ruff's
+# TC001 false-fires under `from __future__ import annotations`.
+from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
 from cyberlab_gen.agents.proposals import ProposedFacet, ProposedThesisType, ProposedValueType
+from cyberlab_gen.agents.tool_agent import ToolUsingAgent
 from cyberlab_gen.errors import ExtractionError
 from cyberlab_gen.providers.base import (
     AgentLabel,
@@ -57,6 +52,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.framework.enrichment import NvdClient
     from cyberlab_gen.providers.base import Provider
     from cyberlab_gen.providers.ranking import ProviderRegistry
+    from cyberlab_gen.registries.merge import MergedRegistries
 
 logger = logging.getLogger(__name__)
 
@@ -112,30 +108,34 @@ class ExtractionResult(InternalModel):
     reprompts: int = 0
 
 
-class Extractor:
-    """Drives one Extractor stage run over cached blog content (``agents.md §5.4``)."""
+class Extractor(ToolUsingAgent):
+    """Drives one Extractor stage run over cached blog content (``agents.md §5.4``).
+
+    The six-step tool-loop sequence lives in :class:`ToolUsingAgent` (ADR 0072); this stage supplies
+    the capability, output schema, user turn, and output cap, and wraps the typed result.
+    """
 
     def __init__(
         self,
         *,
         provider: Provider,
         registry: ProviderRegistry,
-        registries: object,  # MergedRegistries; typed loosely to avoid a runtime import here
+        registries: MergedRegistries,
         nvd_client: NvdClient | None = None,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
         max_output_tokens: int = DEFAULT_EXTRACTOR_MAX_TOKENS,
     ) -> None:
         if max_output_tokens < 1:
             raise ValueError("max_output_tokens must be >= 1")
-        self._runner = AgentRunner(
-            agent_label=AgentLabel.EXTRACTOR,
-            agent_dir=EXTRACTOR_AGENT_DIR,
+        super().__init__(
             provider=provider,
             registry=registry,
+            registries=registries,
+            agent_label=AgentLabel.EXTRACTOR,
+            agent_dir=EXTRACTOR_AGENT_DIR,
+            max_tool_iterations=max_tool_iterations,
+            nvd_client=nvd_client,
         )
-        self._registries = registries
-        self._nvd_client = nvd_client
-        self._max_tool_iterations = max_tool_iterations
         self._max_output_tokens = max_output_tokens
 
     async def extract(self, *, blog_content: str, source_summary: str) -> ExtractionResult:
@@ -147,27 +147,13 @@ class Extractor:
         The Extractor produces content and does **not** self-validate; the orchestrator's
         static-schema + grounding stack checks the output and decides any re-run.
         """
-        from cyberlab_gen.registries.merge import MergedRegistries
-
-        if not isinstance(self._registries, MergedRegistries):  # pragma: no cover - guard
-            raise TypeError("Extractor.registries must be a MergedRegistries")
-
-        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
-        executor = ExtractorToolExecutor(registries=self._registries, nvd_client=self._nvd_client)
         user_content = self._build_user_turn(
             blog_content=blog_content, source_summary=source_summary
         )
-        messages = self._runner.build_messages(
+        response, executor = await self._emit(
             capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
-            user_content=user_content,
-        )
-        response = await self._runner.run_with_tools(
-            messages,
             output_schema=AttackSpec,
-            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
-            tools=extractor_tool_definitions(registered_source_ids=source_ids),
-            tool_executor=executor,
-            max_iterations=self._max_tool_iterations,
+            user_content=user_content,
             max_tokens=self._max_output_tokens,
         )
         return ExtractionResult(
@@ -213,12 +199,7 @@ class Extractor:
             RefinementPathError,
             apply_field_patch,
         )
-        from cyberlab_gen.registries.merge import MergedRegistries
 
-        if not isinstance(self._registries, MergedRegistries):  # pragma: no cover - guard
-            raise TypeError("Extractor.registries must be a MergedRegistries")
-
-        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
         base_user = self._build_refine_turn(
             prior_spec=prior_spec,
             feedback=feedback,
@@ -230,21 +211,11 @@ class Extractor:
         last_problem = "no patch produced"
 
         for attempt in range(1, max_attempts + 1):
-            executor = ExtractorToolExecutor(
-                registries=self._registries, nvd_client=self._nvd_client
-            )
             user_content = base_user if not extra else f"{base_user}\n\n{extra}"
-            messages = self._runner.build_messages(
+            response, executor = await self._emit(
                 capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
-                user_content=user_content,
-            )
-            response = await self._runner.run_with_tools(
-                messages,
                 output_schema=RefinementPatch,
-                capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
-                tools=extractor_tool_definitions(registered_source_ids=source_ids),
-                tool_executor=executor,
-                max_iterations=self._max_tool_iterations,
+                user_content=user_content,
                 max_tokens=self._max_output_tokens,
             )
             try:
