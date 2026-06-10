@@ -62,14 +62,12 @@ the seam set is complete. No new tracking needed.
 ## 2. Tier ④ — opportunistic cleanups (tracked; not folded into Batches A/B)
 
 Done during Batches A/B (folded in): the `agents↔framework` cycle (ADR 0075), `MergedRegistries`
-typing (ADR 0072), finding-locator integer-index canonicalisation (ADR 0074). The rest, tracked:
+typing (ADR 0072), finding-locator integer-index canonicalisation (ADR 0074). Closed just after
+Batches A/B: the **verify-only jury tool set (ADR 0078)** — a mechanically-enforced verify-only tool
+set on the `ToolUsingAgent` contract (withheld `propose_*` defs + executor guard); the Extractor-Jury
+is fixed, and Phase-2's Planner-Jury (brief Task 4) and Phase-4's Critic inherit the enforcement as
+they are built. The rest, tracked:
 
-- **Jury holds `propose_*` tools, prohibited only in prose.** `ExtractorJury` runs the full
-  Extractor tool inventory; the §1.5 read/write split is enforced by *tool availability*, but the
-  jury's prohibition on proposing is prose (`extractor_jury/prompt.md`). No live leak (proposals are
-  discarded), but the pattern propagates to Phase-2 reviewers. **Fix:** split a verify-only tool set
-  so Planner-Jury / Critic inherit enforcement, not a prose rule. (Natural to do via the
-  `ToolUsingAgent` contract — give the base a tool-set hook.)
 - **CLI reaches into orchestrator privates.** `cli/extract.py` imports `_ingestion_summary`
   (`# pyright: ignore[reportPrivateUsage]`) and `_state_to_run_result` re-derives the `HALTED_*`
   terminal-state→result mapping that `orchestrator._finalize` owns (the duplication ADR 0067's
