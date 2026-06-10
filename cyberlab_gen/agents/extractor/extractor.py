@@ -301,20 +301,15 @@ class Extractor(ToolUsingAgent):
         )
 
 
-def build_registry_digest(registries: object) -> str:
+def build_registry_digest(registries: MergedRegistries) -> str:
     """Render a compact digest of the registered vocabulary the Extractor may reference (E1).
 
     Names only — ``value_types`` / ``facets`` / ``thesis_types`` / ``execution_contexts`` — so
     the Extractor can check novelty before proposing rather than proposing blind (which forces a
     structural-retry re-extraction; investigation 0002 §6 / 0001, ADR 0050/0062). NOT
     ``external_data_sources`` (a tool-adapter catalog, never LLM-proposable; ADR 0055/0058).
-    Bounded to entry names (no ``value_schema`` bodies) for token cost. Returns ``""`` when the
-    registries are not the merged view (defensive; the digest is then simply omitted).
+    Bounded to entry names (no ``value_schema`` bodies) for token cost.
     """
-    from cyberlab_gen.registries.merge import MergedRegistries
-
-    if not isinstance(registries, MergedRegistries):
-        return ""
 
     def _fmt(names: list[str]) -> str:
         return ", ".join(names) if names else "(none)"
