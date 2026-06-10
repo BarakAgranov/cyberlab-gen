@@ -869,8 +869,8 @@ def test_grounding_retry_feedback_round_trips_and_renders() -> None:
         grounding_findings=[
             GroundingFinding(
                 code=GroundingCode.SEARCH_BEFORE_CLAIM,
-                location="external_references.cves[CVE-2024-9999].severity",
-                detail="no external_lookup call recorded",
+                location="external_references.cves[0].severity",
+                detail="no external_lookup call recorded for CVE-2024-9999",
             )
         ],
     )
@@ -878,7 +878,7 @@ def test_grounding_retry_feedback_round_trips_and_renders() -> None:
     assert restored == fb
     rendered = fb.render()
     assert "GROUNDING / SEARCH-BEFORE-CLAIM FAILURE" in rendered
-    assert "search_before_claim@external_references.cves[CVE-2024-9999].severity" in rendered
+    assert "search_before_claim@external_references.cves[0].severity" in rendered
 
 
 def test_grounding_retry_feedback_rejects_wrong_payload() -> None:

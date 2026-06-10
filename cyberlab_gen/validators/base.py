@@ -18,12 +18,16 @@ strings.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from cyberlab_gen.schemas.base import InternalModel
+
+#: Every ``[...]`` segment in a finding ``location`` — used to enforce integer list indices.
+_LIST_INDEX_RE = re.compile(r"\[([^\]]*)\]")
 
 
 class Finding[CodeT: StrEnum](InternalModel):
@@ -37,6 +41,25 @@ class Finding[CodeT: StrEnum](InternalModel):
     code: CodeT
     location: str
     detail: str
+
+    @field_validator("location")
+    @classmethod
+    def _location_uses_integer_indices(cls, value: str) -> str:
+        """Every list index in ``location`` must be an integer (ADR 0074).
+
+        Enforced here, once, for every mechanical-validator layer: a finding locator must be
+        addressable by ``framework.refinement._parse_path`` (dotted names + integer list indices)
+        so it can feed a targeted patch when a finding drives refinement. A string-id index like
+        ``cves[CVE-2024-9999]`` is rejected at construction; the id belongs in ``detail``.
+        """
+        for raw in _LIST_INDEX_RE.findall(value):
+            if not raw.isdigit():
+                raise ValueError(
+                    f"finding location {value!r} uses a non-integer list index [{raw}]; locators "
+                    "use integer list indices so a finding can feed a targeted patch "
+                    "(framework.refinement._parse_path)"
+                )
+        return value
 
     def render(self) -> str:
         """A one-line ``code@location: detail`` rendering for logs / the run report."""

@@ -182,7 +182,7 @@ class GroundingValidator:
             for rec in lookups
             if rec.source_id == _NVD_SOURCE_ID
         }
-        for cve in spec.external_references.cves:
+        for i, cve in enumerate(spec.external_references.cves):
             for label, prov in (("cvss_score", cve.cvss_score), ("severity", cve.severity)):
                 if (
                     prov is not None
@@ -193,7 +193,9 @@ class GroundingValidator:
                     findings.append(
                         GroundingFinding(
                             code=GroundingCode.SEARCH_BEFORE_CLAIM,
-                            location=f"external_references.cves[{cve.cve_id}].{label}",
+                            # Integer list index (ADR 0074), so the locator can feed a targeted
+                            # patch; the cve id is named in the detail below.
+                            location=f"external_references.cves[{i}].{label}",
                             detail=(
                                 f"claims source=external_api but no external_lookup call "
                                 f"recorded for {cve.cve_id} in the trace"
@@ -236,14 +238,15 @@ class GroundingValidator:
             for rec in lookups
             if rec.source_id == _NVD_SOURCE_ID and rec.found
         }
-        for cve in spec.external_references.cves:
+        for i, cve in enumerate(spec.external_references.cves):
             if cve.description.source is ProvenanceSource.UNKNOWN_FROM_BLOG:
                 continue
             if cve.cve_id not in found_cves:
                 findings.append(
                     GroundingFinding(
                         code=GroundingCode.CVE_HALLUCINATION,
-                        location=f"external_references.cves[{cve.cve_id}]",
+                        # Integer list index (ADR 0074); the cve id is named in the detail.
+                        location=f"external_references.cves[{i}]",
                         detail=(
                             f"{cve.cve_id} did not resolve against NVD; a real CVE must be "
                             "confirmed via external_lookup before it is claimed"

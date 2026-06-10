@@ -304,12 +304,13 @@ class StaticSchemaValidator:
         mechanism_names = {e.name for e in self._get_provisioning_mechanisms().entries}
 
         if spec.chain is not None:
-            for step in spec.chain.chain_steps:
+            for s_i, step in enumerate(spec.chain.chain_steps):
                 findings.extend(
-                    self._check_mechanism(step.provisioning_mechanism, mechanism_names, step.id)
+                    self._check_mechanism(step.provisioning_mechanism, mechanism_names, s_i)
                 )
                 for d_i, detection in enumerate(step.detections):
-                    loc = f"chain.chain_steps[{step.id}].detections[{d_i}]"
+                    # Integer list indices (ADR 0074) so the locator can feed a targeted patch.
+                    loc = f"chain.chain_steps[{s_i}].detections[{d_i}]"
                     findings.extend(
                         self._check_detection(
                             detection.component,
@@ -327,14 +328,15 @@ class StaticSchemaValidator:
         self,
         mechanism: ProvisioningMechanism,
         known: set[ProvisioningMechanism],
-        step_id: str,
+        step_index: int,
     ) -> list[StaticSchemaFinding]:
         if mechanism in known:
             return []
         return [
             StaticSchemaFinding(
                 code=StaticSchemaCode.CATALOG_DRIFT,
-                location=f"chain.chain_steps[{step_id}].provisioning_mechanism",
+                # Integer list index (ADR 0074) so the locator can feed a targeted patch.
+                location=f"chain.chain_steps[{step_index}].provisioning_mechanism",
                 detail=(
                     f"provisioning_mechanism {mechanism.value!r} is a valid enum member but is "
                     "absent from the bundled provisioning_mechanisms catalog (catalog drift)"

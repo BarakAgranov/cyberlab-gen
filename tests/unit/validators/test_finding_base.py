@@ -6,6 +6,9 @@ Pins that both Phase-1 validator layers expose the one ``Finding``/``FindingResu
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from cyberlab_gen.validators.base import Finding, FindingResult
 from cyberlab_gen.validators.grounding_validator import (
     GroundingCode,
@@ -33,6 +36,18 @@ def test_render_and_rendered_findings_live_in_the_base() -> None:
 
     result = StaticSchemaResult(passed=False, findings=[f])
     assert result.rendered_findings() == [f.render()]
+
+
+def test_finding_rejects_non_integer_list_index() -> None:
+    """A string-id list index is refused at construction (ADR 0074): finding locators must be
+    patch-addressable (integer indices). The id belongs in ``detail``, not the locator.
+    """
+    code = next(iter(GroundingCode))
+    with pytest.raises(ValidationError):
+        GroundingFinding(code=code, location="external_references.cves[CVE-2024-9999]", detail="x")
+    # an integer index is accepted (and nested indices)
+    GroundingFinding(code=code, location="external_references.cves[0]", detail="x")
+    GroundingFinding(code=code, location="chain.chain_steps[0].detections[1]", detail="x")
 
 
 def test_grounding_result_keeps_its_retry_view_on_the_shared_base() -> None:
