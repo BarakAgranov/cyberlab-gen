@@ -262,6 +262,53 @@ async def test_jury_reject_fires() -> None:
     assert out.verdict is Verdict.REJECT
 
 
+def test_verify_only_tool_definitions_advertise_only_external_lookup() -> None:
+    """A review-only agent is advertised the read/verify tool, never the propose_* write tools
+    (ADR 0078) — the §1.5 read/write split enforced by tool availability, not prose.
+    """
+    from cyberlab_gen.agents.extractor.tools import (
+        TOOL_EXTERNAL_LOOKUP,
+        TOOL_PROPOSE_VALUE_TYPE,
+        extractor_tool_definitions,
+    )
+
+    full = {t.name for t in extractor_tool_definitions()}
+    verify = {t.name for t in extractor_tool_definitions(verify_only=True)}
+    assert verify == {TOOL_EXTERNAL_LOOKUP}
+    assert TOOL_PROPOSE_VALUE_TYPE in full  # the Extractor still gets the write tools
+
+
+async def test_verify_only_executor_refuses_propose_tools() -> None:
+    """Defense-in-depth (ADR 0078): even called directly, a verify-only executor refuses a
+    ``propose_*`` write tool and records no proposal.
+    """
+    from cyberlab_gen.agents.extractor.tools import (
+        TOOL_PROPOSE_VALUE_TYPE,
+        ExtractorToolExecutor,
+    )
+    from cyberlab_gen.providers.base import ToolCall
+    from cyberlab_gen.registries.merge import load_merged_registries
+
+    ex = ExtractorToolExecutor(registries=load_merged_registries(), verify_only=True)
+    result = await ex.execute(
+        ToolCall(
+            call_id="c",
+            tool_name=TOOL_PROPOSE_VALUE_TYPE,
+            arguments={"name": "x", "description": "y", "reasoning": "z"},
+        )
+    )
+    assert result.is_error
+    assert not ex.value_type_proposals  # nothing was proposed
+
+
+def test_jury_is_wired_verify_only() -> None:
+    """The Extractor-Jury reviews; it must not propose — wired verify-only on the shared contract
+    (ADR 0078), so a Phase-2 reviewer inherits the enforcement.
+    """
+    jury = _jury(MockProvider())
+    assert jury._verify_only_tools is True  # pyright: ignore[reportPrivateUsage]
+
+
 async def test_jury_consumes_supplied_grounding_findings() -> None:
     # ADR 0051/0060: the jury CONSUMES the orchestrator's grounding findings (it no longer
     # re-derives them). A supplied finding reaches the prompt; the jury still returns its

@@ -63,6 +63,7 @@ class ToolUsingAgent:
         agent_dir: str,
         max_tool_iterations: int,
         nvd_client: NvdClient | None = None,
+        verify_only_tools: bool = False,
     ) -> None:
         self._runner = AgentRunner(
             agent_label=agent_label,
@@ -73,6 +74,10 @@ class ToolUsingAgent:
         self._registries = registries
         self._nvd_client = nvd_client
         self._max_tool_iterations = max_tool_iterations
+        #: A review-only agent (the Extractor-Jury; ADR 0078) is advertised only the read/verify
+        #: tools and its executor refuses the propose_* write tools — the §1.5 read/write split
+        #: enforced by tool availability, not prose.
+        self._verify_only_tools = verify_only_tools
 
     async def _emit[T: BaseModel](
         self,
@@ -91,13 +96,19 @@ class ToolUsingAgent:
         for routing (``architecture.md §1.5``).
         """
         source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
-        executor = ExtractorToolExecutor(registries=self._registries, nvd_client=self._nvd_client)
+        executor = ExtractorToolExecutor(
+            registries=self._registries,
+            nvd_client=self._nvd_client,
+            verify_only=self._verify_only_tools,
+        )
         messages = self._runner.build_messages(capability=capability, user_content=user_content)
         response = await self._runner.run_with_tools(
             messages,
             output_schema=output_schema,
             capability=capability,
-            tools=extractor_tool_definitions(registered_source_ids=source_ids),
+            tools=extractor_tool_definitions(
+                registered_source_ids=source_ids, verify_only=self._verify_only_tools
+            ),
             tool_executor=executor,
             max_iterations=self._max_tool_iterations,
             max_tokens=max_tokens,

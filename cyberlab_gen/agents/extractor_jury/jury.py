@@ -78,6 +78,9 @@ class ExtractorJury(ToolUsingAgent):
             agent_dir=EXTRACTOR_JURY_AGENT_DIR,
             max_tool_iterations=max_tool_iterations,
             nvd_client=nvd_client,
+            # The jury reviews; it must not propose. The §1.5 read/write split is enforced by tool
+            # availability (ADR 0078): it gets external_lookup, never the propose_* write tools.
+            verify_only_tools=True,
         )
         self._rubric_floor = rubric_floor
 

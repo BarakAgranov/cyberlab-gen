@@ -60,6 +60,11 @@ TOOL_PROPOSE_VALUE_TYPE = "propose_value_type"
 TOOL_PROPOSE_FACET = "propose_facet"
 TOOL_PROPOSE_THESIS_TYPE = "propose_thesis_type"
 
+#: The ``propose_*`` write tools — withheld from review-only agents (ADR 0078).
+_PROPOSE_TOOL_NAMES = frozenset(
+    {TOOL_PROPOSE_VALUE_TYPE, TOOL_PROPOSE_FACET, TOOL_PROPOSE_THESIS_TYPE}
+)
+
 #: Source id the Phase-1 ``external_lookup`` wires to a live (recordable) client.
 _NVD_SOURCE_ID = "nvd"
 
@@ -80,13 +85,21 @@ class ExternalLookupRecord(InternalModel):
 
 def extractor_tool_definitions(
     registered_source_ids: list[str] | None = None,
+    *,
+    verify_only: bool = False,
 ) -> list[ToolDefinition]:
-    """The four tool schemas advertised to the model (``agents.md §5.4``).
+    """The tool schemas advertised to the model (``agents.md §5.4``).
 
     ``registered_source_ids`` is the merged ``external_data_sources`` registry's ids; when
     given, the ``external_lookup`` description names exactly the sources that can be
     served, so the model stops guessing ids (the Wiz run called a non-existent
     ``mitre_attack`` source). ``None`` falls back to a generic description.
+
+    ``verify_only`` (used by review-only agents — the Extractor-Jury, and Phase-2 reviewers; ADR
+    0078) advertises **only** the read/verify ``external_lookup`` tool: the ``propose_*`` write
+    tools are withheld, so the ``architecture.md §1.5`` read/write split is enforced by tool
+    availability, not a prose rule. The jury keeps ``external_lookup`` so it can still independently
+    verify ``external_api`` responses (``agents.md §5.5``).
     """
     if registered_source_ids:
         sources_clause = (
@@ -96,7 +109,7 @@ def extractor_tool_definitions(
         )
     else:
         sources_clause = "Use only source ids registered in external_data_sources."
-    return [
+    tools = [
         ToolDefinition(
             name=TOOL_EXTERNAL_LOOKUP,
             description=(
@@ -175,6 +188,9 @@ def extractor_tool_definitions(
             },
         ),
     ]
+    if verify_only:
+        return [t for t in tools if t.name == TOOL_EXTERNAL_LOOKUP]
+    return tools
 
 
 class ExtractorToolExecutor:
@@ -190,9 +206,13 @@ class ExtractorToolExecutor:
         *,
         registries: MergedRegistries,
         nvd_client: NvdClient | None = None,
+        verify_only: bool = False,
     ) -> None:
         self._registries = registries
         self._nvd_client = nvd_client
+        #: A review-only executor (the Extractor-Jury; ADR 0078) refuses the ``propose_*`` write
+        #: tools at execution too — defense-in-depth behind the withheld tool advertisements.
+        self._verify_only = verify_only
         self.lookups: list[ExternalLookupRecord] = []
         self.value_type_proposals: list[ProposedValueType] = []
         self.facet_proposals: list[ProposedFacet] = []
@@ -204,6 +224,14 @@ class ExtractorToolExecutor:
         Returning ``is_error=True`` (rather than raising) keeps the tool-use loop
         alive so the model can recover within its iteration budget.
         """
+        if self._verify_only and call.tool_name in _PROPOSE_TOOL_NAMES:
+            # The propose_* write tools are not available to review-only agents (ADR 0078); they are
+            # not advertised, so this only fires on a misconfiguration — fail it mechanically.
+            return ToolResult(
+                call_id=call.call_id,
+                content=f"tool {call.tool_name!r} is not available to a review-only agent",
+                is_error=True,
+            )
         if call.tool_name == TOOL_EXTERNAL_LOOKUP:
             return self._external_lookup(call)
         if call.tool_name == TOOL_PROPOSE_VALUE_TYPE:
