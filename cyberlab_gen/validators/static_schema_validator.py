@@ -45,7 +45,6 @@ import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from pydantic import Field
 from pydantic import ValidationError as PydanticValidationError
 
 from cyberlab_gen.schemas.attack_spec import AttackSpec
@@ -57,6 +56,7 @@ from cyberlab_gen.schemas.enums import (
     Severity,
     SpecKind,
 )
+from cyberlab_gen.validators.base import Finding, FindingResult
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -106,33 +106,22 @@ class StaticSchemaCode(StrEnum):
     CATALOG_DRIFT = "catalog_drift"
 
 
-class StaticSchemaFinding(InternalModel):
+class StaticSchemaFinding(Finding[StaticSchemaCode]):
     """One static-schema violation: a code, a field locator, and a human-readable detail.
 
-    ``location`` uses the JSONPath-like convention shared with ``GapEntry`` so a
-    retry can target the offending field. ``InternalModel`` because the finding is
-    consumed in-process by the orchestrator and surfaced in the run report; it is
-    not an artifact.
+    Shares the ``(code, location, detail)`` shape + ``render()`` with every mechanical-validator
+    finding (ADR 0073); ``location`` uses the JSONPath-like convention shared with ``GapEntry``.
     """
 
-    code: StaticSchemaCode
-    location: str
-    detail: str
 
-    def render(self) -> str:
-        """A one-line ``code@location: detail`` rendering for logs / the report."""
-        return f"{self.code.value}@{self.location}: {self.detail}"
+class StaticSchemaResult(FindingResult[StaticSchemaFinding]):
+    """The static-schema verdict: a pass/fail plus the findings list (``validation.md §6.9``).
 
-
-class StaticSchemaResult(InternalModel):
-    """The static-schema verdict: a pass/fail plus the findings list (``validation.md §6.9``)."""
+    Inherits ``findings`` + ``rendered_findings()`` from :class:`FindingResult`; adds the layer's
+    ``passed`` flag.
+    """
 
     passed: bool
-    findings: list[StaticSchemaFinding] = Field(default_factory=list[StaticSchemaFinding])
-
-    def rendered_findings(self) -> list[str]:
-        """Every finding rendered as a one-line string (for ``ValidationError``)."""
-        return [f.render() for f in self.findings]
 
 
 class StaticSchemaValidator:

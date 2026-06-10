@@ -50,11 +50,11 @@ import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource
 from cyberlab_gen.schemas.provenance import Provenance
+from cyberlab_gen.validators.base import Finding, FindingResult
 
 if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
@@ -81,28 +81,21 @@ class GroundingCode(StrEnum):
 _RETRY_CODES = frozenset({GroundingCode.SEARCH_BEFORE_CLAIM, GroundingCode.CVE_HALLUCINATION})
 
 
-class GroundingFinding(InternalModel):
+class GroundingFinding(Finding[GroundingCode]):
     """One grounding violation: a code, a field locator, and a human-readable detail.
 
-    ``location`` uses the JSONPath-like convention shared with the static-schema
-    findings so a retry can target the offending field. ``InternalModel`` because
-    the finding is consumed in-process by the orchestrator and the jury, and
-    surfaced in the run report; it is not an artifact.
+    Shares the ``(code, location, detail)`` shape + ``render()`` with every mechanical-validator
+    finding (ADR 0073); ``location`` uses the JSONPath-like convention shared with the static-schema
+    findings so a retry can target the offending field.
     """
 
-    code: GroundingCode
-    location: str
-    detail: str
 
-    def render(self) -> str:
-        """A one-line ``code@location: detail`` rendering for logs / the report."""
-        return f"{self.code.value}@{self.location}: {self.detail}"
+class GroundingResult(FindingResult[GroundingFinding]):
+    """The grounding stack's findings set (``validation.md §6.10.2`` "one findings set").
 
-
-class GroundingResult(InternalModel):
-    """The grounding stack's findings set (``validation.md §6.10.2`` "one findings set")."""
-
-    findings: list[GroundingFinding] = Field(default_factory=list[GroundingFinding])
+    Inherits ``findings`` + ``rendered_findings()`` from :class:`FindingResult`; adds the
+    grounding-layer retry view.
+    """
 
     @property
     def needs_retry(self) -> bool:
@@ -112,10 +105,6 @@ class GroundingResult(InternalModel):
     def retry_findings(self) -> list[GroundingFinding]:
         """The retry-triggering subset (search-before-claim / CVE-hallucination)."""
         return [f for f in self.findings if f.code in _RETRY_CODES]
-
-    def rendered_findings(self) -> list[str]:
-        """Every finding rendered as a one-line string (for halt reasons / the report)."""
-        return [f.render() for f in self.findings]
 
 
 class GroundingValidator:
