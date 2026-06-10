@@ -12,7 +12,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from cyberlab_gen.agents.extractor.extractor import ExtractionResult
 from cyberlab_gen.agents.extractor_jury.jury import DEFAULT_RUBRIC_FLOOR
 from cyberlab_gen.agents.extractor_jury.schema import (
     JuryFieldFeedback,
@@ -20,6 +19,7 @@ from cyberlab_gen.agents.extractor_jury.schema import (
     JuryVerdict,
     Verdict,
 )
+from cyberlab_gen.agents.results import ExtractionResult
 from cyberlab_gen.registries.merge import load_merged_registries
 from cyberlab_gen.schemas.attack_spec import (
     AttackSpec,

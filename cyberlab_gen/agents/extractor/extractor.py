@@ -33,19 +33,19 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError as PydanticValidationError
 
-# Runtime import (not TYPE_CHECKING): ExtractionResult is a Pydantic model whose ``lookups`` field
-# is typed with ExternalLookupRecord, so Pydantic must resolve it at class-definition time. ruff's
-# TC001 false-fires under `from __future__ import annotations`.
-from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
-from cyberlab_gen.agents.proposals import ProposedFacet, ProposedThesisType, ProposedValueType
+from cyberlab_gen.agents.results import ExtractionResult
 from cyberlab_gen.agents.tool_agent import ToolUsingAgent
 from cyberlab_gen.errors import ExtractionError
+from cyberlab_gen.framework.refinement import (
+    RefinementPatch,
+    RefinementPathError,
+    apply_field_patch,
+)
 from cyberlab_gen.providers.base import (
     AgentLabel,
     CapabilityHint,
 )
 from cyberlab_gen.schemas.attack_spec import AttackSpec
-from cyberlab_gen.schemas.base import InternalModel
 
 if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback
@@ -88,24 +88,6 @@ DEFAULT_MAX_TOOL_ITERATIONS = 12
 #: emit — the deferred D1/D2 work, neither of which exists yet (``implementation-plan.md
 #: §4.6``; investigation 0002 §5).
 DEFAULT_EXTRACTOR_MAX_TOKENS = 20000
-
-
-class ExtractionResult(InternalModel):
-    """The Extractor stage's output envelope (ADR 0021).
-
-    Wraps the validated ``AttackSpec`` (the only piece that becomes an artifact)
-    plus the side-channel the framework needs downstream: the registry proposals
-    the agent emitted, the external-lookup trace (which the orchestrator-owned
-    grounding stack consumes for search-before-claim), and how many content-level
-    re-prompts the targeted patch took (0 for a clean first extract).
-    """
-
-    attack_spec: AttackSpec
-    value_type_proposals: list[ProposedValueType]
-    facet_proposals: list[ProposedFacet]
-    thesis_type_proposals: list[ProposedThesisType]
-    lookups: list[ExternalLookupRecord]
-    reprompts: int = 0
 
 
 class Extractor(ToolUsingAgent):
@@ -191,15 +173,6 @@ class Extractor(ToolUsingAgent):
         graph, so the whole-spec re-check is preserved without a hidden Extractor loop
         (ADR 0051/0060).
         """
-        # Lazy import: ``cyberlab_gen.framework`` imports this module (the orchestrator needs
-        # ``ExtractionResult``), so a top-level framework import here would be a load-time
-        # cycle. By call time the framework package is fully initialised. (ADR 0054.)
-        from cyberlab_gen.framework.refinement import (
-            RefinementPatch,
-            RefinementPathError,
-            apply_field_patch,
-        )
-
         base_user = self._build_refine_turn(
             prior_spec=prior_spec,
             feedback=feedback,

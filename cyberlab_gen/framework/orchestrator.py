@@ -44,13 +44,14 @@ from typing import TYPE_CHECKING, Protocol
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVerdict, Verdict
+
 # These artifact/result types are *runtime* imports (not TYPE_CHECKING) because
 # ``PipelineState`` is a Pydantic model whose fields reference them, and LangGraph
 # calls ``typing.get_type_hints`` on the state schema at graph-build time — under
 # ``from __future__ import annotations`` the hints must resolve at runtime. ruff's
 # TC001 wrongly wants them in a type-checking block; the noqa pins the requirement.
-from cyberlab_gen.agents.extractor.extractor import ExtractionResult
-from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVerdict, Verdict
+from cyberlab_gen.agents.results import ExtractionResult
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult, enrich
 from cyberlab_gen.schemas.attack_spec import AttackSpec
