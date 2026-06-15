@@ -22,6 +22,7 @@ from cyberlab_gen.schemas.attack_spec import (
     CveReference,
     DetectionBlock,
     ExtrasEntry,
+    PerStepReproducibility,
     ReproducibilityBlock,
     SourceBlock,
     TradecraftNote,
@@ -265,6 +266,15 @@ class StepBlock(ArtifactModel):
     Manifest-side step (the Generator's unit of implementation), distinct from
     the AttackSpec's narrative ``ChainStep``. ``cli_equivalent`` is illustrative;
     Layer 2 does not verify equivalence.
+
+    ``reproducibility`` is the per-step tier the Planner carries forward
+    *unchanged* from the ``ChainStep`` this step implements (``architecture.md
+    §0.7``: carrying-forward is not re-evaluation). It lives here — not only on
+    the AttackSpec — because the Per-phase Generator is manifest-driven and must
+    implement each step "at its declared reproducibility tier" (``agents.md
+    §5.9``); its AttackSpec access is its phase's prose excerpts only, not the
+    structured tier. Lab-level reproducibility is derived separately from the
+    AttackSpec's chain steps (``CoreBlock.reproducibility``; Task 2). See ADR 0081.
     """
 
     id: KebabId
@@ -274,6 +284,7 @@ class StepBlock(ArtifactModel):
     function_name: SnakeName
     mitre_techniques: list[MitreTechniqueId] = Field(default_factory=list[MitreTechniqueId])
     detections: list[DetectionBlock] = Field(default_factory=list[DetectionBlock])
+    reproducibility: PerStepReproducibility
     cli_equivalent: list[NonEmptyString] = Field(default_factory=list[NonEmptyString])
     outputs: list[StepOutput] = Field(default_factory=list[StepOutput])
     tradecraft_notes: list[TradecraftNote] = Field(default_factory=list[TradecraftNote])

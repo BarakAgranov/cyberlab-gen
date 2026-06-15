@@ -58,6 +58,39 @@ warnings), pytest 744 passed / 1 skipped.
 
 ---
 
+## Task 1 (amendment): per-step reproducibility on `StepBlock`  (2026-06-16)
+
+**Built.** Added the required `reproducibility: PerStepReproducibility` field to `StepBlock`
+(`schemas/manifest.py`), reusing the AttackSpec block (mirrors `CoreBlock.reproducibility`). Two
+tests in `tests/unit/schemas/test_manifest.py` (carries + round-trips the tier; the field is
+required); the representative `_manifest()` now exercises **mixed** per-step tiers (phase 1 `full`,
+phase 2 `demonstration_only`). Architect-approved doc edit to `schema-details.md §5.6` adds the field
+(the architecture docs were already correct and are untouched).
+
+**Decisions.** ADR 0081 (per-step reproducibility lives on the manifest `StepBlock`, carried forward
+unchanged; lab-level derives from the AttackSpec's chain steps over all non-dropped steps; reject
+the AttackSpec-only "Reading B" and the `implements_chain_steps` enrichment).
+
+**Surprises / drift.** This **reopened the locked Task-1 schema** — the legitimate
+first-consumer-infeasibility exception (`brief:156-163`), architect-ruled. Root cause: `StepBlock`
+(`schema-details.md §5.6`) omitted the per-step tier that `architecture.md §0.7`/`§1.1`,
+`pipeline.md`, and `agents.md §5.7`/`§5.9` all say the manifest carries; the doc, not the
+architecture, was incomplete. The decisive consumer is the manifest-driven Per-phase Generator
+(`agents.md §5.9`), whose AttackSpec access is prose excerpts only (`§5.18`), so it can read the
+structured tier *only* from the manifest.
+
+**Deferred.** (1) **Task 0 doc reconciliation** — D2 (`§4.8`/`§5.7` "Planner applies the rule" →
+framework derives), D3 (the "who applies the §4.20 ladder" three-way muddle), D4 (`§5.7:214`
+`not_reproducible`→`demonstration_only` contradicts `§0.7` "without modification"); all
+architecture/agents edits, architect-owned. (2) `StepBlock`→`chain_step` back-ref for a Layer-2
+carry-integrity check — Task 3 call. (3) Task 2 sources the lab-level rollup from the AttackSpec
+`chain.chain_steps[*].reproducibility` (all non-dropped) — pinned by ADR 0081, built in Task 2.
+
+**Verify.** `just verify` green — ruff + format clean, pyright 0 errors (40 pre-existing warnings),
+pytest 746 passed / 1 skipped.
+
+---
+
 ## Execution-log entry template
 
 ```

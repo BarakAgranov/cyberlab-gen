@@ -1154,6 +1154,15 @@ class StepBlock(BaseModel):
         default_factory=list,
     )
     detections: list[DetectionBlock] = Field(default_factory=list)
+    # Per-step reproducibility tier the Planner carries forward UNCHANGED from the
+    # ChainStep this step implements (architecture.md §0.7: carry-forward, not
+    # re-evaluation). Lives on the manifest — not only the AttackSpec — because the
+    # manifest-driven Per-phase Generator implements each step "at its declared
+    # reproducibility tier" (agents.md §5.9) and cannot read the structured tier off
+    # the AttackSpec (its access there is its phase's prose excerpts only, §5.18).
+    # Lab-level reproducibility is derived separately from the AttackSpec's chain
+    # steps (CoreBlock.reproducibility / §5.1). Reuses the AttackSpec block. ADR 0081.
+    reproducibility: PerStepReproducibility
     cli_equivalent: list[NonEmptyString] = Field(default_factory=list)
     # illustrative, not authoritative; Layer 2 does not verify equivalence per schema.md §4.7
     outputs: list[StepOutput] = Field(default_factory=list)

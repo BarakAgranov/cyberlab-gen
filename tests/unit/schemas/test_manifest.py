@@ -18,6 +18,7 @@ from cyberlab_gen.schemas.attack_spec import (
     CURRENT_ATTACK_SPEC_VERSION,
     AttackSpec,
     ExtractionMetadataBlock,
+    PerStepReproducibility,
     PublisherBlock,
     ReproducibilityBlock,
     SourceBlock,
@@ -34,6 +35,7 @@ from cyberlab_gen.schemas.enums import (
     ProvisioningMechanism,
     PublisherKind,
     ReproducibilityLabLevel,
+    ReproducibilityTier,
     Severity,
     SpecKind,
     StepComposition,
@@ -106,17 +108,26 @@ def _core() -> CoreBlock:
     )
 
 
-def _step(num: int) -> StepBlock:
+def _step(num: int, tier: ReproducibilityTier = ReproducibilityTier.FULL) -> StepBlock:
     return StepBlock(
         id=f"step-{num}",
         step_number=num,
         title=f"Step {num}",
         description=_blog_str("Do the thing."),
         function_name=f"step_{num}",
+        reproducibility=PerStepReproducibility(
+            classification=tier,
+            caveats=_blog_str("Carried forward from the chain step."),
+            why=_blog_str("Authored by the Extractor; the Planner does not re-evaluate."),
+        ),
     )
 
 
-def _phase(idx: int, produces: list[ProducesWorldState] | None = None) -> PhaseBlock:
+def _phase(
+    idx: int,
+    produces: list[ProducesWorldState] | None = None,
+    tier: ReproducibilityTier = ReproducibilityTier.FULL,
+) -> PhaseBlock:
     return PhaseBlock(
         id=f"phase-{idx}",
         name=f"Phase {idx}",
@@ -126,7 +137,7 @@ def _phase(idx: int, produces: list[ProducesWorldState] | None = None) -> PhaseB
         execution_context="attacker_local",
         provisioning_mechanism=ProvisioningMechanism.CLI_SCRIPTS,
         produces_world_state=produces or [],
-        steps=[_step(idx)],
+        steps=[_step(idx, tier)],
         implementation=PhaseImplementation(language="python", path=f"attack/phase_{idx}.py"),
     )
 
@@ -188,7 +199,7 @@ def _manifest() -> LabManifest:
                     ),
                 ],
             ),
-            _phase(2),
+            _phase(2, tier=ReproducibilityTier.DEMONSTRATION_ONLY),
         ],
         outputs=[
             OutputBlock(
@@ -225,6 +236,42 @@ def test_phase_requires_at_least_one_step() -> None:
     data["phases"][0]["steps"] = []
     with pytest.raises(ValidationError):
         LabManifest.model_validate(data)
+
+
+def test_step_block_carries_per_step_reproducibility() -> None:
+    """StepBlock carries the per-step tier the Planner forwards from the AttackSpec.
+
+    This is the manifest's home for the per-step reproducibility the Per-phase
+    Generator implements each step against (``agents.md §5.9``: "a step at its
+    declared reproducibility tier"); it reuses the AttackSpec's
+    ``PerStepReproducibility``, mirroring how ``CoreBlock`` reuses
+    ``ReproducibilityBlock``. ADR 0081; ``schema-details.md §5.6``.
+    """
+    step = StepBlock(
+        id="step-1",
+        step_number=1,
+        title="Step 1",
+        description=_blog_str("Demonstrate the destructive payload."),
+        function_name="step_1",
+        reproducibility=PerStepReproducibility(
+            classification=ReproducibilityTier.DEMONSTRATION_ONLY,
+            caveats=_blog_str("Destructive payload; printed, not executed."),
+            why=_blog_str("Cannot be safely executed in a lab."),
+        ),
+    )
+    assert step.reproducibility.classification is ReproducibilityTier.DEMONSTRATION_ONLY
+    restored = StepBlock.model_validate(step.model_dump())
+    assert restored == step
+    assert restored.reproducibility.classification is ReproducibilityTier.DEMONSTRATION_ONLY
+
+
+def test_step_block_requires_reproducibility() -> None:
+    """The per-step tier is required: every chain step carries one, so every
+    carried-forward StepBlock does too (ADR 0081)."""
+    data = _step(1).model_dump(mode="json", by_alias=True)
+    del data["reproducibility"]
+    with pytest.raises(ValidationError, match="reproducibility"):
+        StepBlock.model_validate(data)
 
 
 def test_lab_resource_requires_at_least_one_role() -> None:
