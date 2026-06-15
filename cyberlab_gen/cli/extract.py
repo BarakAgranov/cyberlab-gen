@@ -49,7 +49,6 @@ from cyberlab_gen.framework.proposal_acceptance import (
     auto_accept_to_overlay,
 )
 from cyberlab_gen.schemas.attack_spec import (
-    CURRENT_SPEC_VERSION,
     AttackSpec,
     MaterialDiscrepancy,
 )
@@ -422,15 +421,18 @@ def _load_spec_from_yaml(text: str) -> AttackSpec:
 
     Raises ``pydantic.ValidationError`` (or a YAML parse error) on a structurally invalid edit; the
     caller turns that into editor-reopening comments. After structural validation, the spec's
-    ``spec_version`` must equal ``CURRENT_SPEC_VERSION`` — an old-schema artifact is refused, never
-    migrated (``architecture.md §0.6``; ADR 0069), surfacing as ``SpecVersionError``.
+    ``spec_version`` must equal the AttackSpec's ``CURRENT_VERSION`` (per-kind, ADR 0080) — an
+    old-schema artifact is refused, never migrated (``architecture.md §0.6``; ADR 0069), surfacing as
+    ``SpecVersionError``. This edit path validates as an ``AttackSpec`` directly (applying the
+    ``spec_kind`` default for hand-edits); the spec_kind-dispatching gate is
+    ``schemas.loading.load_spec``, used by the persisted-spec load paths.
     """
     from cyberlab_gen.errors import SpecVersionError
 
     data = _yaml().load(StringIO(text))
     spec = AttackSpec.model_validate(data)
-    if spec.spec_version != CURRENT_SPEC_VERSION:
-        raise SpecVersionError(found=spec.spec_version, expected=CURRENT_SPEC_VERSION)
+    if spec.spec_version != AttackSpec.CURRENT_VERSION:
+        raise SpecVersionError(found=spec.spec_version, expected=AttackSpec.CURRENT_VERSION)
     return spec
 
 

@@ -74,7 +74,9 @@ from cyberlab_gen.schemas.enums import (
     SpecKind,
     StepComposition,
 )
+from cyberlab_gen.schemas.envelope import SpecEnvelope
 from cyberlab_gen.schemas.ingestion import IngestionResult
+from cyberlab_gen.schemas.loading import load_spec
 from cyberlab_gen.schemas.manifest import (
     CoreBlock,
     DiscoveryBlock,
@@ -251,6 +253,7 @@ __all__ = [
     "Sha256Hex",
     "SnakeName",
     "SourceBlock",
+    "SpecEnvelope",
     "SpecKind",
     "StaticCatalogEntry",
     "StaticCatalogsRegistry",
@@ -266,4 +269,5 @@ __all__ = [
     "ValueTypeEntry",
     "ValueTypeName",
     "ValueTypesRegistry",
+    "load_spec",
 ]

@@ -13,13 +13,18 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
+from cyberlab_gen.errors import SpecVersionError
 from cyberlab_gen.schemas.attack_spec import (
+    CURRENT_ATTACK_SPEC_VERSION,
+    AttackSpec,
+    ExtractionMetadataBlock,
     PublisherBlock,
     ReproducibilityBlock,
     SourceBlock,
 )
 from cyberlab_gen.schemas.enums import (
     CitationKind,
+    ExtractionOutcome,
     IdentifierKind,
     InputSource,
     LabRole,
@@ -33,7 +38,9 @@ from cyberlab_gen.schemas.enums import (
     SpecKind,
     StepComposition,
 )
+from cyberlab_gen.schemas.loading import load_spec
 from cyberlab_gen.schemas.manifest import (
+    CURRENT_MANIFEST_VERSION,
     CoreBlock,
     GenerationBlock,
     InputBlock,
@@ -48,6 +55,7 @@ from cyberlab_gen.schemas.manifest import (
     StepBlock,
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, Provenance
+from cyberlab_gen.state.run_persistence import stamp_spec_version
 
 
 def _blog_str(value: str) -> Provenance[str]:
@@ -354,3 +362,57 @@ def test_phase_implementation_path_optional() -> None:
     manifest = LabManifest.model_validate(data)
     assert manifest.phases[0].implementation.path is None
     assert LabManifest.from_yaml(manifest.to_yaml()) == manifest
+
+
+# --- load gate (SpecEnvelope dispatch, ADR 0080) ---
+
+
+def _min_attack_spec() -> AttackSpec:
+    """A minimal valid (out-of-scope) AttackSpec for load-gate dispatch tests."""
+    return AttackSpec(
+        spec_version=1,
+        source=_source(),
+        extraction_outcome=ExtractionOutcome.OUT_OF_SCOPE,
+        extraction_outcome_reason="Out of scope: a product announcement, not an attack writeup.",
+        extraction_metadata=ExtractionMetadataBlock(
+            extractor_version="1.0.0",
+            model="claude-opus-4-8",
+            completeness_score=0.0,
+            citations_count=0,
+        ),
+    )
+
+
+def test_load_spec_dispatches_by_spec_kind() -> None:
+    manifest_data = _manifest().model_dump(mode="json", by_alias=True)
+    spec_data = _min_attack_spec().model_dump(mode="json", by_alias=True)
+    assert isinstance(load_spec(manifest_data), LabManifest)
+    assert isinstance(load_spec(spec_data), AttackSpec)
+
+
+def test_load_spec_refuses_wrong_version_per_kind() -> None:
+    bad_manifest = _manifest().model_dump(mode="json", by_alias=True)
+    bad_manifest["spec_version"] = CURRENT_MANIFEST_VERSION + 1
+    with pytest.raises(SpecVersionError):
+        load_spec(bad_manifest)
+
+    bad_spec = _min_attack_spec().model_dump(mode="json", by_alias=True)
+    bad_spec["spec_version"] = CURRENT_ATTACK_SPEC_VERSION + 1
+    with pytest.raises(SpecVersionError):
+        load_spec(bad_spec)
+
+
+def test_load_spec_rejects_unknown_spec_kind() -> None:
+    data = _manifest().model_dump(mode="json", by_alias=True)
+    data["spec_kind"] = "NotASpecKind"
+    with pytest.raises(ValueError, match="spec_kind"):
+        load_spec(data)
+
+
+def test_stamp_spec_version_is_per_kind() -> None:
+    # A stale manifest version is stamped to the manifest's current version, not the
+    # AttackSpec's — the two kinds version independently (ADR 0080).
+    stale_manifest = _manifest().model_copy(update={"spec_version": 99})
+    assert stamp_spec_version(stale_manifest).spec_version == CURRENT_MANIFEST_VERSION
+    stale_spec = _min_attack_spec().model_copy(update={"spec_version": 99})
+    assert stamp_spec_version(stale_spec).spec_version == CURRENT_ATTACK_SPEC_VERSION

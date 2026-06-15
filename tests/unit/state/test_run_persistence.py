@@ -111,19 +111,19 @@ def test_framework_provenance_does_not_author_completeness_score() -> None:
 
 
 def test_stamp_spec_version_sets_current() -> None:
-    """The framework stamps ``spec_version`` to ``CURRENT_SPEC_VERSION``; the model never owns it."""
-    from cyberlab_gen.schemas.attack_spec import CURRENT_SPEC_VERSION
+    """The framework stamps ``spec_version`` to ``CURRENT_ATTACK_SPEC_VERSION``; the model never owns it."""
+    from cyberlab_gen.schemas.attack_spec import CURRENT_ATTACK_SPEC_VERSION
 
     spec = make_spec().model_copy(update={"spec_version": 99})
-    assert stamp_spec_version(spec).spec_version == CURRENT_SPEC_VERSION
+    assert stamp_spec_version(spec).spec_version == CURRENT_ATTACK_SPEC_VERSION
 
 
 def test_persist_stamps_current_spec_version(tmp_path: Path) -> None:
-    """A persisted spec always carries ``CURRENT_SPEC_VERSION`` — the framework owns it (ADR 0069),
+    """A persisted spec always carries ``CURRENT_ATTACK_SPEC_VERSION`` — the framework owns it (ADR 0069),
     so the LLM-emitted value (here a stray 99) never reaches disk.
     """
     from cyberlab_gen.framework.orchestrator import PipelineState
-    from cyberlab_gen.schemas.attack_spec import CURRENT_SPEC_VERSION
+    from cyberlab_gen.schemas.attack_spec import CURRENT_ATTACK_SPEC_VERSION
 
     store = RunStore(tmp_path / "runs")
     handle = store.start(kind=RunKind.EXTRACT, label="x", lineage=RunLineage(input_ref="x"))
@@ -140,7 +140,7 @@ def test_persist_stamps_current_spec_version(tmp_path: Path) -> None:
         content_hash="a" * 64,
     )
     persisted = AttackSpec.from_yaml((handle.directory / SPEC_FILENAME).read_text(encoding="utf-8"))
-    assert persisted.spec_version == CURRENT_SPEC_VERSION
+    assert persisted.spec_version == CURRENT_ATTACK_SPEC_VERSION
 
 
 def test_persist_prefers_shipped_spec_and_still_stamps(tmp_path: Path) -> None:

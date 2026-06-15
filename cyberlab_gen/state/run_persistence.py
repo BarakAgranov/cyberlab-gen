@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.framework.orchestrator import PipelineState
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.schemas.attack_spec import AttackSpec
+    from cyberlab_gen.schemas.envelope import SpecEnvelope
     from cyberlab_gen.state.run_store import RunHandle
 
 
@@ -71,19 +72,20 @@ def stamp_billed_model(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:
     )
 
 
-def stamp_spec_version(spec: AttackSpec) -> AttackSpec:
-    """Return ``spec`` with ``spec_version`` framework-stamped to ``CURRENT_SPEC_VERSION``.
+def stamp_spec_version[S: SpecEnvelope](spec: S) -> S:
+    """Return ``spec`` with ``spec_version`` framework-stamped to its kind's ``CURRENT_VERSION``.
 
     The schema version is a framework fact, not LLM content (``architecture.md §1.5``; ADR 0069):
     the model emits a value (floor ``ge=1``), but the framework overrides it so everything written
     to disk carries the current version — and the load gate (``architecture.md §0.6``) can then
-    refuse anything else without ever migrating. Idempotent; a surgical ``model_copy``.
+    refuse anything else without ever migrating. Per-kind (ADR 0080): an ``AttackSpec`` is stamped to
+    ``CURRENT_ATTACK_SPEC_VERSION``, a ``LabManifest`` to ``CURRENT_MANIFEST_VERSION`` — read off
+    ``type(spec).CURRENT_VERSION``. Idempotent; a surgical ``model_copy``.
     """
-    from cyberlab_gen.schemas.attack_spec import CURRENT_SPEC_VERSION
-
-    if spec.spec_version == CURRENT_SPEC_VERSION:
+    current = type(spec).CURRENT_VERSION
+    if spec.spec_version == current:
         return spec
-    return spec.model_copy(update={"spec_version": CURRENT_SPEC_VERSION})
+    return spec.model_copy(update={"spec_version": current})
 
 
 def stamp_framework_provenance(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:

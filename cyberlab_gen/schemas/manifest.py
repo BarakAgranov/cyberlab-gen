@@ -14,7 +14,7 @@ bare. Lab-level ``reproducibility`` is *derived* by the framework, never authore
 """
 
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Any, ClassVar, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -39,6 +39,7 @@ from cyberlab_gen.schemas.enums import (
     SpecKind,
     StepComposition,
 )
+from cyberlab_gen.schemas.envelope import SpecEnvelope
 from cyberlab_gen.schemas.primitives import (
     ExecutionContext,
     FacetName,
@@ -328,16 +329,24 @@ class OutputBlock(ArtifactModel):
 
 # --- §5 LabManifest envelope -----------------------------------------------
 
+#: The schema version the framework writes for every LabManifest — **per-kind**, distinct from
+#: ``CURRENT_ATTACK_SPEC_VERSION`` (ADR 0080); the two artifacts version independently.
+CURRENT_MANIFEST_VERSION = 1
 
-class LabManifest(ArtifactModel):
+
+class LabManifest(SpecEnvelope):
     """The structured artifact produced by the Planner. schema.md §4.4.
 
     The single source of truth every Phase-3+ agent reads; its shape is locked
-    in Phase 2 (``implementation-plan.md §5.1``).
+    in Phase 2 (``implementation-plan.md §5.1``). ``spec_version`` is inherited
+    from ``SpecEnvelope`` and framework-stamped to ``CURRENT_MANIFEST_VERSION``
+    (ADR 0069/0080). ``source`` lives in ``core`` (``CoreBlock.source``), not at the
+    top level — see ADR 0080 on the per-artifact ``source`` placement.
     """
 
-    spec_version: int = Field(ge=1)
-    spec_kind: Literal[SpecKind.LAB_MANIFEST]
+    CURRENT_VERSION: ClassVar[int] = CURRENT_MANIFEST_VERSION
+
+    spec_kind: Literal[SpecKind.LAB_MANIFEST] = SpecKind.LAB_MANIFEST
     core: CoreBlock
     facets: list[FacetName] = Field(default_factory=list[FacetName])
     prereqs: PrereqsBlock = Field(default_factory=PrereqsBlock)
