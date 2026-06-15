@@ -119,7 +119,9 @@ second use) so the no-migration load gate dispatches on `spec_kind`.
   — "extract a thin `SpecEnvelope` base at Phase-2's second use").
 
 **Inputs:** Phase 1 complete (AttackSpec, `ArtifactModel`, `Provenance[T]`, registries, the
-spec-version machinery from ADR 0069 all shipped and green). `StepBlock` already exists from P1.
+spec-version machinery from ADR 0069 all shipped and green). Note: `StepBlock` is **manifest-only
+and new in Phase 2** (`schema-details.md §5.6`) — Phase 1 built `ChainStep` (the AttackSpec's
+narrative step), a different model; do not expect to reuse it.
 
 **Work:**
 

@@ -73,6 +73,23 @@ Validated against the ``external_data_sources`` registry at static schema valida
 just a ``SnakeName`` (e.g. ``nvd``, ``mitre_attack``).
 """
 
+ValueTypeName = SnakeName
+"""Open-set value-type name reference (snake_case). schema-details.md §2.3 / §5.
+
+A LabManifest/AttackSpec field's ``type`` references an entry in the ``value_types`` registry by
+name; structurally a ``SnakeName`` (e.g. ``aws_s3_bucket``), validated against the registry at
+static schema validation (ADR 0016), open-set and runtime-proposable like ``ThesisType``.
+"""
+
+ExecutionContext = SnakeName
+"""Open-set execution-context name reference (snake_case). schema.md §4.5; schema-details.md §5.5.
+
+A phase's ``execution_context`` references an entry in the ``execution_contexts`` registry by name
+(e.g. ``attacker_local``, ``github_actions_runner``); structurally a ``SnakeName``, validated against
+the registry at static schema validation. Open-set: maintainer-curated or Planner-proposed at
+runtime (``schema.md §4.16``).
+"""
+
 SemVer = Annotated[
     str,
     StringConstraints(
@@ -119,6 +136,7 @@ facet-shaped proposal key fails on the no-corresponding-entry rule.
 
 __all__ = [
     "CveId",
+    "ExecutionContext",
     "ExternalDataSourceId",
     "FacetName",
     "HttpUrl",
@@ -132,4 +150,5 @@ __all__ = [
     "SnakeName",
     "ThesisType",
     "TradecraftName",
+    "ValueTypeName",
 ]

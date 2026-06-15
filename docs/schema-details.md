@@ -1124,11 +1124,17 @@ class ProducesWorldState(BaseModel):
 
 
 class PhaseImplementation(BaseModel):
-    """schema.md §4.5."""
+    """schema.md §4.5. ADR 0079: ``path`` is optional. The manifest is one
+    incrementally-built model and Layer 1 runs after every stage, so the Planner
+    emits a skeleton phase with no code and no path (``agents.md §5.7``); a
+    required path would fail the Planner's own Layer-1 validation. Invariant:
+    path <-> file. The Per-phase Generator (Phase 3) materializes the file and
+    the path together via the ``id`` -> path derivation (``agents.md §9.4``);
+    Layer 2 (post-generation) enforces ``path == derive(id)`` + file-exists."""
     model_config = ConfigDict(extra="forbid")
 
     language: Literal["python"]  # v1; widens in v1.5+
-    path: NonEmptyString  # e.g., "attack/phase_1_initial_access.py"
+    path: NonEmptyString | None = None  # None pre-generation; set by the Generator
     entrypoint: SnakeName = "run_phase"
 ```
 

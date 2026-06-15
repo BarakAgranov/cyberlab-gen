@@ -192,7 +192,7 @@ A phase block within the manifest contains:
   steps: [<StepBlock>, ...]
   implementation:
     language: python
-    path: attack/phase_1_initial_access.py
+    path: attack/phase_1_initial_access.py  # post-Generator state; the Planner leaves this null (ADR 0079)
     entrypoint: run_phase
 ```
 
