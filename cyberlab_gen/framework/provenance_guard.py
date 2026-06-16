@@ -42,7 +42,13 @@ _PROVENANCE_MARKERS = frozenset({"source", "citations", "framework_enriched"})
 
 
 def _scrub_node(node: object) -> None:
-    """Recursively reset framework-owned provenance + framework-set ids in ``node``.
+    """Recursively reset framework-owned provenance + framework-set ids in ``node`` by SHAPE.
+
+    Used only by :func:`neutralize_patch_provenance` (the pre-validation patch-value path, where
+    a node's type is not yet known so it must be recognized by shape). The whole-spec reset is
+    marker-driven instead (:func:`_reset_owned_instance`, ADR 0087); this shape recognition is the
+    one remaining re-derivation, and is exactly the residual the deferred path→type resolver
+    subsumes (ADR 0087). Two recognizers:
 
     - On every serialized ``Provenance`` mapping (the only model carrying ``framework_enriched``
       alongside ``source``/``citations``): reset ``framework_enriched`` and the three-field
@@ -71,25 +77,57 @@ def _scrub_node(node: object) -> None:
             _scrub_node(item)
 
 
+def _reset_owned_value(value: object) -> object:
+    """Recurse into nested models / lists / dicts, resetting framework-owned fields (ADR 0087)."""
+    if isinstance(value, BaseModel):
+        return _reset_owned_instance(value)
+    if isinstance(value, list):
+        return [_reset_owned_value(item) for item in cast("list[object]", value)]
+    if isinstance(value, dict):
+        return {k: _reset_owned_value(v) for k, v in cast("dict[Any, object]", value).items()}
+    return value
+
+
+def _reset_owned_instance[M: BaseModel](obj: M) -> M:
+    """Return a copy of ``obj`` with its framework-owned fields reset to their declared defaults.
+
+    Walks the model *instance*, so each node's exact class is known (``type(obj)``) and ownership
+    is read from that class's inline ``FrameworkOwned`` markers (ADR 0087) — no shape heuristics,
+    and no annotation/union resolution to get wrong (the instance carries its own type). All owned
+    fields on a node reset together, so the discrepancy-record coupling stays satisfied.
+    """
+    cls = type(obj)
+    owned = framework_owned_fields(cls)
+    updates: dict[str, object] = {}
+    for name, info in cls.model_fields.items():
+        if name in owned:
+            updates[name] = info.get_default(call_default_factory=True)
+            continue
+        value = getattr(obj, name)
+        new_value = _reset_owned_value(value)
+        if new_value is not value:
+            updates[name] = new_value
+    return obj.model_copy(update=updates) if updates else obj
+
+
 def neutralize_framework_owned_provenance(spec: AttackSpec) -> AttackSpec:
     """Return a copy of ``spec`` with every framework-owned field the LLM may not author reset.
 
     Applied to a WHOLE Extractor output — first run, structural retry, grounding retry — at the
     orchestrator's extract seam, before validation / enrichment / grounding. The LLM (re)authored
-    the entire spec on these paths, so the framework scrubs the entire spec. Targeted-patch
+    the entire spec on these paths, so the framework resets the entire spec. Targeted-patch
     refinement is handled at the merge seam instead (:func:`neutralize_patch_provenance`), so a
     prior iteration's legitimate enrichment is not wiped (ADR 0085).
 
-    Resets, across the whole spec: ``framework_enriched`` + the API-override discrepancy record on
-    every ``Provenance``; every ``CveReference.source_of_record`` to ``None``; the top-level
-    ``material_discrepancies`` index to ``[]``; and the lab-level ``reproducibility`` block to
-    ``None`` (framework-derived from the per-step tiers, never authored upfront). Idempotent.
+    Marker-driven (ADR 0087): a walk over the model tree resets every field declared
+    ``FrameworkOwned`` to its default — ``framework_enriched`` + the API-override discrepancy
+    record on every ``Provenance``; every ``CveReference.source_of_record``; the top-level
+    ``material_discrepancies`` index; the lab-level ``reproducibility`` block. The set comes from
+    the inline markers, not the shape heuristics of :func:`_scrub_node` (which remains only for the
+    pre-validation patch-value path, where types are not yet known). Idempotent. Re-validated so
+    the seam hands a self-consistent spec onward.
     """
-    data = spec.model_dump()
-    data["material_discrepancies"] = []
-    data["reproducibility"] = None
-    _scrub_node(data)
-    return type(spec).model_validate(data)
+    return type(spec).model_validate(_reset_owned_instance(spec).model_dump())
 
 
 def neutralize_patch_provenance(new_value: JsonValue) -> JsonValue:

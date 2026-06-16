@@ -13,6 +13,7 @@ exactly the *reset*-mechanism owned fields — those the framework blanks at the
 """
 
 from dataclasses import dataclass
+from functools import cache
 
 from pydantic import BaseModel
 
@@ -22,6 +23,7 @@ class FrameworkOwned:
     """Inline marker: the LLM must never author this field; the framework owns it (ADR 0087)."""
 
 
+@cache
 def framework_owned_fields(model: type[BaseModel]) -> frozenset[str]:
     """Names of the fields on ``model`` declared ``Annotated[..., FrameworkOwned()]``.
 

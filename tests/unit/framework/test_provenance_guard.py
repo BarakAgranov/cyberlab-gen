@@ -86,6 +86,43 @@ def test_neutralize_resets_llm_authored_framework_enriched() -> None:
     assert cleaned_score.source is ProvenanceSource.EXTERNAL_API
 
 
+def test_neutralize_resets_the_full_discrepancy_record() -> None:
+    # The whole API-override discrepancy record is framework-owned (ADR 0087). A poisoned
+    # Provenance carrying all four owned fields must come back fully reset — and consistently
+    # (discrepancy_with_blog=False with both companions None), so re-validation's coupling holds.
+    poisoned = ProvenanceFloat(
+        value=9.8,
+        source=ProvenanceSource.EXTERNAL_API,
+        citations=[CitationBlock(kind=CitationKind.EXTERNAL_API_RESPONSE, reference="NVD")],
+        framework_enriched=True,
+        discrepancy_with_blog=True,
+        overridden_blog_value=5.0,
+        discrepancy_classification="material",
+    )
+    spec = make_spec().model_copy(
+        update={
+            "external_references": ExternalRefsBlock(
+                cves=[
+                    CveReference(
+                        cve_id="CVE-2025-0001",  # type: ignore[arg-type]
+                        description=_api_string("a CVE"),
+                        cvss_score=poisoned,
+                    )
+                ]
+            )
+        }
+    )
+    cleaned = neutralize_framework_owned_provenance(spec)
+    refs = cleaned.external_references
+    assert refs is not None
+    score = refs.cves[0].cvss_score
+    assert score is not None
+    assert score.framework_enriched is False
+    assert score.discrepancy_with_blog is False
+    assert score.overridden_blog_value is None
+    assert score.discrepancy_classification is None
+
+
 def test_neutralize_clears_llm_authored_material_discrepancies() -> None:
     spec = make_spec().model_copy(
         update={
