@@ -47,10 +47,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVerdict, Verdict
 
 # These artifact/result types are *runtime* imports (not TYPE_CHECKING) because
-# ``PipelineState`` is a Pydantic model whose fields reference them, and LangGraph
-# calls ``typing.get_type_hints`` on the state schema at graph-build time — under
-# ``from __future__ import annotations`` the hints must resolve at runtime. ruff's
-# TC001 wrongly wants them in a type-checking block; the noqa pins the requirement.
+# ``PipelineState`` is a Pydantic model whose fields reference them and LangGraph calls
+# ``typing.get_type_hints`` on the state schema at graph-build time, which evaluates the field
+# annotations — so the referenced types must be importable at runtime. This holds with or
+# without ``from __future__ import annotations``: PEP 563 defers *when* an annotation is
+# evaluated, not *whether* its names must exist when ``get_type_hints`` resolves them (ADR 0083
+# correction). ruff keeps these field-type imports out of a TYPE_CHECKING block via
+# ``[tool.ruff.lint.flake8-type-checking] runtime-evaluated-base-classes`` (the Pydantic bases).
 from cyberlab_gen.agents.results import ExtractionResult
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult, enrich
