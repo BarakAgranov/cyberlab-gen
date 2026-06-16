@@ -71,8 +71,10 @@ class Provenance[T](ArtifactModel):
     # writes/rewrites: ``external_api`` + ``framework_enriched=True`` is the framework's own
     # authoritative call (the API-response citation IS the evidence — no agent tool-call
     # required), distinct from an agent-claimed ``external_api`` value (which must have matching
-    # trace evidence, search-before-claim). The grounding stack and the jury EXEMPT
-    # framework_enriched fields from the agent-trace requirement (ADR 0052 / 0061, schema.md §4.9).
+    # trace evidence, search-before-claim). The only *mechanical* exemption is the grounding
+    # stack's CVE-scoped search-before-claim check (``grounding_validator.py``); the Extractor-Jury
+    # is an LLM agent that consumes that findings set and has no independent mechanical exemption of
+    # its own (ADR 0052 / 0061, schema.md §4.9).
     framework_enriched: bool = False
 
     @model_validator(mode="after")
