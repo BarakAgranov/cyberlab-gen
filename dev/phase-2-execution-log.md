@@ -184,6 +184,60 @@ sweep still tracked (ADR 0004).
 
 ---
 
+## Architect-review follow-up #2: declared field ownership (2026-06-16)
+
+**Context.** A second architect review of the ADR-0085 close-out hypothesized a patch-path
+blind spot in the same class as #7. Item-1 VERIFY (read-only + 4 scratch probes on real HEAD +
+a 3-skeptic adversarial workflow, all `overall_refuted: false`) **confirmed** it and found a
+fourth shape the review didn't name: `apply_field_patch` imposes no content-field restriction,
+and `neutralize_patch_provenance` scrubs by *shape*, so four forged framework-owned values reach
+both the jury and disk on the refine path — (A) bare-leaf `source_of_record`, (B) top-level
+`material_discrepancies`, (C) top-level `reproducibility`, (D) bare-leaf `framework_enriched` on
+an already-`external_api` field (the `§1.6` hole: bypasses the enrichment no-op + the grounding
+exemption). The existing `test_patch_cannot_forge_*` tests covered only whole-sub-tree shapes.
+
+**Built (ADR 0087, 3 commits).**
+- `cyberlab_gen/schemas/framework_owned.py`: `FrameworkOwned` inline marker (frozen dataclass,
+  kept extensible for a future `mechanism` field) + cached `framework_owned_fields(model)`.
+- Marked the reset-mechanism owned fields inline: `Provenance.{framework_enriched,
+  discrepancy_with_blog, overridden_blog_value, discrepancy_classification}`,
+  `CveReference.source_of_record`, `AttackSpec.{material_discrepancies, reproducibility}`.
+- `provenance_guard.framework_owned_path_buckets()` generates the patch-path denylist from the
+  markers (root-marked → top-level segment; nested-marked → leaf name) via a reachable-models
+  walk; `apply_field_patch` now rejects a framework-owned target path (`RefinementPathError`).
+  Closes A/B/C/D. Coverage test pins the generated denylist against the markers.
+- `neutralize_framework_owned_provenance` rewritten as a marker-driven **instance** walk (exact
+  `type()` per node, no shape heuristics, no union ambiguity); `_scrub_node` stays only for the
+  pre-validation patch-value path (the deferred path→type residual).
+- Fold-ins: `stamp_framework_provenance` docstring → ADR 0086/0087; ADR-0085 consequence note
+  corrected (the no-forge claim was shape-scoped; now enforced by the path-check); ADR 0086
+  marked partially-superseded.
+
+**Decisions.** ADR 0087 (ownership declared inline; consumers derive; supersedes 0086's
+hand-audit + inventory table, keeps the four-mechanism split).
+
+**Surprises / drift.**
+- `reproducibility` is the **one** ambiguous name in AttackSpec — framework-owned on `AttackSpec`
+  (top-level, derived), authored content on `ChainStep` (per-step). Flat positional bucketing
+  separates them today; it **provably collapses for LabManifest**, where `CoreBlock.reproducibility`
+  (owned, `manifest.py:89`) is *nested* alongside `StepBlock.reproducibility` (content,
+  `manifest.py:288`). That collision (already in the declared schema) is the concrete trigger
+  for the deferred marker-aware path→type resolver (ADR 0087 "recorded, not built").
+- `AlternativePath.reproducibility_summary` classified **authored, not owned** (schema.md §4.8
+  "captured… not generated"); deliberately unmarked, with a code comment, and flagged for the
+  architect to overrule if alt-path summaries are meant to be a framework rollup.
+- The inline-`Annotated` marker survives the `Provenance[T]` generic + ADR-0066 pickle path
+  (spiked on the real `Provenance` before building) — so inline over per-model ClassVar.
+
+**Deferred.** Marker-aware runtime path→type resolution (triggered by LabManifest refinement);
+stamp-mechanism fields (`spec_version`, `extraction_metadata.model`) join the marker set when
+`FrameworkOwned` carries `mechanism`. Manifest-side stamping + `StepBlock.reproducibility`
+carry-integrity still Planner-coupled (seams). `BaseModel→ArtifactModel` doc sweep (ADR 0004).
+
+**Verify.** `just verify` green — 777 passed / 1 skipped.
+
+---
+
 ## Execution-log entry template
 
 ```

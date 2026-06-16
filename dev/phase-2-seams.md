@@ -122,6 +122,22 @@ they are built. The rest, tracked:
   Layer-2 check asserting `StepBlock.reproducibility == source ChainStep.reproducibility`; decide
   whether an explicit `StepBlock → chain_step` back-ref is needed then (it depends on whether the
   Per-phase Generator needs an explicit step→tier mapping). Phase-2 Task-3 call.
+- **Marker-aware refinement path→type resolver** (ADR 0087). The AttackSpec patch-path check is a
+  flat positional denylist (root-marked field → top-level segment; nested-marked → leaf name),
+  generated from the inline `FrameworkOwned` markers. It is correct for AttackSpec (its one
+  ambiguous name, `reproducibility`, is positionally separable) and **expires at LabManifest
+  refinement**, where `CoreBlock.reproducibility` (owned, nested) collides with
+  `phases[*].steps[*].reproducibility` (content, nested) — both nested, so position can't tell
+  them apart. **Trigger:** the first time refinement runs over a `LabManifest`. Build a resolver
+  that walks a `field_path` string (with `[i]` indices, through `Optional`/`list[T]`/`Provenance[T]`)
+  to its exact `(model, field)` and reads that field's marker — and mark the manifest's
+  framework-owned fields inline at their definition sites then (the declaration extends for free).
+  Until then the patch-value scrub (`_scrub_node`, shape-based) is the residual this subsumes.
+- **Stamp-mechanism fields join the marker set** (ADR 0087). `spec_version` and
+  `extraction_metadata.model` are framework-owned via the *stamp* mechanism, not *reset*; they are
+  intentionally unmarked today because a mechanism-less `FrameworkOwned` marker would mis-drive the
+  whole-spec reset-walk to blank them. Mark them — and dispatch consumers on mechanism — when
+  `FrameworkOwned` gains its `mechanism` field.
 
 ---
 

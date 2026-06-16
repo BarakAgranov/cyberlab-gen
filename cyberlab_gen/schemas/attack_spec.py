@@ -214,6 +214,10 @@ class AlternativePath(ArtifactModel):
     description: ProvenanceString
     chain_steps: list[ChainStep] = Field(min_length=1)
     shares_steps_with_canonical: list[KebabId] = Field(default_factory=list[KebabId])
+    # Extractor-AUTHORED, captured from the blog (schema.md §4.8: alt paths are "captured… not
+    # generated in this lab"). NOT framework-owned — do not mark FrameworkOwned, or a legitimate
+    # refine of an alt-path summary would be rejected (ADR 0087). Unlike the lab-level
+    # ReproducibilityBlock, which is derived; revisit if alt-path summaries become a rollup.
     reproducibility_summary: ReproducibilityTier
 
 

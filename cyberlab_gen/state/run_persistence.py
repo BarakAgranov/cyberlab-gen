@@ -89,12 +89,14 @@ def stamp_spec_version[S: SpecEnvelope](spec: S) -> S:
 
 
 def stamp_framework_provenance(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:
-    """Stamp every framework-owned provenance field the LLM must not author, in one call.
+    """Apply every *stamp-mechanism* framework-owned field in one call.
 
-    The single place that applies the framework's stamps to a spec before it ships or persists:
-    the billed model (ADR 0065) and the schema version (ADR 0069). Callers use this rather than the
-    individual stampers so a new framework-owned field is added in exactly one place and can never
-    be forgotten at a ship/persist site.
+    The single STAMP seam before a spec ships or persists: the billed model (ADR 0065) and the
+    schema version (ADR 0069). Stamp is one of the four framework-owned-field mechanisms (ADR 0086:
+    stamp / reset / derive / absent-from-LLM-schema); the *reset* mechanism has its own home
+    (``framework/provenance_guard.py``). Ownership itself is declared inline on each field
+    (``FrameworkOwned``, ADR 0087), so a new stamp-mechanism field is added here and marked there.
+    Callers use this rather than the individual stampers so a stamp-seam field is never forgotten.
     """
     return stamp_spec_version(stamp_billed_model(spec, ledger))
 

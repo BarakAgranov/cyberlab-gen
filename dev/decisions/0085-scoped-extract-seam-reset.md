@@ -60,18 +60,35 @@ the architect's invariant. Two seams, by what the run wrote:
 
 `apply_field_patch` is the sole production refine-merge (`extractor.py:195`), so scrubbing there
 covers the whole refinement path while keeping the agent layer out of framework sanitization
-(`§1.5`). The compensating safety property is preserved: a patch still cannot author
-`framework_enriched` / the discrepancy record / a `source_of_record`.
+(`§1.5`). The compensating safety property holds for a **whole-object** patch — the shape
+`neutralize_patch_provenance` scrubs: a whole-`Provenance` or whole-`CveReference` `new_value`
+cannot carry a forged `framework_enriched` / discrepancy record / `source_of_record`. **A
+bare-leaf or top-level-index patch slips this shape-scrub** (a scalar leaf, or a top-level index
+whose entries lack the markers); that residual gap is closed in **ADR 0087** — see Correction.
 
 ## Consequences
 
 - **+** A blog-vs-API material discrepancy now survives a jury revise (regression test:
   `test_refinement_preserves_prior_enrichment_discrepancy`); the `§1.6` self-stamping guard is
-  unchanged on first-run and now also enforced on patch content
+  unchanged on first-run and enforced on **whole-object** patch content
   (`test_patch_cannot_forge_*`); `source_of_record` and lab-level `reproducibility` can no longer
-  be LLM-forged (`test_neutralize_nulls_*`).
+  be LLM-forged via a whole-object patch (`test_neutralize_nulls_*`).
 - **+** The reset scope now matches authorship, the principle ADR 0086 generalizes.
 - **−** The refinement path's safety now depends on `apply_field_patch` being the sole merge seam.
   This is an architectural invariant (`architecture.md §1.7`), documented at both call sites.
 - **Untouched:** the first-run threat model and behavior of ADR 0082 are unchanged; only the
   over-broad application to the *merged refine output* is withdrawn.
+
+## Correction (2026-06-16 — ADR 0087)
+
+The asserted no-forge property above was **shape-scoped**: `neutralize_patch_provenance`
+recognizes a forgery by the serialized shape (`{source,citations,framework_enriched}` /
+`cve_id`), so it caught only **whole-object** patches. A follow-up architect review proved four
+patch shapes that slip it and reach both the jury and disk: a bare-leaf `source_of_record`, a
+bare-leaf `framework_enriched` on an already-`external_api` field (the `§1.6` mechanical-safety
+hole), and a top-level-index `material_discrepancies` / `reproducibility`. The path-value scrub
+of this ADR cannot catch them (a bare scalar carries no shape; a top-level index is deliberately
+not touched). **ADR 0087** closes the gap: `apply_field_patch` now *rejects* any `field_path`
+that targets a framework-owned field, with the denylist generated from inline `FrameworkOwned`
+markers. This ADR's reset-scope narrowing stands; its no-forge claim is now enforced by the
+path-check, not by the shape-scrub alone.
