@@ -125,7 +125,7 @@ The Extractor must execute a real search call against external sources for any i
 
 The jury produces a judgment; the framework reads the verdict and decides what to do: `approve` → continue; `revise` → the framework hands the Extractor the prior AttackSpec plus the jury's *structured*, field-level feedback, and the Extractor returns a **patch** for only the flagged fields (counts against refinement budget; see `architecture.md §1.7` and `schema.md §4.9`); `reject` → pipeline halts with explanation.
 
-**Tools.** Same as Extractor (same tool inventory, same external sources). The jury can independently verify external API responses.
+**Tools.** A **verify-only** subset of the Extractor's tools (ADR 0078): the read/verify external-source lookups (`external_lookup`) to independently check API responses, but **no `propose_*`** tools — proposal authorship belongs to the producer (the Extractor), not the jury. The jury flags missing or wrong proposals; it does not make them. (See the §5.18 tool matrix, which is the authoritative split.)
 
 **Provenance discipline.** The *mechanical* half — that an `external_api` field has matching tool-call evidence in the trace at all — is the stack's provenance-structure layer (`validation.md §6.10.2`); the jury consumes that and adds the *semantic* half it is uniquely for, verifying that each `source` claim actually holds:
 
@@ -198,7 +198,7 @@ Specified in `pipeline.md §3.2.4`; not repeated here. Brief: deterministic fram
 - Decisions about `step_composition` (sequential vs independent), `execution_context`, `provisioning_mechanism`, and `on_dependency_failure` are Planner inferences with the same `source: llm_inference` shape.
 - The Planner does not invent content; it organizes and structures content the AttackSpec already established. New content fields the Planner creates (e.g., a phase's `short_description`) carry `source: llm_inference` with citations into the AttackSpec's chain steps that grounded the inference.
 
-**Lab class is emergent (per `architecture.md §0.7`).** The Planner does not pre-classify the lab into a shape. For each chain step, it applies the §4.20 reproducibility preference ladder *at the step level*: prefer `full`, fall back to `partial_simulation`, then `demonstration_only`, then drop the step. The lab's overall shape is a result of these step-by-step decisions. Phase shape emerges from the mix of step classifications. Each fallback is recorded in the manifest with rationale.
+**Lab class is emergent (per `architecture.md §0.7`).** The Planner does not pre-classify the lab into a shape, and it does not re-apply the §4.20 reproducibility ladder — the per-step tier was assigned by the Extractor and is carried forward *unchanged* (`§0.7`). Working at the step level, the Planner decides how each carried-forward step is realized — a phase, a step within a phase, a lab resource, a prereq, or dropped when the tier is `not_reproducible` — and records that rationale in the manifest. The lab's overall shape is the result of these per-step tiers plus the Planner's structural decomposition; phase shape emerges from the mix.
 
 **Missing-value-type routing.** Missing value types are detected at two points:
 
@@ -211,7 +211,7 @@ Specified in `pipeline.md §3.2.4`; not repeated here. Brief: deterministic fram
 - Every phase declared with required fields.
 - All input types reference value_types registry entries that the Extractor either found or proposed. The Planner never falls back to untyped values.
 - No phase has a circular dependency on another.
-- Reproducibility classifications honored: `not_reproducible` chain steps are either dropped or become `demonstration_only` phases; `partial_simulation` chain steps may become real phases with `lab_class_signal:simulated_components` declared.
+- Reproducibility classifications honored: `not_reproducible` chain steps are dropped (never silently upgraded — the Planner does not re-tier, `§0.7`); `demonstration_only` chain steps become demonstration-only phases; `partial_simulation` chain steps may become real phases with `lab_class_signal:simulated_components` declared.
 
 **Failure modes.**
 
@@ -226,11 +226,11 @@ Specified in `pipeline.md §3.2.4`; not repeated here. Brief: deterministic fram
 - The Planner does not write code or IaC. The output is a "skeleton" manifest with all metadata and structure but no implementation.
 - **No fixed phase count.** Phases are however many the chain has, after the Planner's grouping. Long blogs produce long labs; the architecture supports them via chaptered docs (§5.13) and `--from-phase` setup (§5.11).
 
-**Global decisions vs. lab-class assignment.** The Planner makes decisions that span the whole lab — phase decomposition, facet declarations, derived lab-level reproducibility. These are global decisions but not lab-class assignments.
+**Global decisions vs. lab-class assignment.** The Planner makes decisions that span the whole lab — phase decomposition, facet declarations, and the lab-level reproducibility the framework derives from the carried-forward per-step tiers. These are global decisions but not lab-class assignments.
 
 The architecture deliberately rejects the notion of *a* lab class. A lab can be multiple things at once: a vulnerability disclosure that's also an incident analysis, a supply-chain compromise that demonstrates a cross-tenant capability, a misconfiguration with a privilege-escalation chain. The thesis `types` field is a list precisely because labs are multi-typed in practice (`schema.md §4.8`).
 
-What the Planner does *not* do is assign a master classification that downstream agents key behavior off of. There is no "if lab is class X, generate this kind of artifact." There is "for each chain step, apply §4.20's preference ladder; for each phase, derive composition from declared inputs/outputs; for each facet, declare based on what the manifest's content implies." Behavior emerges from per-step and per-phase decisions, not from a top-level type or class label.
+What the Planner does *not* do is assign a master classification that downstream agents key behavior off of. There is no "if lab is class X, generate this kind of artifact." There is "for each chain step, carry forward its Extractor-assigned reproducibility tier unchanged and decide its structural realization; for each phase, derive composition from declared inputs/outputs; for each facet, declare based on what the manifest's content implies." Behavior emerges from per-step and per-phase decisions, not from a top-level type or class label.
 
 The `thesis.types` list is *descriptive* (this lab matches these types) not *prescriptive* (downstream behavior is determined by these types). Generators read step composition, execution context, declared facets, and per-step reproducibility; they do not read `thesis.types` as a behavior switch.
 
@@ -246,7 +246,7 @@ The `thesis.types` list is *descriptive* (this lab matches these types) not *pre
 
 **Output.** Approval or refinement request, same shape as Extractor-Jury.
 
-**Tools.** Same as Planner.
+**Tools.** A **verify-only** subset of the Planner's tools (ADR 0078): read/verify external-source lookups to check the Planner's external_api findings, but **no `propose_*`** tools. The jury flags facet/value-type proposal gaps; it does not propose. (See the §5.18 tool matrix.)
 
 **Provenance discipline.** Verifies Planner decisions trace to AttackSpec content. Phases must be derivable from chain steps; lab_resources must be implied by chain preconditions or explicit blog mentions; prereqs must be sourced from blog or framework defaults.
 
@@ -260,7 +260,7 @@ The `thesis.types` list is *descriptive* (this lab matches these types) not *pre
 - No undeclared dependencies between phases.
 - Demonstration-only phases correctly marked.
 - Per-step reproducibility correctly preserved from AttackSpec; lab-level reproducibility correctly derived per the any-heterogeneity-mixed rule from `schema.md §4.8`.
-- Fallback decisions per `schema.md §4.20` are documented honestly (no shortcut to demonstration-only when full was achievable). At LabPlan level — Generator-level fallbacks are reviewed by the Critic in §5.14.
+- Fallback decisions per `schema.md §4.20` are documented honestly (no shortcut to demonstration-only when full was achievable). At LabManifest level — Generator-level fallbacks are reviewed by the Critic in §5.14.
 
 **Failure modes.**
 
@@ -580,7 +580,7 @@ cd infra && terraform destroy -auto-approve
 
 - Whether declared types and shapes are *correct for the attack* (not just internally consistent — e.g., manifest declares `aws_credentials` and code returns `aws_credentials`, but they're IAM-user creds when the attack semantically requires role-assumption creds).
 - Whether the attack's semantics are reproduced (e.g., the IAM policy actually grants the access the attack needs; the payload actually exploits the vulnerability).
-- Whether fallback decisions made by the Generator (per `schema.md §4.20`) were honest — did the agent settle for `partial_simulation` when `full` was achievable? At implementation level — LabPlan-level fallbacks were reviewed by the Planner-Jury per §5.8.
+- Whether fallback decisions made by the Generator (per `schema.md §4.20`) were honest — did the agent settle for `partial_simulation` when `full` was achievable? At implementation level — LabManifest-level fallbacks were reviewed by the Planner-Jury per §5.8.
 
 **Non-first-class runtime adjustment.** When the lab targets non-first-class runtimes (per `schema.md §4.13`), the Critic's confidence reflects reduced coverage in Layer 2 cross-checks and the absence of platform-specific verification.
 
@@ -765,9 +765,9 @@ Agents have overlapping concerns by nature — the Planner thinks about reproduc
 | AttackSpec structural validity | Validator Layer 1 | Extractor-Jury (semantic check) |
 | Provenance correctness on AttackSpec fields | Extractor-Jury | — |
 | Phase decomposition reasonableness | Planner-Jury | — |
-| LabPlan structural validity | Validator Layer 1 | Planner-Jury (semantic check) |
+| LabManifest structural validity | Validator Layer 1 | Planner-Jury (semantic check) |
 | Provenance correctness on Manifest fields | Planner-Jury | — |
-| Fallback decision honesty (LabPlan-level — what the Planner chose) | Planner-Jury | — |
+| Fallback decision honesty (LabManifest-level — what the Planner chose) | Planner-Jury | — |
 | Fallback decision honesty (implementation-level — what the Generator chose) | Critic | — |
 | Implementation correctness against attack semantics | Critic | Validator Layer 2 (mechanical sub-check) |
 | Code-manifest cross-check (mechanical) | Validator Layer 2 | — |
@@ -791,7 +791,7 @@ Reading the table:
 
 - Each row has exactly one owner. "Other agents involved" means they may inform or feed back, but they are not authoritative for that concern.
 - "Provenance correctness" is split — the Extractor-Jury checks AttackSpec provenance, the Planner-Jury checks Manifest provenance. The Critic does not re-verify provenance (different concerns at different stages).
-- "Fallback decision honesty" is split between LabPlan-level (Planner-Jury) and implementation-level (Critic). Different artifacts, different observers, different levels.
+- "Fallback decision honesty" is split between LabManifest-level (Planner-Jury) and implementation-level (Critic). Different artifacts, different observers, different levels.
 
 This table is the canonical answer to "who checks X?" If a quality concern arises that doesn't have a row here, the architecture has a gap — add the row, choose the owner, document.
 

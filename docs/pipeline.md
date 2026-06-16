@@ -20,7 +20,7 @@ cyberlab-gen has **two pipelines**:
 
 The generation pipeline runs in one of two modes:
 
-- **`--interactive`** (default) pauses at typed-artifact interrupts so the user can review the AttackSpec and the LabPlan before they propagate downstream. Used for one-shot careful generation.
+- **`--interactive`** (default) pauses at typed-artifact interrupts so the user can review the AttackSpec and the LabManifest before they propagate downstream. Used for one-shot careful generation.
 - **`--auto`** runs through without interrupts. Used for batch eval runs, CI, or experienced users who trust the system on familiar blog patterns.
 
 **Headless usage.** When stdin is not a TTY (CI, scripts, pipes), `--interactive` is rejected at startup with a clear message pointing to `--auto`. The tool never hangs silently waiting for input that can't arrive.
@@ -38,7 +38,7 @@ Notices in v1:
 
 **Notices are informational and do not gate the pipeline, with one exception:** the *out-of-scope* notice halts in `--auto` mode (because there's no useful work to continue with), and surfaces as a normal interrupt in `--interactive` mode where the user can choose to proceed anyway.
 
-**Typed-artifact interrupts** pause the pipeline at structural boundaries. The user sees the typed artifact (AttackSpec after Extractor, LabPlan after Planner) and chooses among four options:
+**Typed-artifact interrupts** pause the pipeline at structural boundaries. The user sees the typed artifact (AttackSpec after Extractor, LabManifest after Planner) and chooses among four options:
 
 1. **Approve** — accept the artifact as-is; the pipeline continues.
 2. **Provide natural-language feedback** — the upstream agent re-runs with the user's free-text feedback wrapped in a structured `UserFeedback` object.
@@ -179,7 +179,7 @@ In `--auto` mode, this stage does not exist; the pipeline continues directly fro
 
 **Output.** A verdict, same shape as Extractor-Jury.
 
-**Responsibilities.** Verify Planner decisions trace to AttackSpec content. Phase decomposition is reasonable. Facets declared *by the Planner* (`runtime:*` and lab-derived `lab_class_signal:*`) match what the manifest fields imply. Facets inherited from the AttackSpec were already reviewed by the Extractor-Jury and are taken as-is. LabPlan-level fallback decisions per `schema.md §4.20` are documented honestly (no shortcut to demonstration-only when full was achievable). Generator-level fallbacks are reviewed by the Critic, not the Planner-Jury.
+**Responsibilities.** Verify Planner decisions trace to AttackSpec content. Phase decomposition is reasonable. Facets declared *by the Planner* (`runtime:*` and lab-derived `lab_class_signal:*`) match what the manifest fields imply. Facets inherited from the AttackSpec were already reviewed by the Extractor-Jury and are taken as-is. LabManifest-level fallback decisions per `schema.md §4.20` are documented honestly (no shortcut to demonstration-only when full was achievable). Generator-level fallbacks are reviewed by the Critic, not the Planner-Jury.
 
 The Planner-Jury also reviews any `runtime:*` or lab-derived `lab_class_signal:*` facet proposals the Planner emitted, with the same Accept/Edit semantics as the Extractor-Jury reviews value-type proposals.
 
@@ -189,7 +189,7 @@ Same disagreement-without-progress handling as Extractor-Jury (§3.2.3): exhaust
 
 In `--interactive`, the pipeline pauses here. The user sees two distinct review surfaces:
 
-**For the LabPlan itself**, the four-option menu from §3.1.1: Approve / Natural-language feedback (Planner re-runs) / Edit in `$EDITOR` / Abort.
+**For the LabManifest itself**, the four-option menu from §3.1.1: Approve / Natural-language feedback (Planner re-runs) / Edit in `$EDITOR` / Abort.
 
 **For each facet proposal from the Planner** (see `schema.md §4.16`): Accept or Edit. Edited proposals are revalidated; structurally invalid edits reopen the editor with errors as comments. (The Planner does not propose value types; value-type proposals all come from the Extractor and were reviewed at the post-Extractor interrupt.)
 
@@ -349,9 +349,9 @@ All inter-stage boundaries are typed Pydantic models. Free-text never crosses ag
 | Pre-Planner enrichment | Extractor-Jury | `AttackSpec` (enriched) |
 | Extractor-Jury | Post-Extractor interrupt | `AttackSpec` (enriched, approved) |
 | Post-Extractor interrupt | Planner | `AttackSpec` (approved) |
-| Planner | Planner-Jury | `LabPlan` |
-| Planner-Jury | Post-Planner interrupt | `LabPlan` (approved) |
-| Post-Planner interrupt | Generator | `LabPlan` (approved) |
+| Planner | Planner-Jury | `LabManifest` |
+| Planner-Jury | Post-Planner interrupt | `LabManifest` (approved) |
+| Post-Planner interrupt | Generator | `LabManifest` (approved) |
 | Per-phase Generators | Lab-level Generator | working directory + `LabManifest` (in-progress) |
 | Lab-level Generator | Cleanup Generator | working directory + manifest |
 | Cleanup Generator | Docs Generator | working directory + manifest |
@@ -536,7 +536,7 @@ When the user submits, the sanitized report contains:
 - **The blog.** Full URL. The blog is public; sending its URL doesn't compromise anyone.
 - **Pipeline trace.** Per-stage timing, retries with causes, refinement iteration causality log.
 - **Per-agent / per-model token counts and costs.**
-- **All artifacts produced by the run.** AttackSpec, LabPlan, LabManifest, generated lab content (Terraform, scripts, docs). All derived from the public blog.
+- **All artifacts produced by the run.** AttackSpec, LabManifest, generated lab content (Terraform, scripts, docs). All derived from the public blog.
 - **Validation results.** Per layer with specific findings; Critic verdict, per-phase confidence, and concerns.
 - **Outcome.** (success / partial / abandon) and cause.
 - **Registry state.** Entries used, proposals made (with full content), user disposition at interrupts (accept/edit).

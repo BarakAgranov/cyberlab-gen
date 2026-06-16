@@ -122,7 +122,7 @@ cyberlab-gen/
 └── CALIBRATION.md               # Locked decisions log, empty in P0
 ```
 
-**CLI scaffolding.** The four verbs from `architecture.md §2.1` exist as stubs:
+**CLI scaffolding.** These verbs from `architecture.md §2.1` exist as Phase-0 stubs (`extract` and `plan` are built later, in Phases 1 and 2):
 
 - `cyberlab-gen generate <url>` — prints "not implemented in P0"
 - `cyberlab-gen fix <lab-dir>` — same
@@ -340,7 +340,7 @@ Record each locked value in `CALIBRATION.md` with the evidence that drove it.
 
 ### 4.5 Exit criteria
 
-- `cyberlab-gen extract <url>` produces a valid AttackSpec for at least 4 of 5 curated blogs in N=3 runs.
+- `cyberlab-gen extract <url>` produces a valid AttackSpec for at least 2 of the 3 curated blogs in N=3 runs (the third is a synthetic long-blog fixture with no live URL, excluded from the live-run gate).
 - Layer 1 pass rate ≥ 95% on the curated set.
 - Completeness scores cluster in a defensible band on the curated set.
 - Asymmetric jury threshold calibration is documented in `CALIBRATION.md` with the evidence.
@@ -365,7 +365,7 @@ Tag `v0.2`. Move to Phase 2.
 
 ### 5.1 Scope
 
-Phase 2 builds the second major agent and the second jury. By the end, `cyberlab-gen plan <attack-spec.yaml>` produces a `lab-manifest.yaml` skeleton — phases, lab resources, prereqs, inputs, outputs, facets — with no code paths.
+Phase 2 builds the second major agent and the second jury. By the end, `cyberlab-gen plan <attack-spec.yaml>` produces a `lab.yaml` (the LabManifest) skeleton — phases, lab resources, prereqs, inputs, outputs, facets — with no code paths.
 
 Phase 2 is where the manifest's role as "single source of truth" starts to matter. Every Phase 3+ agent reads it. The shape decided here is locked.
 
@@ -383,7 +383,7 @@ Phase 2 is where the manifest's role as "single source of truth" starts to matte
 **Manifest schema (full).** Build out the Pydantic models for every Manifest block:
 
 - `CoreBlock` with the structured `reproducibility` block (mirrors AttackSpec shape per `schema.md §4.4`).
-- `FacetReference`.
+- `facets`: a list of facet-name references (registry-validated `FacetName` strings, resolved at Layer 1) — not a bespoke block.
 - `PrereqBlock` (pre_lab / mid_lab split).
 - `InputBlock`.
 - `LabResourceBlock` — including the `lab_role` list (values: `attack_target`, `attacker_infrastructure`, `defender_infrastructure`, `neutral`) and optional `role_notes` dict per `schema.md §4.4`.
@@ -392,7 +392,7 @@ Phase 2 is where the manifest's role as "single source of truth" starts to matte
   - `produces_world_state` entries with the `identifier_kind: static | runtime_generated` discriminator per `schema.md §4.5`. For `static`: `identifier` field. For `runtime_generated`: `identifier_source` field pointing into the phase's output dict.
   - `on_dependency_failure` with default `warn` (per `schema.md §4.5`).
   - `step_composition`, `execution_context`, `provisioning_mechanism`.
-  - `steps` (list of `StepBlock` from Phase 1).
+  - `steps` (list of `StepBlock` — manifest-only and **new in Phase 2**; distinct from the AttackSpec's narrative `ChainStep`, which Phase 1 built).
 - `OutputBlock`.
 
 **Planner-Jury agent.** Per `agents.md §5.8`:
@@ -418,7 +418,7 @@ In Phase 2 there is no per-phase code yet, so Layer 2's code-vs-manifest checks 
 
 - Same four-option menu as post-Extractor.
 - Per-proposal menu for Planner-emitted facet proposals (Accept/Edit; edits revalidated).
-- In Phase 2, no `references_lab_outputs` exists yet (no code), so that surface is inert; the LabPlan and proposal surfaces are live.
+- In Phase 2, no `references_lab_outputs` exists yet (no code), so that surface is inert; the LabManifest and proposal surfaces are live.
 
 **Refinement coordinator (extended).** Now handles:
 
@@ -454,7 +454,7 @@ Grow to 8–10 blogs. Add blogs that exercise:
 
 ### 5.5 Exit criteria
 
-- `cyberlab-gen plan` produces a valid LabManifest for ≥4 of 5 Phase 1 blogs and at least 2 of the Phase 2 additions.
+- `cyberlab-gen plan` produces a valid LabManifest for at least 2 of the 3 Phase 1 curated blogs and at least 2 of the Phase 2 additions.
 - Layer 1 + Layer 2 cross-block checks pass on ≥90% of curated runs.
 - Lab-level reproducibility classification is correct per the any-heterogeneity rule on every test case.
 - `lab_role` lists populate sensibly on lab_resources for at least one multi-role example (e.g., a logging bucket that's both `defender_infrastructure` and `attack_target`).

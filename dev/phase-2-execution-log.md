@@ -91,6 +91,44 @@ pytest 746 passed / 1 skipped.
 
 ---
 
+## Task 0: Architect doc reconciliation  (2026-06-16)
+
+**Built (docs only).** Reconciled the Phase-2 reading-path drift (brief Task 0) plus the new
+drifts an engineering audit surfaced:
+- **Reproducibility ownership (ADR 0081 follow-up).** `architecture.md §0.7` + `agents.md §5.7` +
+  `schema.md §4.8`: the Extractor assigns the per-step tier (applies the §4.20 ladder); the Planner
+  carries it forward *unchanged* and decides structural realization; the **framework** derives the
+  lab-level rollup (`§1.5`). Removed the stale "Planner/Generator applies the ladder" (D3) and
+  "`not_reproducible`→`demonstration_only`" upgrade (D4) lines; `schema.md §4.8` now attributes the
+  derivation to the framework (D2). Added the carried-forward `reproducibility` to the §4.7
+  manifest-step YAML example (D-04).
+- **LabPlan → LabManifest (D-01).** `pipeline.md` + `agents.md` called the Planner's artifact
+  "LabPlan" (no such model exists); renamed throughout, fixed the §3.3 contract-table rows, and
+  dropped the duplicate in the artifacts list.
+- **CLI verbs.** `architecture.md §2.1` listed four verbs; added `extract` (Phase 1) and `plan`
+  (Phase 2) per the locked `extract → plan → generate` staging.
+- **implementation-plan.md §5.** Phantom `FacetReference` block (D-02 → `facets: list[FacetName]`);
+  "StepBlock from Phase 1" (D-03 → manifest-only, new in Phase 2); `lab-manifest.yaml`→`lab.yaml`
+  (D-05); the LabPlan ref; and the `4 of 5` blog count → `2 of the 3` (the Phase-1 curated set is 3,
+  one synthetic with no live URL).
+- **Jury tools verify-only (D-07).** `agents.md §5.5`/`§5.8` "Same as Extractor/Planner" → the
+  ADR-0078 verify-only contract (no `propose_*`); the §5.18 matrix was already correct.
+
+**Already done / deferred.**
+- `material_discrepancies` doc mirror — **already present** in `schema-details.md §4.9` (the
+  `dev/phase-2-seams.md §3` entry was stale; corrected).
+- `BaseModel`→`ArtifactModel` `schema-details.md` sweep — **deferred per ADR 0004**, which explicitly
+  rejected a blanket sweep (~50 classes; §6 / `MergedRegistries` need per-class code checks — some are
+  `InternalModel`, not `ArtifactModel`) in favor of incremental-per-transcription. Not done as a
+  blanket Task-0 edit; remains tracked.
+
+**Decisions.** ADR 0081 (per-step reproducibility placement), 0082 (framework-provenance
+neutralization), 0083 (convention reconciliation) — opened across the audit follow-up.
+
+**Verify.** `just verify` green — 763 passed / 1 skipped (doc-only edits in this entry).
+
+---
+
 ## Execution-log entry template
 
 ```

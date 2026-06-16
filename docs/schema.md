@@ -259,6 +259,10 @@ A step block within a phase contains:
           path: detection/phase_1/sigma.yml
         - format: kql
           path: detection/phase_1/sentinel_kql.yml
+  reproducibility:                            # carried forward unchanged from the ChainStep (ADR 0081)
+    classification: full                      # full | partial_simulation | demonstration_only | not_reproducible
+    caveats: <provenance-wrapped string>
+    why: <provenance-wrapped string>
   cli_equivalent:
     - "aws s3 ls s3://target-bucket --no-sign-request"
   outputs:
@@ -439,7 +443,7 @@ reproducibility:
 
 The any-heterogeneity-mixed rule is more honest than a weakest-tier rule. A lab with 9 `full` phases and 1 `demonstration_only` phase is qualitatively different from a fully-demonstration lab; calling both "demonstration_only" misleads the user. `mixed` plus caveats accurately describes what the user has.
 
-The Planner applies the rule mechanically and records the derivation in `derivation_trace`. The Docs Generator reads the classification and caveats to write README copy that matches what the user will actually experience.
+The **framework** applies the rule mechanically — it is a deterministic rollup over the per-step tiers, not an LLM judgment (`architecture.md §1.5`) — and records the derivation in `derivation_trace`. The Docs Generator reads the classification and caveats to write README copy that matches what the user will actually experience.
 
 **`extraction_metadata`** — extractor version, model, completeness score, list of unknown fields, citations count, notes for the Planner.
 

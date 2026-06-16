@@ -131,9 +131,12 @@ Sound today; recorded here so each is un-rottable (no engineering now). From inv
   back). (Subsumed by the ③.4 shared-`run_id` spine.)
 - **`schema-details.md` `BaseModel`→`ArtifactModel` doc sweep.** ~40 `BaseModel(extra="forbid")`
   classes in the doc are not swept to `ArtifactModel`; the **code already uses `ArtifactModel`** (ADR
-  0004) — docs-vs-code drift only.
-- **`material_discrepancies` doc mirror pending.** `attack_spec.py` is framework-populated by
-  enrichment; `schema-details.md §4` lacks the block — doc mirror only.
+  0004) — docs-vs-code drift only. **Still tracked** (not done in the Task-0 reconciliation): ADR 0004
+  explicitly rejected a blanket sweep (§6 / `MergedRegistries` need per-class code checks — some are
+  `InternalModel`), so it stays incremental-per-transcription.
+- ~~**`material_discrepancies` doc mirror pending.**~~ **DONE** — `schema-details.md §4.9` already
+  carries the `MaterialDiscrepancy` block + the `AttackSpec.material_discrepancies` field (confirmed
+  in the Phase-2 Task-0 reconciliation, 2026-06-16).
 - **Anthropic live cassette pending.** ADR 0027's "real API call succeeds" exit criterion is PENDING;
   the live test skips, the cassette dir is absent. Regression-confidence only (the adapter is fully
   unit-tested offline). Record a real cassette-recording work item.
