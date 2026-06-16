@@ -52,7 +52,7 @@ When you need context not already in the conversation:
 
 **Never resolve architectural ambiguities silently.** If you read the docs and something is unclear or under-specified, record the question in `dev/decisions/NNNN-<slug>.md` (ADR style) and either pick the most conservative reading or stop and ask the user. Never invent a contract that isn't in the docs.
 
-**Never edit `docs/` as part of an implementation task unless the task explicitly says to.** The docs are the contract; implementation flows from them, not the other way around. If implementation reveals a doc bug, record it in `dev/decisions/` and surface it to the user — don't quietly edit the source of truth.
+**You own `docs/` edits — including architecture-tier — but every edit is deliberate and surfaced, never silent** (ADR 0084). The docs are the contract; implementation flows from them. When a task touches the docs — a doc bug, a needed contract change, a reconciliation — make the edit, record the rationale in `dev/decisions/` for anything substantive (a changed contract, not a typo), and list every doc change explicitly in your summary so the user can verify it. Never change a contract as an unannounced side effect of an implementation edit, and never silently. A change to an `architecture.md §1.5`/`§1.6` invariant (the LLM/framework split, mechanical-safety) still needs an ADR and explicit user sign-off before you rely on it.
 
 **Never propose changes that violate `architecture.md §1.5` or `§1.6`.** Bypassing the LLM/framework split, even with good local reasoning, is a contract violation. Same for the no-migration rule (`architecture.md §0.6`) and the cleanup-confidence gate (`architecture.md §0.5` criterion 2).
 
@@ -95,7 +95,7 @@ For any code style question not covered here, read the relevant section of `codi
 - **Architectural questions or design decisions you make during implementation** → `dev/decisions/NNNN-<slug>.md`. 4-digit zero-padded, sequential, ADR template at `coding-conventions.md §7.3`.
 - **Per-task execution notes** (what was built, surprises, deferred items) → `dev/phase-N-execution-log.md` for the current phase. Template at the bottom of `dev/phase-briefs/phase-N-agent-brief.md`. Append-only.
 - **Code, tests, registries** → under `cyberlab_gen/`, `tests/`, `registry/` per the project map. Match the subpackage layout from `coding-conventions.md §3.1`.
-- **Never edit `docs/` from an implementation task.** Surface the issue and let the user route the fix.
+- **`docs/` edits are yours to make — but surface every one** (ADR 0084). Make the edit, list it in your summary for the user to verify, and record substantive contract changes in `dev/decisions/`. Never change the contract silently.
 
 ## Authority gradient
 
