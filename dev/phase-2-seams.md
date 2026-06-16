@@ -111,6 +111,17 @@ they are built. The rest, tracked:
 - **`AttackSpec`/`LabManifest` share no envelope base.** Deferred from ①.3 (ADR 0069) by decision:
   extract a thin `SpecEnvelope` base (`spec_version`/`spec_kind`/`source` + the version machinery)
   at Phase-2's second use (`LabManifest`), so the load gate dispatches on `spec_kind`.
+- **Manifest-side framework stamping** (ADR 0086). When the Planner's `LabManifest` ships,
+  `GenerationBlock.model` must be stamped from the billed cost ledger (the ADR-0065 billed-model
+  invariant, never the LLM's self-report) and `spec_version` stamped via the already-generic
+  `stamp_spec_version`. **Generalize the one stamp home to dispatch on artifact type — do NOT add a
+  third copy** (ADR 0068). Reachable only when the Planner persists a manifest (Task 6+); recorded
+  now because the framework-owned-field audit (ADR 0086) made the field-home gap explicit.
+- **`StepBlock.reproducibility` carry-integrity check** (ADR 0081 / 0086). When the Planner
+  populates the per-step tier (carried forward unchanged from the source `ChainStep`), add a
+  Layer-2 check asserting `StepBlock.reproducibility == source ChainStep.reproducibility`; decide
+  whether an explicit `StepBlock → chain_step` back-ref is needed then (it depends on whether the
+  Per-phase Generator needs an explicit step→tier mapping). Phase-2 Task-3 call.
 
 ---
 
