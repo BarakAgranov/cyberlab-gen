@@ -1,6 +1,10 @@
 # 0086 — One guard per framework-owned field, on a path the field travels
 
-- **Status:** accepted
+- **Status:** partially superseded by [ADR 0087](0087-declared-field-ownership.md) — the
+  hand-audit rule and the inventory table below are replaced by ownership **declared inline on
+  the field** (a `FrameworkOwned` marker every consumer derives from). The four-mechanism split
+  (stamp / reset / derive / absent-from-LLM-schema) and the "recorded, not built" Planner
+  prerequisites stand. The inventory table is now descriptive history, not the source of truth.
 - **Date:** 2026-06-16
 - **Deciders:** maintainer (architect), implementing agent
 - **Frames:** ADR 0085 (the first guard re-homed under this principle), ADR 0082, ADR 0068,
