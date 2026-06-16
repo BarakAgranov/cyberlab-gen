@@ -141,6 +141,28 @@ def test_external_api_missing_api_citation_is_a_structure_finding() -> None:
     assert any("external_api_response citation" in f.detail for f in structure)
 
 
+def test_unknown_from_blog_with_citations_is_a_structure_finding() -> None:
+    """unknown_from_blog must carry a reason and NO citations (schema.md §4.9). The Provenance
+    model guards this at construction; the grounding structure layer is the backstop for a value
+    smuggled past construction (a user edit / refinement re-run). model_copy bypasses the model's
+    own validator at each level, so this reaches the grounding stack the way a hand-edited YAML would.
+    """
+    base = _spec()
+    assert base.thesis is not None
+    poisoned_summary = base.thesis.summary.model_copy(
+        update={
+            "source": ProvenanceSource.UNKNOWN_FROM_BLOG,
+            "reason": "not stated in the blog",
+            "citations": [_cite()],
+        }
+    )
+    poisoned_thesis = base.thesis.model_copy(update={"summary": poisoned_summary})
+    spec = base.model_copy(update={"thesis": poisoned_thesis})
+    result = GroundingValidator().validate(spec, lookups=[])
+    structure = [f for f in result.findings if f.code is GroundingCode.PROVENANCE_STRUCTURE]
+    assert any("must not carry citations" in f.detail for f in structure)
+
+
 # --- search-before-claim trace layer (the de-duplicated check) -------------
 
 

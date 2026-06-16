@@ -34,12 +34,14 @@ from cyberlab_gen.schemas.attack_spec import (
     SourceBlock,
     ThesisBlock,
 )
+from cyberlab_gen.schemas.catalogs import ProvisioningMechanismsCatalog
 from cyberlab_gen.schemas.enums import (
     CitationKind,
     ExtractionOutcome,
     ProvenanceSource,
     ProvisioningMechanism,
     ReproducibilityTier,
+    SpecKind,
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
 from cyberlab_gen.validators.static_schema_validator import (
@@ -253,3 +255,46 @@ def test_findings_render_round_trips_code_and_location() -> None:
     rendered = result.rendered_findings()
     assert rendered
     assert any("unknown_facet@facets[0]" in line for line in rendered)
+
+
+def test_catalog_drift_flags_enum_value_absent_from_its_catalog() -> None:
+    """A provisioning_mechanism the enum admits but the bundled catalog omits → CATALOG_DRIFT.
+
+    Guards against catalog/enum drift (validation.md §6.4). Fails if the membership check is
+    removed. The catalogs are injectable, so a deliberately-drifted catalog (omitting TERRAFORM,
+    the mechanism the fixture step declares) exercises the path without editing a bundled file.
+    """
+    validator = StaticSchemaValidator(
+        registries=load_merged_registries(),
+        provisioning_mechanisms=ProvisioningMechanismsCatalog(entries=[]),
+    )
+    result = validator.validate(_spec(facets=["target:aws"]))
+    assert not result.passed
+    drift = [f for f in result.findings if f.code is StaticSchemaCode.CATALOG_DRIFT]
+    assert any("chain.chain_steps[0].provisioning_mechanism" in f.location for f in drift)
+
+
+def test_schema_invalid_flags_a_smuggled_out_of_range_value() -> None:
+    """A value that bypassed construction (a user edit / refinement re-run) and violates a field
+    constraint is caught by the re-validation pass as SCHEMA_INVALID (validation.md §6.4)."""
+    spec = _spec()
+    # model_copy does not re-validate, so this smuggles a completeness_score above its le=1.0 bound.
+    bad_meta = spec.extraction_metadata.model_copy(update={"completeness_score": 5.0})
+    smuggled = spec.model_copy(update={"extraction_metadata": bad_meta})
+    result = _validator().validate(smuggled)
+    assert not result.passed
+    assert any(f.code is StaticSchemaCode.SCHEMA_INVALID for f in result.findings)
+    assert any("completeness_score" in f.location for f in result.findings)
+
+
+def test_wrong_spec_kind_is_rejected() -> None:
+    """A spec carrying the wrong spec_kind (smuggled past construction) does not pass the gate.
+
+    The ``Literal[ATTACK_SPEC]`` discriminator makes the schema re-validation the actual enforcer;
+    SPEC_KIND_MISMATCH is defense-in-depth behind it (it cannot be reached through validate(),
+    because a wrong spec_kind fails the schema check first). Either way the spec is rejected.
+    """
+    smuggled = _spec().model_copy(update={"spec_kind": SpecKind.LAB_MANIFEST})
+    result = _validator().validate(smuggled)
+    assert not result.passed
+    assert any("spec_kind" in f.location for f in result.findings)
