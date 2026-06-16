@@ -340,6 +340,18 @@ def test_reproducibility_block_round_trips() -> None:
     assert ReproducibilityBlock.model_validate(block.model_dump()) == block
 
 
+def test_reproducibility_block_overall_assessment_is_optional() -> None:
+    # ADR 0088: the framework derives {classification, caveats, derivation_trace} and leaves
+    # the prose overall_assessment None (no honest framework ProvenanceSource per §4.9).
+    block = ReproducibilityBlock(
+        classification_lab_level=ReproducibilityLabLevel.FULL,
+        caveats=["all steps are full"],
+        derivation_trace=["step-1: full", "lab-level classification: full"],
+    )
+    assert block.overall_assessment is None
+    assert ReproducibilityBlock.from_yaml(block.to_yaml()) == block
+
+
 # --- GapEntry / MaterialDiscrepancy ----------------------------------------
 
 

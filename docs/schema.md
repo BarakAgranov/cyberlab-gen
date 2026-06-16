@@ -435,11 +435,11 @@ defenses:
 reproducibility:
   classification_lab_level: full | partial_simulation | demonstration_only | not_reproducible | mixed
   caveats: [<string>, ...]
-  overall_assessment: <provenance-wrapped string>
+  overall_assessment: <provenance-wrapped string>   # optional; framework leaves null in v1, a later prose-producer authors it (ADR 0088)
   derivation_trace: [<string>, ...]    # which steps' tiers led to the classification
 ```
 
-**Derivation rule.** When all required chain steps (required = not dropped to `not_reproducible`) share the same reproducibility tier, the lab takes that tier's classification (`full`, `partial_simulation`, or `demonstration_only`). When required chain steps span multiple tiers — regardless of proportions — the lab is classified `mixed`. The `caveats` field surfaces which tiers are present and in what proportions (e.g., "9 of 10 phases are full; 1 phase is demonstration_only because it involves a destructive payload that cannot be safely executed in a lab").
+**Derivation rule.** When all required chain steps (required = not dropped to `not_reproducible`) share the same reproducibility tier, the lab takes that tier's classification (`full`, `partial_simulation`, or `demonstration_only`). When required chain steps span multiple tiers — regardless of proportions — the lab is classified `mixed`. When *no* required chain steps remain — every chain step was dropped to `not_reproducible` — the lab is classified `not_reproducible`; the framework only classifies, and the Planner turns an all-`not_reproducible` lab into a `cannot_plan` refusal (`agents.md §5.7`). The `caveats` field surfaces which tiers are present and in what proportions (e.g., "9 of 10 phases are full; 1 phase is demonstration_only because it involves a destructive payload that cannot be safely executed in a lab").
 
 The any-heterogeneity-mixed rule is more honest than a weakest-tier rule. A lab with 9 `full` phases and 1 `demonstration_only` phase is qualitatively different from a fully-demonstration lab; calling both "demonstration_only" misleads the user. `mixed` plus caveats accurately describes what the user has.
 

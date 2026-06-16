@@ -238,6 +238,51 @@ carry-integrity still Planner-coupled (seams). `BaseModel→ArtifactModel` doc s
 
 ---
 
+## Task 2: Lab-level reproducibility derivation  (2026-06-16)
+
+**Built.** `framework/reproducibility.py`: `classify_lab_level(tiers) -> ReproducibilityLabLevel`
+(the pure `schema.md §4.8` any-heterogeneity-mixed rule — required = not-`not_reproducible`;
+all-same → that tier; span ≥2 → `mixed`; none-remain → `not_reproducible`) and
+`derive_lab_reproducibility(spec) -> ReproducibilityBlock` (assembles classification + mechanical
+`caveats` [tier proportions over all chain steps] + `derivation_trace` [per-step tiers, dropped
+ones marked excluded, + the result], `overall_assessment` left `None`). Sources the AttackSpec's
+**canonical `chain.chain_steps` only** (ADR 0081), not manifest steps, not `alternative_paths`.
+Both pure, no I/O; re-exported from `framework/__init__.py`. Tests:
+`tests/unit/framework/test_reproducibility.py` (25) — every rule branch parametrized (homogeneous
+×3 tiers, `mixed` incl. 4:1 + 99:1 lopsided, drop-exclusion, all-dropped/empty → `not_reproducible`,
+single-step), block-assembly (proportions, dropped-but-visible, canonical-only-not-alt-paths,
+round-trip, defensive `chain=None`) + 1 schema test pinning the optional `overall_assessment`.
+
+**Decisions.** ADR 0088 — the rule + the all-dropped→`not_reproducible` reading (the **refusal**
+stays Task 3's `cannot_plan`; Task 2 only classifies) + widening
+`ReproducibilityBlock.overall_assessment` to `ProvenanceString | None = None` (architect-approved).
+
+**Surprises / drift.**
+- **`overall_assessment` had no honest framework `ProvenanceSource`.** The whole
+  `ReproducibilityBlock` is `FrameworkOwned` (reset on first run, ADR 0087) so an LLM never authors
+  it, yet `§4.9`'s source vocabulary is LLM/blog/API/user only — no framework value. Resolved
+  (architect, Option 2): the framework derives only the three fields `§4.8` names
+  (`classification_lab_level`, `caveats`, `derivation_trace`) and leaves the prose `None`; a later
+  prose-producer authors it with a real source. **Rejected** adding `ProvenanceSource.FRAMEWORK_DERIVED`
+  — re-expands the shared-`Provenance` forge surface D5/ADR 0085–0087 just closed, and *worse* than
+  `framework_enriched` (no `external_api` field-position coupling to validate against).
+- **`§4.8` was silent on the all-dropped edge** and on who refuses; both now stated in `schema.md §4.8`.
+- **`AttackSpec.chain` is `ChainBlock | None`** (out-of-scope specs carry no chain) — the derive fn
+  handles `None` defensively (→ empty → `not_reproducible`), never crashes.
+- `FrameworkOwned` marker untouched (architect note); the ADR-0087 reset stays the active guard;
+  `mechanism=` stays unpopulated. The post-Planner graph insertion is **Task 6's** (owns wiring) —
+  not built here against a non-existent Planner/`plan` graph.
+
+**Deferred.** Post-Planner wiring of `derive_lab_reproducibility` into the `plan` graph (Task 6);
+the Planner's per-step carry-forward into `StepBlock` (Task 3); `overall_assessment` prose authoring
+(later phase / architect). Doc edits surfaced: `schema.md §4.8` (all-dropped rule + optional note),
+`schema-details.md §4.7` (optional field contract), inline on `attack_spec.py`.
+
+**Verify.** `just verify` green — ruff + format clean, pyright 0 errors (40 pre-existing warnings),
+803 passed / 1 skipped (+26 since the last entry).
+
+---
+
 ## Execution-log entry template
 
 ```

@@ -44,6 +44,10 @@ from cyberlab_gen.framework.orchestrator import (
     reject_interactive_when_headless,
     run_pipeline,
 )
+from cyberlab_gen.framework.reproducibility import (
+    classify_lab_level,
+    derive_lab_reproducibility,
+)
 
 __all__ = [
     "DEFAULT_REFINEMENT_CAP",
@@ -64,7 +68,9 @@ __all__ = [
     "RefinementFeedback",
     "SkippedLookup",
     "build_pipeline",
+    "classify_lab_level",
     "compute_content_hash",
+    "derive_lab_reproducibility",
     "enrich",
     "ingest",
     "normalize_html",

@@ -376,7 +376,11 @@ class ReproducibilityBlock(ArtifactModel):
 
     classification_lab_level: ReproducibilityLabLevel
     caveats: list[NonEmptyString] = Field(default_factory=list[NonEmptyString])
-    overall_assessment: ProvenanceString
+    # Optional: the framework derives {classification_lab_level, caveats, derivation_trace}
+    # (schema.md §4.8). The prose ``overall_assessment`` has no honest framework ``ProvenanceSource``
+    # (§4.9's vocabulary is LLM/blog/API/user only), so the rollup leaves it ``None``; a later
+    # prose-producer (Docs Generator / architect) authors it with a real source then. ADR 0088.
+    overall_assessment: ProvenanceString | None = None
     derivation_trace: list[NonEmptyString] = Field(default_factory=list[NonEmptyString])
 
 

@@ -847,7 +847,10 @@ class ReproducibilityBlock(BaseModel):
 
     classification_lab_level: ReproducibilityLabLevel
     caveats: list[NonEmptyString] = Field(default_factory=list)
-    overall_assessment: ProvenanceString
+    # Optional: the framework derives classification/caveats/derivation_trace (schema.md §4.8);
+    # the prose assessment has no honest framework ProvenanceSource (§4.9), so the rollup leaves
+    # it None and a later prose-producer authors it with a real source. ADR 0088.
+    overall_assessment: ProvenanceString | None = None
     derivation_trace: list[NonEmptyString] = Field(default_factory=list)
 ```
 
