@@ -13,10 +13,11 @@ bare. Lab-level ``reproducibility`` is *derived* by the framework, never authore
 (``schema.md §4.8``; Phase-2 Task 2).
 """
 
+import re
 from datetime import datetime
 from typing import Any, ClassVar, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from cyberlab_gen.schemas.attack_spec import (
     CveReference,
@@ -289,6 +290,17 @@ class StepBlock(ArtifactModel):
     outputs: list[StepOutput] = Field(default_factory=list[StepOutput])
     tradecraft_notes: list[TradecraftNote] = Field(default_factory=list[TradecraftNote])
     extras: list[ExtrasEntry] = Field(default_factory=list[ExtrasEntry])
+
+    @field_validator("step_number")
+    @classmethod
+    def _validate_step_number(cls, v: int | str) -> int | str:
+        # Same int>=1 / dotted-"N.N" syntax as the AttackSpec ChainStep (the docstring's
+        # "same int-or-'N.N' semantics" promise, now enforced rather than only described).
+        if isinstance(v, int) and v < 1:
+            raise ValueError("integer step_number must be >= 1")
+        if isinstance(v, str) and not re.match(r"^\d+(\.\d+)+$", v):
+            raise ValueError("string step_number must match N.N(.N)* (e.g., '1.2')")
+        return v
 
 
 class PhaseBlock(ArtifactModel):

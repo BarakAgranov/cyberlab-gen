@@ -274,6 +274,21 @@ def test_step_block_requires_reproducibility() -> None:
         StepBlock.model_validate(data)
 
 
+@pytest.mark.parametrize("bad", [0, -1, "abc", "1", "1.", ".1"])
+def test_step_block_rejects_invalid_step_number(bad: int | str) -> None:
+    """StepBlock.step_number enforces the same int>=1 / dotted-'N.N' syntax as the
+    AttackSpec's ChainStep — the docstring promised it, the validator now enforces it (D6-05)."""
+    data = {**_step(1).model_dump(mode="json", by_alias=True), "step_number": bad}
+    with pytest.raises(ValidationError):
+        StepBlock.model_validate(data)
+
+
+@pytest.mark.parametrize("good", [1, 2, "1.2", "10.3.4"])
+def test_step_block_accepts_valid_step_number(good: int | str) -> None:
+    data = {**_step(1).model_dump(mode="json", by_alias=True), "step_number": good}
+    assert StepBlock.model_validate(data).step_number == good
+
+
 def test_lab_resource_requires_at_least_one_role() -> None:
     with pytest.raises(ValidationError):
         LabResourceBlock(
