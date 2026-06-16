@@ -9,6 +9,8 @@ check EXEMPTS framework_enriched fields (grounding_validator.py:187-192). These 
 if the neutralization stops resetting either field.
 """
 
+import importlib
+
 from cyberlab_gen.framework.provenance_guard import neutralize_framework_owned_provenance
 from cyberlab_gen.schemas.attack_spec import (
     AttackSpec,
@@ -17,8 +19,14 @@ from cyberlab_gen.schemas.attack_spec import (
     MaterialDiscrepancy,
     ReproducibilityBlock,
 )
+from cyberlab_gen.schemas.base import ArtifactModel
 from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource, ReproducibilityLabLevel
-from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceFloat, ProvenanceString
+from cyberlab_gen.schemas.provenance import (
+    CitationBlock,
+    Provenance,
+    ProvenanceFloat,
+    ProvenanceString,
+)
 from tests.unit.framework.pipeline_fakes import make_spec
 
 
@@ -144,3 +152,36 @@ def test_neutralize_is_a_noop_on_a_clean_spec() -> None:
     """A spec with no LLM-authored framework fields round-trips to an equal instance."""
     spec = make_spec()
     assert neutralize_framework_owned_provenance(spec) == spec
+
+
+def _all_artifact_model_subclasses() -> set[type[ArtifactModel]]:
+    """Every imported ``ArtifactModel`` subclass, walked recursively."""
+    seen: set[type[ArtifactModel]] = set()
+    stack: list[type[ArtifactModel]] = list(ArtifactModel.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls in seen:
+            continue
+        seen.add(cls)
+        stack.extend(cls.__subclasses__())
+    return seen
+
+
+def test_framework_enriched_marker_set_is_unique_to_provenance() -> None:
+    # provenance_guard._scrub_node identifies a serialized Provenance by the key set
+    # {source, citations, framework_enriched} and resets those fields. If a future
+    # non-Provenance model acquired that exact field set, the guard would silently scrub it.
+    # Pin the discriminator so that can never happen unnoticed (review #3).
+    for mod in ("attack_spec", "manifest", "registries", "catalogs", "provenance"):
+        importlib.import_module(f"cyberlab_gen.schemas.{mod}")
+    markers = {"source", "citations", "framework_enriched"}
+    offenders = sorted(
+        cls.__name__
+        for cls in _all_artifact_model_subclasses()
+        if markers <= set(cls.model_fields) and not issubclass(cls, Provenance)
+    )
+    assert offenders == [], (
+        f"non-Provenance ArtifactModel subclasses carry the provenance marker set {markers}: "
+        f"{offenders} — provenance_guard would silently scrub them; give them a distinct shape "
+        "or extend the guard deliberately"
+    )
