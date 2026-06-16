@@ -54,6 +54,7 @@ from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVer
 from cyberlab_gen.agents.results import ExtractionResult
 from cyberlab_gen.errors import ValidationError
 from cyberlab_gen.framework.enrichment import EnrichmentConfig, EnrichmentResult, enrich
+from cyberlab_gen.framework.provenance_guard import neutralize_framework_owned_provenance
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.tracing_setup import stage_span
@@ -534,7 +535,13 @@ def build_pipeline(
             if pending is None or pending.kind is FeedbackKind.STRUCTURAL_RETRY:
                 state.structural_attempts += 1
         state.extraction = result
-        state.spec = result.attack_spec
+        # Neutralize any framework-only provenance the LLM may have authored (framework_enriched,
+        # the discrepancy record, material_discrepancies) BEFORE the spec reaches validation /
+        # enrichment / grounding. Enrichment is the sole legitimate writer of these and runs
+        # later; an LLM-set framework_enriched would otherwise skip enrichment's no-op guard AND
+        # the grounding search-before-claim check (ADR 0082). state.extraction keeps the raw
+        # agent output for the audit trail; state.spec is the framework-sanitized artifact.
+        state.spec = neutralize_framework_owned_provenance(result.attack_spec)
         # the feedback (if any) has now been consumed by this re-run
         state.pending_feedback = None
         return state
