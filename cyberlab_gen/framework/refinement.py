@@ -35,7 +35,10 @@ from typing import cast
 from pydantic import JsonValue
 
 from cyberlab_gen.errors import CyberlabGenError
-from cyberlab_gen.framework.provenance_guard import neutralize_patch_provenance
+from cyberlab_gen.framework.provenance_guard import (
+    framework_owned_path_buckets,
+    neutralize_patch_provenance,
+)
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 
@@ -98,13 +101,43 @@ def apply_field_patch(prior: AttackSpec, patch: RefinementPatch) -> AttackSpec:
     data: dict[str, object] = prior.model_dump(mode="json", by_alias=True)
     for field_patch in patch.patches:
         segments = _parse_path(field_patch.field_path)
+        # A patch may not *target* a framework-owned field: a bare scalar leaf (e.g. ...
+        # source_of_record / ...framework_enriched) or a top-level index (material_discrepancies /
+        # reproducibility) slips the shape-based value-scrub below, so reject it by path here
+        # (ADR 0087). The denylist is generated from the inline FrameworkOwned markers.
+        _reject_framework_owned_path(segments, field_patch.field_path)
         # The patch value is LLM-authored content for a flagged path; like a first-run extract it
-        # must not author framework-owned provenance/ids (framework_enriched, the discrepancy
-        # record, a CveReference.source_of_record). Scrub the patch sub-tree only — never the
-        # merged spec — so a prior iteration's legitimate enrichment survives (ADR 0085).
+        # must not author framework-owned provenance/ids *nested inside* a legitimately-targeted
+        # content sub-tree (a whole-Provenance patch at a content field). Scrub the patch sub-tree
+        # only — never the merged spec — so a prior iteration's legitimate enrichment survives
+        # (ADR 0085).
         scrubbed = neutralize_patch_provenance(field_patch.new_value)
         _set_by_path(data, segments, scrubbed, path=field_patch.field_path)
     return AttackSpec.model_validate(data)
+
+
+def _reject_framework_owned_path(segments: list[str | int], field_path: str) -> None:
+    """Raise :class:`RefinementPathError` if ``segments`` target a framework-owned field (ADR 0087).
+
+    A jury-``revise`` patch is LLM-authored; it may never author a field the framework owns. The
+    value-scrub catches a whole-object forgery by shape, but a bare scalar leaf or a top-level
+    index slips it — so reject by path. The denylist is **generated** from the inline
+    ``FrameworkOwned`` markers (``framework_owned_path_buckets``): a marker on the AttackSpec root
+    is matched as the leading segment; a marker on a nested model as the target leaf name.
+    """
+    root_names, leaf_names = framework_owned_path_buckets()
+    head = segments[0]
+    if isinstance(head, str) and head in root_names:
+        raise RefinementPathError(
+            f"field_path {field_path!r} targets the framework-owned top-level field {head!r}; "
+            "an LLM patch may not author it (ADR 0087)"
+        )
+    leaf = segments[-1]
+    if isinstance(leaf, str) and leaf in leaf_names:
+        raise RefinementPathError(
+            f"field_path {field_path!r} targets the framework-owned field {leaf!r}; "
+            "an LLM patch may not author it (ADR 0087)"
+        )
 
 
 # --- path parsing + deep-set (deterministic, dependency-free) ---------------

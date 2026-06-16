@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
+from cyberlab_gen.framework.provenance_guard import framework_owned_path_buckets
 from cyberlab_gen.framework.refinement import (
     FieldPatch,
     RefinementPatch,
@@ -229,6 +230,135 @@ def test_patch_cannot_forge_cve_source_of_record() -> None:
     refs = merged.external_references
     assert refs is not None
     assert refs.cves[0].source_of_record is None
+
+
+# --- patch path rejects framework-owned target paths (ADR 0087) ------------
+# A bare-leaf / top-level-index patch can carry a framework-owned value stripped of the shape
+# `neutralize_patch_provenance` keys off (a scalar, or a top-level index whose entries lack the
+# markers), so the value-scrub no-ops and the forgery survives. The path-check rejects any
+# field_path that *targets* a framework-owned field — the denylist is generated from the inline
+# FrameworkOwned markers, so it cannot drift from the schema.
+
+
+def test_patch_rejects_bare_leaf_source_of_record() -> None:
+    # Hole A: a bare-string source_of_record forges an authoritative-source claim.
+    with pytest.raises(RefinementPathError):
+        apply_field_patch(
+            _cve_spec(),
+            RefinementPatch(
+                patches=[
+                    FieldPatch(
+                        field_path="external_references.cves[0].source_of_record", new_value="nvd"
+                    )
+                ]
+            ),
+        )
+
+
+def test_patch_rejects_bare_leaf_framework_enriched() -> None:
+    # Hole D: a bare-bool framework_enriched bypasses the enrichment no-op AND the grounding
+    # search-before-claim exemption (architecture.md §1.6 mechanical-safety). Rejected by name,
+    # regardless of the prior source.
+    with pytest.raises(RefinementPathError):
+        apply_field_patch(
+            _cve_spec(),
+            RefinementPatch(
+                patches=[
+                    FieldPatch(
+                        field_path="external_references.cves[0].cvss_score.framework_enriched",
+                        new_value=True,
+                    )
+                ]
+            ),
+        )
+
+
+def test_patch_rejects_top_level_material_discrepancies() -> None:
+    # Hole B: a top-level-index patch injects a fabricated discrepancy record.
+    with pytest.raises(RefinementPathError):
+        apply_field_patch(
+            _spec(),
+            RefinementPatch(
+                patches=[FieldPatch(field_path="material_discrepancies", new_value=[])]
+            ),
+        )
+
+
+def test_patch_rejects_top_level_reproducibility() -> None:
+    # Hole C: a top-level patch forges the framework-derived lab-level block + derivation_trace.
+    with pytest.raises(RefinementPathError):
+        apply_field_patch(
+            _spec(),
+            RefinementPatch(patches=[FieldPatch(field_path="reproducibility", new_value=None)]),
+        )
+
+
+def test_patch_allows_legitimate_nested_reproducibility_refine() -> None:
+    # The framework-owned `reproducibility` is the AttackSpec top-level block; the per-step
+    # ChainStep.reproducibility is authored content and a legitimate refine target. The
+    # position-bucketed denylist must NOT reject it (it shares the name, not the ownership).
+    new_repro = PerStepReproducibility(
+        classification=ReproducibilityTier.PARTIAL_SIMULATION,
+        caveats=_pstr("now simulated"),
+        why=_pstr("destructive payload"),
+    ).model_dump(mode="json", by_alias=True)
+    patched = apply_field_patch(
+        _spec(),
+        RefinementPatch(
+            patches=[
+                FieldPatch(field_path="chain.chain_steps[0].reproducibility", new_value=new_repro)
+            ]
+        ),
+    )
+    assert patched.chain is not None
+    assert (
+        patched.chain.chain_steps[0].reproducibility.classification
+        is ReproducibilityTier.PARTIAL_SIMULATION
+    )
+
+
+def test_patch_check_denylist_matches_declared_markers() -> None:
+    # The denylist is generated from the inline FrameworkOwned markers (ADR 0087). Pin it so that
+    # neither a new framework-owned field added without a marker, nor a marker removed, can
+    # silently change patch-path coverage — the markdown-inventory drift this ADR closes. If this
+    # fails, a field's ownership changed: update the marker and this pin together, deliberately.
+    root_names, leaf_names = framework_owned_path_buckets()
+    assert root_names == {"material_discrepancies", "reproducibility"}
+    assert leaf_names == {
+        "framework_enriched",
+        "discrepancy_with_blog",
+        "overridden_blog_value",
+        "discrepancy_classification",
+        "source_of_record",
+    }
+
+
+def test_every_declared_owned_field_is_rejected_on_the_patch_path() -> None:
+    # Both-paths coverage (ADR 0087, item 3): every framework-owned field — the top-level rollups
+    # AND the nested leaves — is rejected when a patch targets it. Generated from the markers, so
+    # a newly-marked field that is not exercised here makes this test fail (the set assertions).
+    root_names, leaf_names = framework_owned_path_buckets()
+    for name in root_names:
+        with pytest.raises(RefinementPathError):
+            apply_field_patch(
+                _spec(), RefinementPatch(patches=[FieldPatch(field_path=name, new_value=None)])
+            )
+    leaf_paths = {
+        "framework_enriched": "external_references.cves[0].cvss_score.framework_enriched",
+        "discrepancy_with_blog": "external_references.cves[0].cvss_score.discrepancy_with_blog",
+        "overridden_blog_value": "external_references.cves[0].cvss_score.overridden_blog_value",
+        "discrepancy_classification": (
+            "external_references.cves[0].cvss_score.discrepancy_classification"
+        ),
+        "source_of_record": "external_references.cves[0].source_of_record",
+    }
+    assert set(leaf_paths) == leaf_names  # every declared leaf is exercised below
+    for path in leaf_paths.values():
+        with pytest.raises(RefinementPathError):
+            apply_field_patch(
+                _cve_spec(),
+                RefinementPatch(patches=[FieldPatch(field_path=path, new_value=None)]),
+            )
 
 
 # --- convergence / non-regression ------------------------------------------

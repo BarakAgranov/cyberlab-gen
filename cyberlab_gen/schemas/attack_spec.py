@@ -21,7 +21,7 @@ not authored.
 
 import re
 from datetime import datetime
-from typing import ClassVar, Literal, Self
+from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -42,6 +42,7 @@ from cyberlab_gen.schemas.enums import (
     SpecKind,
 )
 from cyberlab_gen.schemas.envelope import SpecEnvelope
+from cyberlab_gen.schemas.framework_owned import FrameworkOwned
 from cyberlab_gen.schemas.primitives import (
     CveId,
     ExternalDataSourceId,
@@ -256,7 +257,9 @@ class CveReference(ArtifactModel):
     description: ProvenanceString
     cvss_score: ProvenanceFloat | None = None
     severity: Provenance[Severity] | None = None
-    source_of_record: ExternalDataSourceId | None = None
+    # Framework-owned (ADR 0087): set only after a successful enrichment lookup; the Extractor
+    # leaves it None. The inline marker drives the patch-path reject + the whole-spec reset.
+    source_of_record: Annotated[ExternalDataSourceId | None, FrameworkOwned()] = None
 
 
 class RelatedBlogReference(ArtifactModel):
@@ -492,10 +495,12 @@ class AttackSpec(SpecEnvelope):
         default_factory=list[DefenderTechniqueBlock]
     )
     defenses: list[DefenseBlock] = Field(default_factory=list[DefenseBlock])
-    reproducibility: ReproducibilityBlock | None = None
+    # Framework-DERIVED from the per-step tiers (architecture.md §0.7), never authored upfront;
+    # framework-owned (ADR 0087). Reset today, derive when the rollup step exists.
+    reproducibility: Annotated[ReproducibilityBlock | None, FrameworkOwned()] = None
     gaps: list[GapEntry] = Field(default_factory=list[GapEntry])
-    # Populated by pre-Planner enrichment (Task 4); declared now per ADR 0017.
-    material_discrepancies: list[MaterialDiscrepancy] = Field(
+    # Populated by pre-Planner enrichment (Task 4); framework-owned (ADR 0017 / 0087).
+    material_discrepancies: Annotated[list[MaterialDiscrepancy], FrameworkOwned()] = Field(
         default_factory=list[MaterialDiscrepancy]
     )
     extraction_metadata: ExtractionMetadataBlock

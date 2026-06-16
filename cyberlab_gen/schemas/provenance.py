@@ -15,7 +15,7 @@ pairing, and the discrepancy-with-blog audit-trail rules.
 """
 
 from collections.abc import Callable
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -25,6 +25,7 @@ from cyberlab_gen.schemas.enums import (
     ConfidenceSource,
     ProvenanceSource,
 )
+from cyberlab_gen.schemas.framework_owned import FrameworkOwned
 from cyberlab_gen.schemas.primitives import NonEmptyString
 
 
@@ -64,9 +65,14 @@ class Provenance[T](ArtifactModel):
     confidence_source: ConfidenceSource | None = None
     requires_user_confirmation: bool = False
     reason: str | None = None
-    discrepancy_with_blog: bool = False
-    overridden_blog_value: T | None = None
-    discrepancy_classification: Literal["material", "non_material"] | None = None
+    # The API-override discrepancy record + framework_enriched are framework-owned (ADR 0087):
+    # the enrichment pass is their sole author. The inline marker is the one declaration the
+    # patch-path check and the whole-spec reset both derive from.
+    discrepancy_with_blog: Annotated[bool, FrameworkOwned()] = False
+    overridden_blog_value: Annotated[T | None, FrameworkOwned()] = None
+    discrepancy_classification: Annotated[
+        Literal["material", "non_material"] | None, FrameworkOwned()
+    ] = None
     # Set by the pre-Planner enrichment pass (``pipeline.md §3.2.4``) on every field it
     # writes/rewrites: ``external_api`` + ``framework_enriched=True`` is the framework's own
     # authoritative call (the API-response citation IS the evidence — no agent tool-call
@@ -75,7 +81,7 @@ class Provenance[T](ArtifactModel):
     # stack's CVE-scoped search-before-claim check (``grounding_validator.py``); the Extractor-Jury
     # is an LLM agent that consumes that findings set and has no independent mechanical exemption of
     # its own (ADR 0052 / 0061, schema.md §4.9).
-    framework_enriched: bool = False
+    framework_enriched: Annotated[bool, FrameworkOwned()] = False
 
     @model_validator(mode="after")
     def _source_rules(self) -> Self:

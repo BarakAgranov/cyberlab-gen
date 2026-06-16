@@ -26,11 +26,14 @@ a prior-iteration blog-vs-API discrepancy that re-enrichment could no longer re-
 was already ``external_api``), silently dropping it.
 """
 
-from typing import Any, cast
+from collections.abc import Iterator
+from functools import cache
+from typing import Any, cast, get_args
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 from cyberlab_gen.schemas.attack_spec import AttackSpec
+from cyberlab_gen.schemas.framework_owned import framework_owned_fields
 
 #: The keys that together identify a serialized ``Provenance`` mapping — it is the only model
 #: carrying ``framework_enriched`` alongside ``source`` and ``citations`` (an ``ExtrasEntry``
@@ -103,3 +106,60 @@ def neutralize_patch_provenance(new_value: JsonValue) -> JsonValue:
     """
     _scrub_node(new_value)
     return new_value
+
+
+# --- framework-owned-field path buckets (ADR 0087) -------------------------
+#
+# The refinement patch-path check rejects any field_path that *targets* a framework-owned field.
+# The denylist is GENERATED from the inline ``FrameworkOwned`` markers (never hand-typed),
+# bucketed by where the marker sits: a marker on the ``AttackSpec`` root is matched as a
+# top-level segment; a marker on a nested model (``Provenance``, ``CveReference``) is matched as
+# the target leaf name. This is why the top-level ``reproducibility`` block is rejected while the
+# per-step ``chain.chain_steps[*].reproducibility`` — a different ``(model, field)``, authored
+# content — is not. The flat positional match is correct for AttackSpec (its one ambiguous name,
+# ``reproducibility``, is positionally separable) and expires at LabManifest refinement, where a
+# marker-aware path→type resolver replaces it (ADR 0087 "recorded, not built").
+
+
+def _models_in_annotation(annotation: object) -> Iterator[type[BaseModel]]:
+    """Yield every ``BaseModel`` subclass embedded in a field annotation.
+
+    Unwraps ``T | None``, ``list[T]``, ``dict[K, V]``, and the ``Provenance[T]`` generic (a
+    parametrized generic is itself a ``BaseModel`` subclass, so it is yielded directly).
+    """
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        yield annotation
+        return
+    for arg in get_args(annotation):
+        yield from _models_in_annotation(arg)
+
+
+def _reachable_models(root: type[BaseModel]) -> set[type[BaseModel]]:
+    """Every ``BaseModel`` reachable from ``root`` through its field annotations (cycle-safe)."""
+    seen: set[type[BaseModel]] = set()
+    stack: list[type[BaseModel]] = [root]
+    while stack:
+        model = stack.pop()
+        if model in seen:
+            continue
+        seen.add(model)
+        for info in model.model_fields.values():
+            stack.extend(_models_in_annotation(info.annotation))
+    return seen
+
+
+@cache
+def framework_owned_path_buckets() -> tuple[frozenset[str], frozenset[str]]:
+    """``(root-owned top-level field names, nested-owned leaf field names)`` for ``AttackSpec``.
+
+    Generated from the inline ``FrameworkOwned`` markers across the AttackSpec model tree
+    (ADR 0087), so the patch-path denylist cannot drift from the schema. Cached: the schema is
+    immutable at runtime.
+    """
+    root_names = framework_owned_fields(AttackSpec)
+    leaf_names: set[str] = set()
+    for model in _reachable_models(AttackSpec):
+        if model is AttackSpec:
+            continue
+        leaf_names |= framework_owned_fields(model)
+    return root_names, frozenset(leaf_names)
