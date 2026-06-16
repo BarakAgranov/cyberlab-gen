@@ -1,7 +1,8 @@
 """Agent layer public surface.
 
 Tasks 3/5 import the call surface and prompt loader from here, never from a
-submodule directly. See pipeline.md §3.5 and dev/decisions/0017.
+submodule directly. See pipeline.md §3.5 (prompt loader) and
+coding-conventions.md §3.1 (the package re-export surface).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from cyberlab_gen.agents.prompts import (
 )
 from cyberlab_gen.agents.proposals import (
     ProposedFacet,
+    ProposedThesisType,
     ProposedValueType,
 )
 
@@ -50,6 +52,7 @@ __all__ = [
     "JuryScores",
     "JuryVerdict",
     "ProposedFacet",
+    "ProposedThesisType",
     "ProposedValueType",
     "Verdict",
     "extractor_tool_definitions",

@@ -10,7 +10,7 @@ erase that structural guarantee.
 
 Single-file loaders are generic over the entry type and dispatch on
 source directory — there is no "load any registry file" entry point.
-Top-level loaders (``load_bundled``, ``load_overlay``) iterate the six
+Top-level loaders (``load_bundled``, ``load_overlay``) iterate the seven
 canonical registries and collect them into a ``LoadedRegistryLayer`` for
 the merge step (``cyberlab_gen/registries/merge.py``).
 
@@ -68,7 +68,7 @@ REGISTRY_FILE_NAMES: Final[Sequence[str]] = (
 
 @dataclass(frozen=True, slots=True)
 class LoadedRegistryLayer:
-    """One layer (bundled or overlay) — all six files loaded but unmerged.
+    """One layer (bundled or overlay) — all seven files loaded but unmerged.
 
     Bundled and overlay layers share this container because the merge
     step only cares about each file's ``entries`` list. The concrete
@@ -173,7 +173,7 @@ def _check_unique_keys[E: BaseModel](entries: list[E], entry_type: type[E], path
 def load_static_catalogs() -> StaticCatalogsRegistry:
     """Load and validate the bundled ``static_catalogs`` registry.
 
-    Has the same ``{entries: [...]}`` container shape as the six first-class
+    Has the same ``{entries: [...]}`` container shape as the other first-class
     registries but is validated directly against its ``StaticCatalogsRegistry``
     model (it is bundled-only; ``schema.md §4.14``).
     """
