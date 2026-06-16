@@ -5,8 +5,9 @@ provenance, AttackSpec / LabManifest envelopes, and registry meta-schemas.
 Architectural source: ``docs/schema.md`` and ``docs/schema-details.md``.
 Phase 0 ships the base layer and AttackSpec envelope (Tasks 1-3).
 
-Cross-subpackage imports go through this re-export surface; intra-package
-modules import from each sibling module directly.
+This ``__init__`` re-exports the schemas public surface; cross-phase consumers
+should prefer it, but direct leaf-module imports across subpackages are also fine
+(ADR 0083). Intra-package modules import from each sibling module directly.
 """
 
 from cyberlab_gen.schemas.attack_spec import (

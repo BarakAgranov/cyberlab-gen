@@ -17,7 +17,9 @@ Reason: 3.13 is the most recent stable Python at project start. The PEP 695 gene
 
 ### 1.2 No Python 2 anywhere
 
-Self-evident in 2026 but worth stating: no `from __future__` imports, no `six`, no `2to3`. The codebase assumes 3.13 syntax and stdlib.
+Self-evident in 2026 but worth stating: no Python-2 compatibility shims — no `six`, no `2to3`, none of the legacy `__future__` flags. The codebase assumes 3.13 syntax and stdlib.
+
+`from __future__ import annotations` (PEP 563, deferred annotation evaluation) is **not** a Python-2 shim and is permitted — use it where a runtime `typing.get_type_hints` consumer needs annotations to resolve at runtime (e.g. LangGraph builds the `PipelineState` schema this way) or where ruff's `TC` rules otherwise force type-only imports into `TYPE_CHECKING` blocks. See ADR 0083.
 
 ---
 
@@ -93,7 +95,7 @@ The directory layout is specified in `implementation-plan.md §3.2`. This sectio
 ### 3.1 The `cyberlab_gen/` package
 
 - One subpackage per architectural concern: `cli/`, `framework/`, `agents/`, `schemas/`, `providers/`, `registries/`, `state/`.
-- Each subpackage has its own `__init__.py` that re-exports its public surface. Internal modules are not imported across subpackage boundaries except through the `__init__.py` re-export.
+- Each subpackage has its own `__init__.py` that re-exports its **public surface** — the stable, curated names cross-phase and external consumers (and tests of the public API) should import from. Prefer the package root for those. Direct leaf-module imports across subpackages (`from cyberlab_gen.schemas.attack_spec import AttackSpec`) are acceptable for internal wiring and are the norm in practice. The hard structural constraint is the cycle ban in §3.3, not routing every import through `__init__`. See ADR 0083.
 - Each subpackage's `__init__.py` has a module-level docstring (3–6 lines) explaining what the subpackage is for and which architecture sections govern it.
 
 Two architectural concerns don't live under `cyberlab_gen/`:
@@ -116,7 +118,7 @@ Anything that helps a contributor reason about the project but isn't shipped to 
 - Imports are sorted by `ruff` (isort-compatible) into three groups: stdlib, third-party, first-party.
 - Circular imports are a structural error. If two modules need each other, one of them is misplaced; resolve by extraction, not by lazy imports.
 - Avoid `from x import *`. Imports are explicit.
-- `if TYPE_CHECKING:` blocks are an escape hatch, not a default. Use only when (a) breaking a genuine cycle between two stable modules whose dependency direction is one-way at runtime, or (b) deferring imports that are expensive to load and only needed for type annotations. If you reach for `TYPE_CHECKING` during normal development, it's a code smell — the modules are probably misplaced. The subpackage-boundary discipline (§3.1: cross-subpackage imports go through `__init__.py`) should make cycles rare in practice.
+- `if TYPE_CHECKING:` blocks are an escape hatch, not a default. Use only when (a) breaking a genuine cycle between two stable modules whose dependency direction is one-way at runtime, or (b) deferring imports that are expensive to load and only needed for type annotations. If you reach for `TYPE_CHECKING` during normal development, it's a code smell — the modules are probably misplaced. Keeping each subpackage's dependency direction one-way (§3.1) should make cycles rare in practice.
 
 ---
 
