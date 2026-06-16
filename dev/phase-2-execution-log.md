@@ -283,6 +283,68 @@ the Planner's per-step carry-forward into `StepBlock` (Task 3); `overall_assessm
 
 ---
 
+## Task 3: Planner agent (non-proposing for the slice)  (2026-06-17)
+
+**Built.** The `planner` subpackage (`agents/planner/`): `Planner(ToolUsingAgent)` with
+`plan(attack_spec, *, preferences=None) -> PlanResult` — capability `HIGH_QUALITY_REASONING`,
+`output_schema=LabManifest`, an AttackSpec-YAML + registry-digest user turn, and a framework
+finalize (`plan()` overwrites `core.reproducibility` with `derive_lab_reproducibility(spec)`,
+Task 2). `planner/tools.py`: `planner_tool_definitions` (the slice producer set = read-only
+`external_lookup` only) + `PlannerToolExecutor` (a read-only `ExtractorToolExecutor` subtype
+reusing the shared lookup engine). `planner/prompt.md` base prompt. `PlanResult(manifest, lookups)`
+in `agents/results.py`. **Generalised the `ToolUsingAgent` contract**: factored the hardwired
+Extractor inventory out of `_emit` into an overridable `_build_tools_and_executor()` hook
+(default = today's Extractor wiring, so Extractor/Jury are byte-unchanged). `make_manifest()` added
+to `pipeline_fakes`. Tests: `tests/unit/agents/test_planner.py` (9) — structural-valid + round-trip
+manifest, lab-level reproducibility **derived overwriting a wrong mock value** (+ prose dropped to
+`None`), per-step tiers carried through unchanged, capability-resolved model (no hardcoded name),
+output cap reaches the provider, output schema rejects an untyped input, tool set = `external_lookup`
+only / excludes the value-type proposal the Extractor keeps, executor serves lookup + refuses
+proposals.
+
+**Decisions.** ADR 0089 (the `ToolUsingAgent` tool-provider hook — extends ADR 0072; mandated by
+the no-discretion "producer-not-jury" + "no value-type proposals" constraints, *not* a choice).
+ADR 0090 (the Planner emits the full `LabManifest`; the framework derives `core.reproducibility`
+in `plan()` — derive-at-seam, field stays required; considered + rejected the absent-from-LLM-schema
+reduced-draft mechanism as a high-drift mirror of the actively-evolving manifest).
+
+**Surprises / drift.**
+- **The base `_emit` hardwired the Extractor tool inventory** (`ExtractorToolExecutor` +
+  `extractor_tool_definitions`); its only knob is `verify_only`, and **neither** mode expresses the
+  Planner's set — `verify_only=False` advertises the Extractor's `propose_*` (value-type authority),
+  `verify_only=True` is the *jury* set. So the hook (ADR 0089) was **forced**, not optional. ADR
+  0072's "subclass instead of re-copy" quietly assumed every agent shares the Extractor's inventory
+  — the Planner is the first to break it (Generators/Critic break it again).
+- **`query_value_types_registry` deferred to Task 7** (architect call). A non-proposing Planner
+  references registered value-types by name from the prompt's registry digest — it has nothing to
+  shape-search until proposing lands, so wiring it now would build an unexercised tool. The slice's
+  producer set is `{external_lookup}` only (kept — the baseline read primitive, exercised by a test).
+- **`CoreBlock.reproducibility` is required *and* framework-derived.** Resolved derive-at-seam in
+  `plan()` (ADR 0090). `spec_version` + `GenerationBlock.model` are the manifest's other
+  framework-owned fields — stamped at the **persist seam** (`run_persistence.py`), wired in Task 6,
+  mirroring how the Extractor defers its own stamps (ADR 0086 marks the manifest `spec_version`
+  stamp "prospective (Planner)"). `plan()` does **not** copy them (no third billed-model copy).
+- **`StaticSchemaValidator` is AttackSpec-only** (no manifest Layer-1 / no value-type membership
+  check yet — both Task 5/6). So "Layer-1-valid manifest" this phase = Pydantic structural validity
+  + YAML round-trip; "untyped input fails the quality bar" is enforced by the output schema itself
+  (`InputBlock.type` required — no untyped fallback).
+- `PlannerToolExecutor` **subclasses** `ExtractorToolExecutor` (read-only) to reuse the
+  `external_lookup` engine (NVD / unavailable / rate-limit, ADR 0042) without duplication — a
+  pragmatic reuse, not "the Planner is an Extractor"; Task 9 should swap to the neutral ports module
+  (ADR 0077).
+
+**Deferred.** `query_value_types_registry` + the scoped `propose_facet` (Task 7); the `plan` verb +
+graph wiring + persistence + `spec_version`/`GenerationBlock` stamping (Task 6); the Planner↔Jury
+revise loop, AttackSpec-incoherence route-back, and the `cannot_plan` refusal path (Task 4);
+`StepBlock.reproducibility` carry-integrity as a Layer-2 check (Task 5 / seams). No `docs/` edits —
+the architecture already states lab-level reproducibility is framework-derived (`schema.md §4.8`);
+ADR 0090 records *where* (`plan()`) and *which mechanism*.
+
+**Verify.** `just verify` green — ruff + format clean, pyright 0 errors (40 pre-existing click/yaml
+warnings), 812 passed / 1 skipped (+9 since Task 2).
+
+---
+
 ## Execution-log entry template
 
 ```

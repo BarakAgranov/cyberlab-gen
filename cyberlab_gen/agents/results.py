@@ -16,6 +16,7 @@ from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
 from cyberlab_gen.agents.proposals import ProposedFacet, ProposedThesisType, ProposedValueType
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
+from cyberlab_gen.schemas.manifest import LabManifest
 
 
 class ExtractionResult(InternalModel):
@@ -36,4 +37,18 @@ class ExtractionResult(InternalModel):
     reprompts: int = 0
 
 
-__all__ = ["ExtractionResult"]
+class PlanResult(InternalModel):
+    """The Planner stage's output envelope (ADR 0090).
+
+    Wraps the finalized ``LabManifest`` (the only piece that becomes an artifact — its lab-level
+    ``core.reproducibility`` already framework-derived by ``Planner.plan``) plus the external-lookup
+    trace the framework may consume downstream. For the Wave-1 slice the Planner is non-proposing
+    (``propose_facet`` is Task 7), so there is no proposal side-channel yet; Task 7 adds
+    ``facet_proposals`` here.
+    """
+
+    manifest: LabManifest
+    lookups: list[ExternalLookupRecord]
+
+
+__all__ = ["ExtractionResult", "PlanResult"]

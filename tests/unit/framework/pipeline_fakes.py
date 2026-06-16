@@ -29,18 +29,40 @@ from cyberlab_gen.schemas.attack_spec import (
     ExtractionMetadataBlock,
     PerStepReproducibility,
     PublisherBlock,
+    ReproducibilityBlock,
     SourceBlock,
     ThesisBlock,
 )
 from cyberlab_gen.schemas.enums import (
     CitationKind,
     ExtractionOutcome,
+    InputSource,
+    LabRole,
+    PrereqKind,
+    PrereqTiming,
     ProvenanceSource,
     ProvisioningMechanism,
+    ReproducibilityLabLevel,
     ReproducibilityTier,
+    Severity,
+    SpecKind,
+    StepComposition,
 )
 from cyberlab_gen.schemas.ingestion import IngestionResult
-from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
+from cyberlab_gen.schemas.manifest import (
+    CoreBlock,
+    GenerationBlock,
+    InputBlock,
+    LabManifest,
+    LabResourceBlock,
+    OutputBlock,
+    PhaseBlock,
+    PhaseImplementation,
+    PrereqBlock,
+    PrereqsBlock,
+    StepBlock,
+)
+from cyberlab_gen.schemas.provenance import CitationBlock, Provenance, ProvenanceString
 from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 if TYPE_CHECKING:
@@ -161,6 +183,124 @@ def make_ingestion() -> IngestionResult:
 def make_validator() -> StaticSchemaValidator:
     """The real static-schema validator over the bundled registries."""
     return StaticSchemaValidator(registries=load_merged_registries())
+
+
+# --- LabManifest builder ---------------------------------------------------
+
+
+def _sev(value: Severity) -> Provenance[Severity]:
+    return Provenance[Severity](
+        value=value, source=ProvenanceSource.BLOG_EXPLICIT, citations=[_cite()]
+    )
+
+
+def _mstep(num: int, tier: ReproducibilityTier) -> StepBlock:
+    return StepBlock(
+        id=f"step-{num}",  # type: ignore[arg-type]
+        step_number=num,
+        title=f"Step {num}",
+        description=_pstr("do the thing"),
+        function_name=f"step_{num}",
+        reproducibility=PerStepReproducibility(
+            classification=tier,
+            caveats=_pstr("carried forward from the chain step"),
+            why=_pstr("authored by the Extractor; the Planner does not re-evaluate"),
+        ),
+    )
+
+
+def _phase(num: int, tier: ReproducibilityTier) -> PhaseBlock:
+    """A skeleton phase — one step carrying ``tier``, NO ``implementation.path`` (ADR 0079)."""
+    return PhaseBlock(
+        id=f"phase-{num}",  # type: ignore[arg-type]
+        name=f"Phase {num}",
+        display_name=f"{num}. Phase",
+        short_description="Phase description.",
+        step_composition=StepComposition.SEQUENTIAL,
+        execution_context="attacker_local",  # type: ignore[arg-type]
+        provisioning_mechanism=ProvisioningMechanism.CLI_SCRIPTS,
+        steps=[_mstep(num, tier)],
+        implementation=PhaseImplementation(language="python"),  # path=None: skeleton, no code yet
+    )
+
+
+def make_manifest(*, step_tiers: list[ReproducibilityTier] | None = None) -> LabManifest:
+    """A representative draft ``LabManifest`` skeleton — a canned Planner output for tests.
+
+    Two skeleton phases (no ``implementation.path``); a multi-role lab_resource; both
+    ``identifier_kind`` values; a ``cli_flag_or_default`` input; a ``manual`` pre_lab prereq; an
+    IaC output. ``step_tiers`` sets each phase's per-step reproducibility tier (default
+    ``[full, demonstration_only]``). ``core.reproducibility`` is deliberately a **stand-in**
+    (``full`` with prose) so a test can prove ``Planner.plan`` overwrites it with the
+    framework-derived value (ADR 0090).
+    """
+    tiers = step_tiers or [ReproducibilityTier.FULL, ReproducibilityTier.DEMONSTRATION_ONLY]
+    return LabManifest(
+        spec_version=1,
+        spec_kind=SpecKind.LAB_MANIFEST,
+        core=CoreBlock(
+            id="codebuild-lab",  # type: ignore[arg-type]
+            name="CodeBuild Lab",
+            source=SourceBlock(
+                url="https://example.com/blog",  # type: ignore[arg-type]
+                canonical_url="https://example.com/blog",  # type: ignore[arg-type]
+                title="A writeup",
+                publisher=PublisherBlock(name="Lab", domain="example.com", kind="vendor_lab"),  # type: ignore[arg-type]
+                fetched_at=datetime(2025, 2, 1, tzinfo=UTC),
+                content_hash=HASH,
+                fetch_method="httpx",
+                word_count=100,
+            ),
+            thesis=_pstr("a supply-chain attack via CodeBuild"),
+            severity=_sev(Severity.HIGH),
+            reproducibility=ReproducibilityBlock(
+                classification_lab_level=ReproducibilityLabLevel.FULL,
+                overall_assessment=_pstr("the LLM's stand-in prose; the framework overwrites this"),
+            ),
+            generation=GenerationBlock(
+                tool_version="1.0.0",  # type: ignore[arg-type]
+                model="claude-opus-4-8",
+                timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ),
+        facets=["target:aws"],  # type: ignore[list-item]
+        prereqs=PrereqsBlock(
+            pre_lab=[
+                PrereqBlock(
+                    id="aws-creds",  # type: ignore[arg-type]
+                    description="AWS credentials configured for the lab account",
+                    kind=PrereqKind.MANUAL,
+                    timing=PrereqTiming.PRE_LAB,
+                ),
+            ],
+        ),
+        inputs=[
+            InputBlock(
+                name="target_region",  # type: ignore[arg-type]
+                type="aws_region",  # type: ignore[arg-type]
+                source=InputSource.CLI_FLAG_OR_DEFAULT,
+                default="us-east-1",
+            ),
+        ],
+        lab_resources=[
+            LabResourceBlock(
+                id="logging-bucket",  # type: ignore[arg-type]
+                type="aws_s3_bucket",  # type: ignore[arg-type]
+                intended_iac_resource_type="aws_s3_bucket",
+                provisioning_mechanism=ProvisioningMechanism.TERRAFORM,
+                lab_role=[LabRole.DEFENDER_INFRASTRUCTURE, LabRole.ATTACK_TARGET],
+                description=_pstr("logging bucket the attack deletes from to cover tracks"),
+            ),
+        ],
+        phases=[_phase(i + 1, tier) for i, tier in enumerate(tiers)],
+        outputs=[
+            OutputBlock(
+                name="bucket_name",  # type: ignore[arg-type]
+                type="aws_s3_bucket",  # type: ignore[arg-type]
+                iac_reference="terraform.output.bucket_name",
+            ),
+        ],
+    )
 
 
 # --- the agent fakes -------------------------------------------------------

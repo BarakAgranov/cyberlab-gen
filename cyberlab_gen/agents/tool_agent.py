@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         CapabilityHint,
         Provider,
         ProviderResponse,
+        ToolDefinition,
     )
     from cyberlab_gen.providers.ranking import ProviderRegistry
     from cyberlab_gen.registries.merge import MergedRegistries
@@ -79,6 +80,28 @@ class ToolUsingAgent:
         #: enforced by tool availability, not prose.
         self._verify_only_tools = verify_only_tools
 
+    def _build_tools_and_executor(self) -> tuple[list[ToolDefinition], ExtractorToolExecutor]:
+        """Build the advertised tools + the executor for one emit (the overridable inventory seam).
+
+        The default is the Phase-1 inventory: the Extractor's tools and ``ExtractorToolExecutor``,
+        gated by ``verify_only_tools`` — so the Extractor (producer) and the Extractor-Jury
+        (verify-only, ADR 0078) keep their exact behaviour without overriding this. A producer
+        whose tool set is **not** the Extractor's (the Planner, `agents.md §5.7`; the Phase-3
+        Generators) overrides this to return its own ``(tools, executor)``; the six-step sequence
+        and the ``§1.5`` invariants in :meth:`_emit` stay untouched (ADR 0089). The override's
+        executor is an ``ExtractorToolExecutor`` *subtype*, so :meth:`_emit`'s return type holds.
+        """
+        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
+        executor = ExtractorToolExecutor(
+            registries=self._registries,
+            nvd_client=self._nvd_client,
+            verify_only=self._verify_only_tools,
+        )
+        tools = extractor_tool_definitions(
+            registered_source_ids=source_ids, verify_only=self._verify_only_tools
+        )
+        return tools, executor
+
     async def _emit[T: BaseModel](
         self,
         *,
@@ -89,26 +112,19 @@ class ToolUsingAgent:
     ) -> tuple[ProviderResponse[T], ExtractorToolExecutor]:
         """Run one tool-loop emit and return ``(response, executor)``.
 
-        The six steps, once: derive the registered source ids, build the tool executor, build the
-        messages, run the tool loop with the forced typed output, and hand back the validated
-        response **and** the executor (so a caller can read the executor's side-channel —
-        proposals + lookups — or ignore it). The model's output is returned, never consulted here
-        for routing (``architecture.md §1.5``).
+        The six steps, once: build the (tools, executor) via the overridable
+        :meth:`_build_tools_and_executor` seam, build the messages, run the tool loop with the
+        forced typed output, and hand back the validated response **and** the executor (so a caller
+        can read the executor's side-channel — proposals + lookups — or ignore it). The model's
+        output is returned, never consulted here for routing (``architecture.md §1.5``).
         """
-        source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
-        executor = ExtractorToolExecutor(
-            registries=self._registries,
-            nvd_client=self._nvd_client,
-            verify_only=self._verify_only_tools,
-        )
+        tools, executor = self._build_tools_and_executor()
         messages = self._runner.build_messages(capability=capability, user_content=user_content)
         response = await self._runner.run_with_tools(
             messages,
             output_schema=output_schema,
             capability=capability,
-            tools=extractor_tool_definitions(
-                registered_source_ids=source_ids, verify_only=self._verify_only_tools
-            ),
+            tools=tools,
             tool_executor=executor,
             max_iterations=self._max_tool_iterations,
             max_tokens=max_tokens,
