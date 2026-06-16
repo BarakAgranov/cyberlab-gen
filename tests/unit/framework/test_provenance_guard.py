@@ -15,8 +15,9 @@ from cyberlab_gen.schemas.attack_spec import (
     CveReference,
     ExternalRefsBlock,
     MaterialDiscrepancy,
+    ReproducibilityBlock,
 )
-from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource
+from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource, ReproducibilityLabLevel
 from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceFloat, ProvenanceString
 from tests.unit.framework.pipeline_fakes import make_spec
 
@@ -94,6 +95,49 @@ def test_neutralize_clears_llm_authored_material_discrepancies() -> None:
     assert len(spec.material_discrepancies) == 1  # poisoned
     cleaned = neutralize_framework_owned_provenance(spec)
     assert cleaned.material_discrepancies == []
+
+
+def test_neutralize_nulls_llm_authored_cve_source_of_record() -> None:
+    # source_of_record is framework-set only after a SUCCESSFUL enrichment lookup (enrichment.py);
+    # an Extractor-authored value would otherwise survive on every skipped lookup as a forged claim
+    # that an authoritative source backs a CVE the lab never queried (ADR 0085 / #7).
+    spec = make_spec().model_copy(
+        update={
+            "external_references": ExternalRefsBlock(
+                cves=[
+                    CveReference(
+                        cve_id="CVE-2025-0001",  # type: ignore[arg-type]
+                        description=_api_string("an LLM-claimed CVE"),
+                        source_of_record="nvd",  # type: ignore[arg-type]  # LLM-forged
+                    )
+                ]
+            )
+        }
+    )
+    refs = spec.external_references
+    assert refs is not None and refs.cves[0].source_of_record == "nvd"  # poisoned
+    cleaned = neutralize_framework_owned_provenance(spec)
+    cleaned_refs = cleaned.external_references
+    assert cleaned_refs is not None
+    assert cleaned_refs.cves[0].source_of_record is None
+
+
+def test_neutralize_nulls_llm_authored_lab_reproducibility() -> None:
+    # The lab-level reproducibility block is framework-DERIVED from the per-step tiers
+    # (architecture.md §0.7), never authored upfront; an LLM-authored derivation_trace would be a
+    # fabricated framework audit trail (ADR 0085 / #7).
+    spec = make_spec().model_copy(
+        update={
+            "reproducibility": ReproducibilityBlock(
+                classification_lab_level=ReproducibilityLabLevel.FULL,
+                overall_assessment=_api_string("fully reproducible"),
+                derivation_trace=["an LLM-fabricated derivation trace"],
+            )
+        }
+    )
+    assert spec.reproducibility is not None  # poisoned
+    cleaned = neutralize_framework_owned_provenance(spec)
+    assert cleaned.reproducibility is None
 
 
 def test_neutralize_is_a_noop_on_a_clean_spec() -> None:

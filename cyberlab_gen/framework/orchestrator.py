@@ -535,13 +535,23 @@ def build_pipeline(
             if pending is None or pending.kind is FeedbackKind.STRUCTURAL_RETRY:
                 state.structural_attempts += 1
         state.extraction = result
-        # Neutralize any framework-only provenance the LLM may have authored (framework_enriched,
-        # the discrepancy record, material_discrepancies) BEFORE the spec reaches validation /
-        # enrichment / grounding. Enrichment is the sole legitimate writer of these and runs
-        # later; an LLM-set framework_enriched would otherwise skip enrichment's no-op guard AND
-        # the grounding search-before-claim check (ADR 0082). state.extraction keeps the raw
-        # agent output for the audit trail; state.spec is the framework-sanitized artifact.
-        state.spec = neutralize_framework_owned_provenance(result.attack_spec)
+        # Neutralize the framework-owned fields the LLM may not author (framework_enriched, the
+        # discrepancy record, CveReference.source_of_record, material_discrepancies, the derived
+        # lab-level reproducibility block) BEFORE the spec reaches validation / enrichment /
+        # grounding — the framework is the sole legitimate writer and runs later; an LLM-set
+        # framework_enriched would otherwise skip enrichment's no-op guard AND the grounding
+        # search-before-claim check (ADR 0082). The scope follows WHAT THIS RUN AUTHORED (ADR 0085):
+        # a refinement is a targeted patch whose only LLM-authored content — the patch new_values —
+        # was already neutralized at the merge seam (refinement.apply_field_patch ->
+        # neutralize_patch_provenance), so re-scrubbing the merged spec here would wipe a PRIOR
+        # iteration's legitimate enrichment (the discrepancy record + material_discrepancies index)
+        # and silently drop a blog-vs-API disagreement. A first run / structural retry / grounding
+        # retry (re)authored the whole spec, so the whole spec is scrubbed. state.extraction keeps
+        # the raw agent output for the audit trail; state.spec is the framework-sanitized artifact.
+        if is_refinement:
+            state.spec = result.attack_spec
+        else:
+            state.spec = neutralize_framework_owned_provenance(result.attack_spec)
         # the feedback (if any) has now been consumed by this re-run
         state.pending_feedback = None
         return state

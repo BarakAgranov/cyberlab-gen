@@ -34,6 +34,8 @@ from cyberlab_gen.schemas.attack_spec import (
     ChainBlock,
     ChainStep,
     ChainStepTechniques,
+    CveReference,
+    ExternalRefsBlock,
     ExtractionMetadataBlock,
     PerStepReproducibility,
     PublisherBlock,
@@ -47,7 +49,7 @@ from cyberlab_gen.schemas.enums import (
     ProvisioningMechanism,
     ReproducibilityTier,
 )
-from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceString
+from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceFloat, ProvenanceString
 
 if TYPE_CHECKING:
     from pydantic import JsonValue
@@ -150,6 +152,83 @@ def test_refinement_patch_round_trips_with_nested_new_value() -> None:
     assert restored == patch
     assert isinstance(restored.patches[0].new_value, dict)
     assert restored.patches[0].new_value["value"] == "sharper"  # type: ignore[index]
+
+
+# --- patch cannot forge framework-owned provenance/ids (ADR 0085) ----------
+
+
+def _cve_spec() -> AttackSpec:
+    """A prior spec carrying one blog_explicit CVE, so a patch can target a CVE field."""
+    return _spec().model_copy(
+        update={
+            "external_references": ExternalRefsBlock(
+                cves=[
+                    CveReference(
+                        cve_id="CVE-2021-44228",  # type: ignore[arg-type]
+                        description=_pstr("log4shell"),
+                        cvss_score=ProvenanceFloat(
+                            value=5.0, source=ProvenanceSource.BLOG_EXPLICIT, citations=[_cite()]
+                        ),
+                    )
+                ]
+            )
+        }
+    )
+
+
+def test_patch_cannot_forge_framework_provenance_on_flagged_field() -> None:
+    # A jury-revise patch is LLM-authored; it must not self-stamp framework_enriched (which evades
+    # enrichment's no-op + the grounding search-before-claim check) or the API-override discrepancy
+    # record. apply_field_patch scrubs the patch sub-tree before deep-set + whole-spec validation.
+    forged: JsonValue = {
+        "value": 9.9,
+        "source": "external_api",
+        "citations": [{"kind": "external_api_response", "reference": "NVD"}],
+        "framework_enriched": True,
+        "discrepancy_with_blog": True,
+        "overridden_blog_value": 5.0,
+        "discrepancy_classification": "material",
+    }
+    merged = apply_field_patch(
+        _cve_spec(),
+        RefinementPatch(
+            patches=[
+                FieldPatch(field_path="external_references.cves[0].cvss_score", new_value=forged)
+            ]
+        ),
+    )
+    refs = merged.external_references
+    assert refs is not None
+    score = refs.cves[0].cvss_score
+    assert score is not None
+    # The value + source the patch legitimately proposed survive; only the framework-only fields
+    # the LLM may not author are reset.
+    assert score.value == 9.9
+    assert score.framework_enriched is False
+    assert score.discrepancy_with_blog is False
+    assert score.overridden_blog_value is None
+    assert score.discrepancy_classification is None
+
+
+def test_patch_cannot_forge_cve_source_of_record() -> None:
+    forged_cve: JsonValue = {
+        "cve_id": "CVE-2021-44228",
+        "description": {
+            "value": "log4shell",
+            "source": "blog_explicit",
+            "citations": [{"kind": "blog_passage", "reference": "§1"}],
+        },
+        "source_of_record": "nvd",  # framework-set on a successful lookup only
+    }
+    merged = apply_field_patch(
+        _cve_spec(),
+        RefinementPatch(
+            patches=[FieldPatch(field_path="external_references.cves[0]", new_value=forged_cve)]
+        ),
+    )
+    refs = merged.external_references
+    assert refs is not None
+    assert refs.cves[0].source_of_record is None
 
 
 # --- convergence / non-regression ------------------------------------------

@@ -35,6 +35,7 @@ from typing import cast
 from pydantic import JsonValue
 
 from cyberlab_gen.errors import CyberlabGenError
+from cyberlab_gen.framework.provenance_guard import neutralize_patch_provenance
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 
@@ -97,7 +98,12 @@ def apply_field_patch(prior: AttackSpec, patch: RefinementPatch) -> AttackSpec:
     data: dict[str, object] = prior.model_dump(mode="json", by_alias=True)
     for field_patch in patch.patches:
         segments = _parse_path(field_patch.field_path)
-        _set_by_path(data, segments, field_patch.new_value, path=field_patch.field_path)
+        # The patch value is LLM-authored content for a flagged path; like a first-run extract it
+        # must not author framework-owned provenance/ids (framework_enriched, the discrepancy
+        # record, a CveReference.source_of_record). Scrub the patch sub-tree only — never the
+        # merged spec — so a prior iteration's legitimate enrichment survives (ADR 0085).
+        scrubbed = neutralize_patch_provenance(field_patch.new_value)
+        _set_by_path(data, segments, scrubbed, path=field_patch.field_path)
     return AttackSpec.model_validate(data)
 
 

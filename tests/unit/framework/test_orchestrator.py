@@ -975,6 +975,45 @@ async def test_refinement_re_runs_enrichment_before_re_review() -> None:
         assert refs.cves[0].cvss_score.framework_enriched is True
 
 
+async def test_refinement_preserves_prior_enrichment_discrepancy() -> None:
+    # ADR 0085 (regression for the ADR-0082 over-broad reset): a blog-vs-NVD MATERIAL discrepancy
+    # established on the FIRST enrichment must SURVIVE a jury revise. The blanket neutralize at the
+    # extract seam used to wipe the prior-iteration discrepancy off the merged refine output, and
+    # re-enrichment (the field is now external_api, no blog_explicit value) could not re-detect it
+    # — silently dropping a blog-vs-API disagreement the first jury had seen.
+    ext = _FakeExtractor([_blog_cve_spec(cvss=5.0)])  # blog 5.0 vs NVD 9.0 = cross-tier MATERIAL
+    jury = _FakeJury(
+        [
+            _verdict(Verdict.REVISE, feedback=[JuryFieldFeedback(field_path="x", problem="p")]),
+            _verdict(Verdict.APPROVE),
+        ]
+    )
+    run = build_pipeline(
+        extractor=ext, validator=_validator(), jury=jury, enrichment_config=_enrich_cfg()
+    )
+    state = await run(PipelineState(blog_content="blog", source_summary="url=..."))
+
+    assert state.status is PipelineStatus.SHIPPED
+    assert jury.calls == 2
+    # The FIRST review saw the discrepancy ...
+    first = jury.reviewed_specs[0].external_references
+    assert first is not None and first.cves[0].cvss_score is not None
+    assert first.cves[0].cvss_score.discrepancy_with_blog is True
+    # ... and the SHIPPED spec must still carry it: field-level marks AND the top-level index.
+    shipped = state.spec
+    assert shipped is not None
+    refs = shipped.external_references
+    assert refs is not None and refs.cves[0].cvss_score is not None
+    score = refs.cves[0].cvss_score
+    assert score.discrepancy_with_blog is True
+    assert score.overridden_blog_value == 5.0
+    assert score.discrepancy_classification is not None
+    assert any(
+        "CVE-2021-44228" in md.field_path and "cvss_score" in md.field_path
+        for md in shipped.material_discrepancies
+    ), f"the material_discrepancies index lost the cvss entry: {shipped.material_discrepancies}"
+
+
 async def test_refine_producing_ungrounded_spec_routes_grounding_retry() -> None:
     # R2 (whole-spec re-check, ADR 0051/0060): the Extractor's refine() no longer self-checks
     # grounding; a jury-revise PATCH that introduces an ungrounded external_api field must be
