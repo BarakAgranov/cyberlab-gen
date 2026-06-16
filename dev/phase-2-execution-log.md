@@ -129,6 +129,61 @@ neutralization), 0083 (convention reconciliation) — opened across the audit fo
 
 ---
 
+## Architect-review follow-up: scoped reset + framework-owned-field guards  (2026-06-16)
+
+**Built.** Acted on a tagged architect review (items #1–#7), reported-before-acting.
+- **#1 + #7 (blocker fix, ADR 0085).** The extract-seam reset (ADR 0082) ran on the *merged*
+  refine output, wiping a prior iteration's blog-vs-API material discrepancy that re-enrichment
+  could no longer re-detect — silently dropping it. Scoped the reset to *what the run authored*:
+  whole-spec on first run / structural retry / grounding retry; on a jury revise the patch
+  `new_value`s are scrubbed at the merge seam (`neutralize_patch_provenance` in
+  `apply_field_patch`) and the orchestrator no longer blanket-scrubs the merged spec. The
+  first-run reset now also nulls `CveReference.source_of_record` (a forgeable framework id on
+  every skipped enrichment lookup) and the framework-derived lab-level `reproducibility` block —
+  two live holes the #7 sweep found. Tests: orchestrator discrepancy-survival regression (RED→
+  GREEN), patch-cannot-forge-provenance / source_of_record, first-run nulls. Subsumes D5-02.
+- **#3 (test).** Marker-invariant test pinning `{source, citations, framework_enriched}` as
+  unique to `Provenance` (no offenders today — the guard can't silently scrub a future model).
+- **#7 principle (ADR 0086, docs).** One guard per framework-owned field, on a path the field
+  travels; four mechanisms (stamp / reset / derive / absent-from-LLM-schema); the audit rule;
+  the field inventory. Recorded — not built — the two Planner-coupled prereqs (manifest-side
+  framework stamping; `StepBlock.reproducibility` carry-integrity) in `dev/phase-2-seams.md`.
+- **#2 (VERIFY→docs).** Strip-tested `from __future__ import annotations` on real `main`:
+  removal raises `NameError` on TYPE_CHECKING-only names in eager annotation positions
+  (`MitreTechniqueCatalog` dataclass field; `MergedRegistries` / `Path` signatures), **not**
+  `get_type_hints(PipelineState)`. Corrected ADR 0083 CONV-2 + the `orchestrator.py:49-53`
+  comment; import kept (no promote-to-droppable).
+- **#5 (docs).** `pipeline.md §3.2.6` L163: the Planner *carries* reproducibility forward (the
+  Extractor applied `§4.20`), does not re-apply the ladder — the residual D3 leak.
+- **#4 (docs).** `provenance.py` comment: the only mechanical `framework_enriched` exemption is
+  the CVE-scoped grounding check; the jury has none of its own.
+- **Governance (ADR 0084).** `CLAUDE.md`: agent owns `docs/` edits (incl. architecture-tier),
+  surfaced never silent — per maintainer instruction ("you edit, I verify").
+
+**Decisions.** ADR 0084 (doc-edit authority), 0085 (scoped extract-seam reset), 0086
+(framework-owned-field guard principle); corrected ADR 0083 CONV-2 rationale.
+
+**Surprises / drift.**
+- The blocker was an interaction of two correct-in-isolation mechanisms: the enrichment
+  idempotency no-op (`enrichment.py:508`, whose comment anticipates *exactly* this loss) and
+  ADR 0082's neutralize, which reset `framework_enriched=False` upstream and defeated the no-op.
+- The verification workflow's `isolation: worktree` probes checked out a **stale base**
+  (`3d81583`, pre-ADR-0082), so the empirical repro (probe-1c) ran against code lacking the
+  fix target; the read-only agents + two adversarial skeptics on real `main` (plus a manual
+  re-read of the two crux links) carried the #1 confirmation. The orphaned worktree + branch
+  were pruned.
+- `real_world_incidents.status` is **not** a framework-owned hole today — Extractor-authored
+  from the blog until an incidents enrichment source lands (inventoried with that trigger).
+
+**Deferred.** Manifest-side framework stamping + `StepBlock.reproducibility` carry-integrity
+(Planner-coupled; ADR 0086 / seams). `stamp_framework_provenance`'s "single place" comment
+should point at ADR 0086 (doc nit, not blocking). `BaseModel→ArtifactModel` schema-details
+sweep still tracked (ADR 0004).
+
+**Verify.** `just verify` green — 769 passed / 1 skipped (+6 tests since Task 0).
+
+---
+
 ## Execution-log entry template
 
 ```
