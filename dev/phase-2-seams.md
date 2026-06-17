@@ -136,6 +136,16 @@ they are built. The rest, tracked:
   intentionally unmarked today because a mechanism-less `FrameworkOwned` marker would mis-drive the
   whole-spec reset-walk to blank them. Mark them — and dispatch consumers on mechanism — when
   `FrameworkOwned` gains its `mechanism` field.
+- **`severity` on the shared `Finding` base** (ADR 0073 base; deferral recorded in ADR 0094 dec 8).
+  The ADR-0073 `Finding` carries only `(code, location, detail)` — no severity/warning level — so a
+  *warn-level* finding is currently inexpressible. **One** out-of-scope consumer (the non-first-class
+  `runtime:*` warning, `validation.md §6.5`) is not enough to justify changing a shared contract.
+  The likely **second** consumer — the real trigger — is the **Critic** (`agents.md §5.14`): Layer-5
+  high-severity findings halt the pipeline mechanically (`architecture.md §1.6`), which needs a
+  severity level to *be* high. **When it lands:** add `severity` **on the ADR-0073 `Finding` base,
+  generalized** — not bespoke per layer (the ADR-0068 one-home discipline) — and design it against
+  **both** consumers at once (the warn-level `runtime:*` notice *and* the Critic's high-severity
+  halt), so the level vocabulary serves both rather than being retrofit twice.
 
 ---
 
