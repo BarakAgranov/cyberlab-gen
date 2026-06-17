@@ -42,6 +42,12 @@ When you need context not already in the conversation:
 3. Follow cross-references only as needed; do not pre-load.
 4. Stop reading when you have enough to act. More context costs context budget; spend it deliberately.
 
+## Sub-agents and workflows: model policy
+
+When you delegate to a sub-agent or run a dynamic / multi-agent workflow, **default every delegated agent to Opus 4.8** (the capable model). The newest Sonnet is acceptable **only** for mechanical, narrow tasks — retrieval, grepping, listing, file-location. **Never use Haiku for any delegated task.**
+
+Why: in this repo the sub-agents do safety-critical work — adversarial refutation, ownership/inventory classification, vulnerability tracing, contract-fidelity checks. A weaker model's "I couldn't refute it" / "looks correct" is *false confidence*, which is worse than running no check at all (you act on a green light that wasn't earned). The cost of the stronger model is negligible against shipping a wrong conclusion on the LLM/framework split, a mechanical-safety guard, or a contract. When in doubt about a task's difficulty, treat it as non-mechanical and use Opus.
+
 ## Hard rules
 
 **LLMs do** (per `architecture.md §1.5`): produce content (extraction, planning, generation, docs) and produce structured judgments (jury verdicts, Critic verdicts, refinement recommendations).
