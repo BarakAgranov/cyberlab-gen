@@ -9,24 +9,31 @@ ADR 0092 (the Planner's ``PlanAttempt`` outcome), ADR 0054/0091 (targeted-patch 
 
 The Phase-2 plan pipeline wires::
 
-    Planner → Planner-Jury
+    Planner → Planner-Jury → semantic cross-check  (the second mechanical validation layer)
 
 as a LangGraph ``StateGraph`` over a single typed ``PlanPipelineState`` channel. It is **linear**
 (no ``Stage``/``Node`` abstraction, no reducer channels — those land at the first *parallel* node,
-the Phase-3 Generators; ``dev/phase-2-seams.md`` ③.1). Three control-flow mechanisms are encoded
+the Phase-3 Generators; ``dev/phase-2-seams.md`` ③.1). The control-flow mechanisms are encoded
 explicitly:
 
 * **Planner-Jury ``revise`` (quality) → the *refinement* coordinator.** A ``revise`` re-runs the
   Planner as a **targeted patch** of only the flagged manifest fields (``Planner.refine``, ADR
   0054/0091), bounded by a per-agent refinement cap (``DEFAULT_REFINEMENT_CAP``). On cap exhaustion
   the last verdict decides (``pipeline.md §3.2.7`` → ``§3.2.3``): ``revise`` → ship with
-  ``low_jury_confidence``; ``reject`` → halt.
+  ``low_jury_confidence`` *if the cross-check then passes*; ``reject`` → halt.
+
+* **Semantic cross-check (the second mechanical validation layer) → a ship gate (Task 6, ADR 0097).**
+  Every manifest the jury would ship (a clean ``approve`` *or* a revise-cap-exhausted low-confidence
+  ship) must first clear the mechanical cross-check (``validation.md §6.5``, ``§1.6``). A pass ships
+  (``PLANNED`` / ``PLANNED_LOW_CONFIDENCE``); findings route to the responsible agent (the Planner,
+  via ``responsible_agent_for``) for a bounded refinement on the **shared** cap; a budget-spent
+  unresolved cross-check **halts** (``HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED``) — a known-broken
+  manifest never ships behind a confidence flag.
 
 * **AttackSpec incoherence → route back to the Extractor.** When the Planner emits
   ``attackspec_incoherent`` (ADR 0092) it flagged a defect it is **not allowed to repair**
   (``agents.md §5.7``). The coordinator terminates with ``ROUTE_BACK_TO_EXTRACTOR`` — a returned
-  outcome, not a raise: Task 6 connects this edge to a real Extractor re-run (cross-pipeline). Here
-  the route-back **decision** is the asserted contract (the Task-4 exit criterion).
+  outcome, not a raise: the Task-6 ``plan`` verb maps it to an actionable re-extract exit (ADR 0097).
 
 * **``cannot_plan`` → halt.** AttackSpec gaps too large to plan around → terminate with
   ``HALTED_CANNOT_PLAN`` and the structured gap report (``pipeline.md §3.2.6``).
@@ -56,7 +63,7 @@ from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVer
 # schema at graph-build time — so the names must resolve at runtime (the same reasoning as the
 # extract orchestrator's field-type imports).
 from cyberlab_gen.agents.results import PlannerRefusal, PlanOutcome, PlanResult
-from cyberlab_gen.framework.graph_support import traced_async
+from cyberlab_gen.framework.graph_support import traced_async, traced_sync
 from cyberlab_gen.framework.orchestrator import (
     DEFAULT_REFINEMENT_CAP,
     GLOBAL_ITERATION_CAP,
@@ -65,6 +72,12 @@ from cyberlab_gen.framework.orchestrator import (
 from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
 from cyberlab_gen.schemas.manifest import LabManifest
+from cyberlab_gen.validators.semantic_cross_check_validator import (
+    ResponsibleAgent,
+    SemanticCrossCheckFinding,
+    SemanticCrossCheckResult,
+    responsible_agent_for,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -90,6 +103,12 @@ class PlanPipelineStatus(StrEnum):
     # Extractor. A returned outcome (Task 6 wires the cross-pipeline re-extract), not a raise.
     ROUTE_BACK_TO_EXTRACTOR = "route_back_to_extractor"
     HALTED_CANNOT_PLAN = "halted_cannot_plan"
+    # The semantic cross-check (the second mechanical validation layer) found issues the Planner
+    # could not clear within the refinement budget. A cross-check-invalid manifest is *known-broken*
+    # (e.g. a dangling identifier_source), not *uncertain* — so the framework halts rather than ship
+    # it behind a confidence flag (`§1.6`, exit-criterion 1). Descriptive name, no ordinal token
+    # (`coding-conventions.md §5.5`). ADR 0097.
+    HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED = "halted_semantic_cross_check_unresolved"
     # The global iteration cap bound the whole pipeline (ADR 0056 backstop).
     HALTED_ITERATION_CAP = "halted_iteration_cap"
 
@@ -119,6 +138,10 @@ class PlanPipelineState(BaseModel):
 
     # routing
     pending_feedback: list[JuryFieldFeedback] | None = None
+    # set by the jury node when a revise exhausts the refinement budget: the manifest will ship as
+    # low_jury_confidence *iff* the semantic cross-check then passes (the cross-check is mechanical,
+    # not a confidence opinion). Read by the cross-check node to pick the ship status.
+    pending_low_confidence: bool = False
     refinement_iterations: int = 0
     # total Planner runs across the whole pipeline (first plan + refines); bounded by the global cap.
     total_iterations: int = 0
@@ -182,12 +205,24 @@ class _PlannerJuryLike(Protocol):
     async def review(self, *, manifest: LabManifest, attack_spec: AttackSpec) -> JuryVerdict: ...
 
 
+class _CrossCheckValidatorLike(Protocol):
+    """The semantic-cross-check surface the graph needs (the second mechanical validation layer).
+
+    Read-only: ``validate`` returns findings; the orchestrator routes (``architecture.md §1.5``).
+    """
+
+    def validate(self, manifest: LabManifest) -> SemanticCrossCheckResult: ...
+
+
 # --- node names ------------------------------------------------------------
 
 
 class _Node(StrEnum):
     PLAN = "plan"
     JURY = "plan_jury"
+    # the semantic cross-check (the second mechanical validation layer); descriptive name, never an
+    # ordinal token (`coding-conventions.md §5.5`).
+    CROSS_CHECK = "semantic_cross_check"
 
 
 # --- the graph builder -----------------------------------------------------
@@ -203,6 +238,7 @@ def build_plan_pipeline(
     *,
     planner: _PlannerLike,
     jury: _PlannerJuryLike,
+    validator: _CrossCheckValidatorLike,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
     global_iteration_cap: int = GLOBAL_ITERATION_CAP,
 ) -> PlanPipelineRun:
@@ -305,8 +341,10 @@ def build_plan_pipeline(
                 state.route = END
                 logger.info("plan jury approve contradicts sub-floor scores; halting")
                 return state
-            state.status = PlanPipelineStatus.PLANNED
-            state.route = END
+            # Mechanically clean approve. The manifest still must clear the semantic cross-check (the
+            # second mechanical validation layer) before it ships — the cross-check node sets the
+            # terminal status (`§1.6`, exit-criterion 1; ADR 0097).
+            state.route = _Node.CROSS_CHECK.value
             return state
         if verdict.verdict is Verdict.REJECT:
             state.status = PlanPipelineStatus.HALTED_REJECT
@@ -328,12 +366,71 @@ def build_plan_pipeline(
                 refinement_cap,
             )
             return state
-        # cap exhausted with a revise verdict — ship with low_jury_confidence (the
-        # disagreement-without-progress (b) case, ``pipeline.md §3.2.7`` → ``§3.2.3``).
-        state.status = PlanPipelineStatus.PLANNED_LOW_CONFIDENCE
+        # cap exhausted with a revise verdict — the jury's *semantic* uncertainty would ship as
+        # low_jury_confidence (the disagreement-without-progress (b) case, ``pipeline.md §3.2.7`` →
+        # ``§3.2.3``). But a low-confidence ship STILL must clear the *mechanical* cross-check first
+        # (mechanical correctness is not a confidence opinion — ``§1.6``). Carry the would-ship flag
+        # and route to the cross-check, which sets the terminal status (ADR 0097).
+        state.pending_low_confidence = True
         state.unresolved_feedback = [_feedback_line(item) for item in verdict.feedback]
+        state.route = _Node.CROSS_CHECK.value
+        logger.info(
+            "plan refinement cap exhausted on revise; cross-checking before low-confidence ship"
+        )
+        return state
+
+    def cross_check_node(state: PlanPipelineState) -> PlanPipelineState:
+        """Run the semantic cross-check (the second mechanical validation layer) over the manifest.
+
+        A mechanical gate every shipped manifest must clear (``§1.6``, exit-criterion 1): pass → ship
+        (``PLANNED``, or ``PLANNED_LOW_CONFIDENCE`` when the jury shipped on revise-cap-exhaustion);
+        findings → route to the responsible agent (the Planner) for a bounded refinement, or — when
+        the refinement budget is spent — HALT. A cross-check-invalid manifest is *known-broken* (e.g.
+        a dangling ``identifier_source``), not *uncertain*, so it never ships behind a confidence flag.
+        The validator is read-only; the framework routes (``architecture.md §1.5``). ADR 0097.
+        """
+        assert state.manifest is not None  # reached only on a ship path (jury approve / low-conf)
+        result = validator.validate(state.manifest)
+        if result.passed:
+            state.status = (
+                PlanPipelineStatus.PLANNED_LOW_CONFIDENCE
+                if state.pending_low_confidence
+                else PlanPipelineStatus.PLANNED
+            )
+            state.route = END
+            return state
+        # Findings. Route each to its responsible agent via the Task-5 mapping (consumes the seam):
+        # in Phase 2 every live cross-check finding is a manifest-declaration issue the Planner owns,
+        # so they route to the Planner — a bounded refinement on the *shared* cap (jury + cross-check).
+        responsible = {responsible_agent_for(f) for f in result.findings}
+        if (
+            responsible == {ResponsibleAgent.PLANNER}
+            and state.refinement_iterations < refinement_cap
+        ):
+            if _global_cap_reached(state):
+                return _halt_global_cap(state)
+            state.refinement_iterations += 1
+            state.pending_feedback = _findings_to_feedback(result.findings)
+            state.route = _Node.PLAN.value
+            logger.info(
+                "plan semantic cross-check found %d issue(s); routing to Planner REFINEMENT "
+                "(iteration %d/%d)",
+                len(result.findings),
+                state.refinement_iterations,
+                refinement_cap,
+            )
+            return state
+        # Refinement budget spent (or — defensively — a route Phase 2 has no agent for): HALT rather
+        # than ship a mechanically-invalid manifest. Record the unresolved findings for the report.
+        rendered = [finding.render() for finding in result.findings]
+        state.status = PlanPipelineStatus.HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED
+        state.unresolved_feedback = [*state.unresolved_feedback, *rendered]
+        state.halt_reason = (
+            f"semantic cross-check found {len(result.findings)} unresolved issue(s) the Planner "
+            f"could not clear within the refinement budget: {'; '.join(rendered)}"
+        )
         state.route = END
-        logger.info("plan refinement cap exhausted on revise; shipping with low_jury_confidence")
+        logger.info("plan semantic cross-check unresolved past the refinement budget; halting")
         return state
 
     def route_after_plan(state: PlanPipelineState) -> str:
@@ -344,11 +441,17 @@ def build_plan_pipeline(
         assert state.route is not None  # jury_node always sets it
         return state.route
 
+    def route_after_cross_check(state: PlanPipelineState) -> str:
+        assert state.route is not None  # cross_check_node always sets it
+        return state.route
+
     graph: StateGraph[PlanPipelineState, None, PlanPipelineState, PlanPipelineState] = StateGraph(
         PlanPipelineState
     )
     graph.add_node(_Node.PLAN.value, traced_async(_Node.PLAN.value, plan_node))
     graph.add_node(_Node.JURY.value, traced_async(_Node.JURY.value, jury_node))
+    # The cross-check is mechanical (no LLM, no I/O) — a *sync* node (`graph_support.traced_sync`).
+    graph.add_node(_Node.CROSS_CHECK.value, traced_sync(_Node.CROSS_CHECK.value, cross_check_node))
 
     graph.add_edge(START, _Node.PLAN.value)
     graph.add_conditional_edges(
@@ -356,9 +459,21 @@ def build_plan_pipeline(
         route_after_plan,
         {_Node.JURY.value: _Node.JURY.value, END: END},
     )
+    # The jury routes to refinement (PLAN), to the cross-check (a ship path — approve or
+    # low-confidence), or to a halt (END).
     graph.add_conditional_edges(
         _Node.JURY.value,
         route_after_jury,
+        {
+            _Node.PLAN.value: _Node.PLAN.value,
+            _Node.CROSS_CHECK.value: _Node.CROSS_CHECK.value,
+            END: END,
+        },
+    )
+    # The cross-check ships (END) or routes findings back to the Planner for bounded refinement.
+    graph.add_conditional_edges(
+        _Node.CROSS_CHECK.value,
+        route_after_cross_check,
         {_Node.PLAN.value: _Node.PLAN.value, END: END},
     )
     compiled = graph.compile()
@@ -384,6 +499,7 @@ async def run_plan_pipeline(
     attack_spec: AttackSpec,
     planner: _PlannerLike,
     jury: _PlannerJuryLike,
+    validator: _CrossCheckValidatorLike,
     preferences: str | None = None,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
 ) -> PlanPipelineOutcome:
@@ -395,7 +511,9 @@ async def run_plan_pipeline(
     -vs-ship policy. (``Planner.refine`` may still raise ``PlanningError`` on patch-budget
     exhaustion; that propagates as a hard internal failure, mirroring ``Extractor.refine``.)
     """
-    run = build_plan_pipeline(planner=planner, jury=jury, refinement_cap=refinement_cap)
+    run = build_plan_pipeline(
+        planner=planner, jury=jury, validator=validator, refinement_cap=refinement_cap
+    )
     final = await run(PlanPipelineState(attack_spec=attack_spec, preferences=preferences))
     return finalize_plan_outcome(final)
 
@@ -422,6 +540,23 @@ def _feedback_line(item: JuryFieldFeedback) -> str:
     """One ``field_path: problem`` line, with the jury's ``suggested_fix`` when present."""
     base = f"{item.field_path}: {item.problem}"
     return f"{base} (suggested fix: {item.suggested_fix})" if item.suggested_fix else base
+
+
+def _findings_to_feedback(
+    findings: list[SemanticCrossCheckFinding],
+) -> list[JuryFieldFeedback]:
+    """Adapt mechanical cross-check findings into the structured refinement feedback the Planner takes.
+
+    Structured→structured (the typed-cross-stage-boundary rule): the finding's integer-indexed
+    locator becomes the ``field_path``, its ``detail`` (prefixed with the code so the Planner sees the
+    check class) the ``problem``. No ``suggested_fix`` — the validator never authors manifest content;
+    it states the problem and the Planner emits the patch (``architecture.md §1.5``). Rendering to
+    prompt text happens only at the Planner boundary (``Planner.refine``), not here.
+    """
+    return [
+        JuryFieldFeedback(field_path=f.location, problem=f"[{f.code.value}] {f.detail}")
+        for f in findings
+    ]
 
 
 __all__ = [

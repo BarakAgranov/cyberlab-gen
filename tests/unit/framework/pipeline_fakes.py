@@ -69,6 +69,11 @@ from cyberlab_gen.schemas.manifest import (
     StepBlock,
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, Provenance, ProvenanceString
+from cyberlab_gen.validators.semantic_cross_check_validator import (
+    SemanticCrossCheckCode,
+    SemanticCrossCheckFinding,
+    SemanticCrossCheckResult,
+)
 from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 if TYPE_CHECKING:
@@ -553,6 +558,43 @@ class FakePlannerJury:
         idx = min(self.calls, len(self._verdicts) - 1)
         self.calls += 1
         return self._verdicts[idx]
+
+
+def make_cross_check_finding(
+    *,
+    code: SemanticCrossCheckCode = SemanticCrossCheckCode.MISSING_IMPLIED_FACET,
+    location: str = "facets[0]",
+    detail: str = "facet implies an undeclared facet the Planner must add",
+) -> SemanticCrossCheckFinding:
+    """One semantic-cross-check finding (defaults to a routable, Planner-owned MISSING_IMPLIED_FACET)."""
+    return SemanticCrossCheckFinding(code=code, location=location, detail=detail)
+
+
+def make_cross_check_result(
+    findings: list[SemanticCrossCheckFinding] | None = None,
+) -> SemanticCrossCheckResult:
+    """A semantic-cross-check result; ``passed`` iff there are no findings."""
+    items = findings or []
+    return SemanticCrossCheckResult(passed=not items, findings=items)
+
+
+class FakeCrossCheckValidator:
+    """A scripted semantic-cross-check validator: returns queued results in sequence, default PASS.
+
+    The plan graph's cross-check node depends only on ``validate(manifest) -> SemanticCrossCheckResult``;
+    this records calls and returns queued results (the last repeats), so a test can drive a clean pass,
+    a findings-then-pass refinement loop, or a persistent-findings halt.
+    """
+
+    def __init__(self, results: list[SemanticCrossCheckResult] | None = None) -> None:
+        self._results = list(results) if results else [make_cross_check_result()]
+        self.calls = 0
+
+    def validate(self, manifest: LabManifest) -> SemanticCrossCheckResult:
+        del manifest
+        idx = min(self.calls, len(self._results) - 1)
+        self.calls += 1
+        return self._results[idx]
 
 
 # --- ingestion stub helper (typed, so callers avoid untyped monkeypatch lambdas) ---

@@ -31,9 +31,12 @@ from cyberlab_gen.framework.plan_orchestrator import (
     run_plan_pipeline,
 )
 from tests.unit.framework.pipeline_fakes import (
+    FakeCrossCheckValidator,
     FakePlanner,
     FakePlannerJury,
     make_cannot_plan_result,
+    make_cross_check_finding,
+    make_cross_check_result,
     make_manifest,
     make_plan_result,
     make_route_back_result,
@@ -56,12 +59,14 @@ async def _run_state(
     planner: FakePlanner,
     jury: FakePlannerJury,
     *,
+    validator: FakeCrossCheckValidator | None = None,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
     global_iteration_cap: int = GLOBAL_ITERATION_CAP,
 ) -> PlanPipelineState:
     run = build_plan_pipeline(
         planner=planner,
         jury=jury,
+        validator=validator or FakeCrossCheckValidator(),  # default: a clean cross-check pass
         refinement_cap=refinement_cap,
         global_iteration_cap=global_iteration_cap,
     )
@@ -207,6 +212,7 @@ async def test_run_plan_pipeline_returns_shipped_outcome() -> None:
         attack_spec=make_spec(),
         planner=FakePlanner([make_plan_result()]),
         jury=FakePlannerJury([make_verdict(Verdict.APPROVE)]),
+        validator=FakeCrossCheckValidator(),
     )
     assert isinstance(outcome, PlanPipelineOutcome)
     assert outcome.status is PlanPipelineStatus.PLANNED
@@ -221,6 +227,7 @@ async def test_run_plan_pipeline_returns_route_back_as_outcome_not_raise() -> No
         attack_spec=make_spec(),
         planner=FakePlanner([make_route_back_result()]),
         jury=FakePlannerJury([make_verdict(Verdict.APPROVE)]),
+        validator=FakeCrossCheckValidator(),
     )
     assert outcome.status is PlanPipelineStatus.ROUTE_BACK_TO_EXTRACTOR
     assert outcome.refusal is not None
@@ -230,7 +237,83 @@ async def test_run_plan_pipeline_returns_route_back_as_outcome_not_raise() -> No
 def test_build_plan_pipeline_validates_caps() -> None:
     planner = FakePlanner([make_plan_result()])
     jury = FakePlannerJury([make_verdict(Verdict.APPROVE)])
+    validator = FakeCrossCheckValidator()
     with pytest.raises(ValueError, match="refinement_cap"):
-        build_plan_pipeline(planner=planner, jury=jury, refinement_cap=-1)
+        build_plan_pipeline(planner=planner, jury=jury, validator=validator, refinement_cap=-1)
     with pytest.raises(ValueError, match="global_iteration_cap"):
-        build_plan_pipeline(planner=planner, jury=jury, global_iteration_cap=0)
+        build_plan_pipeline(planner=planner, jury=jury, validator=validator, global_iteration_cap=0)
+
+
+# --- the semantic cross-check node (Task 6: the second mechanical validation layer) ---------
+
+
+async def test_approve_then_clean_cross_check_ships_planned() -> None:
+    # The happy path now runs the cross-check after jury-approve; a clean pass ships PLANNED.
+    planner = FakePlanner([make_plan_result()])
+    jury = FakePlannerJury([make_verdict(Verdict.APPROVE)])
+    validator = FakeCrossCheckValidator()  # default: pass
+    final = await _run_state(planner, jury, validator=validator)
+
+    assert final.status is PlanPipelineStatus.PLANNED
+    assert validator.calls == 1  # the manifest was cross-checked before shipping
+
+
+async def test_cross_check_findings_route_to_planner_refine_and_converge() -> None:
+    # Cross-check findings route (via responsible_agent_for -> PLANNER) into a bounded refine; the
+    # patched manifest re-passes the jury and the cross-check, and ships.
+    patched = make_manifest()
+    planner = FakePlanner([make_plan_result()], refine_results=[make_plan_result(patched)])
+    jury = FakePlannerJury([make_verdict(Verdict.APPROVE), make_verdict(Verdict.APPROVE)])
+    finding = make_cross_check_finding(location="facets[0]")
+    validator = FakeCrossCheckValidator(
+        [make_cross_check_result([finding]), make_cross_check_result()]  # findings, then clean
+    )
+    final = await _run_state(planner, jury, validator=validator)
+
+    assert final.status is PlanPipelineStatus.PLANNED
+    assert final.refinement_iterations == 1
+    # the finding was adapted to refinement feedback the Planner consumed (structured locator + code):
+    assert len(planner.refine_calls) == 1
+    _prior, feedback = planner.refine_calls[0]
+    assert feedback[0].field_path == "facets[0]"
+    assert finding.code.value in feedback[0].problem
+    assert validator.calls == 2  # re-checked after the refine
+
+
+async def test_cross_check_unresolved_past_budget_halts_not_ships() -> None:
+    # A persistently cross-check-invalid manifest is known-broken: it HALTS rather than shipping
+    # behind any confidence flag (§1.6, exit-criterion 1). refinement_cap=1: one refine, still bad.
+    planner = FakePlanner([make_plan_result()])  # refine echoes the (still-bad) manifest
+    jury = FakePlannerJury([make_verdict(Verdict.APPROVE)])
+    bad = make_cross_check_result([make_cross_check_finding(location="facets[0]")])
+    validator = FakeCrossCheckValidator([bad])  # always returns findings
+    final = await _run_state(planner, jury, validator=validator, refinement_cap=1)
+
+    assert final.status is PlanPipelineStatus.HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED
+    assert final.unresolved_feedback  # the unresolved findings carried to the report
+    assert final.halt_reason is not None
+
+
+async def test_low_confidence_ship_still_requires_cross_check_pass() -> None:
+    # Jury revise-cap-exhausted would ship low_jury_confidence — but only if the mechanical
+    # cross-check passes. Here it passes → PLANNED_LOW_CONFIDENCE.
+    planner = FakePlanner([make_plan_result()])
+    jury = FakePlannerJury([_revise(), _revise()])  # exhaust the cap, then ship low-confidence
+    final = await _run_state(planner, jury, refinement_cap=1)
+
+    assert final.status is PlanPipelineStatus.PLANNED_LOW_CONFIDENCE
+    assert final.unresolved_feedback  # the jury's unresolved feedback
+
+
+async def test_low_confidence_with_cross_check_findings_halts() -> None:
+    # Jury revise-cap-exhausted (budget spent) AND the cross-check finds a mechanical issue → HALT,
+    # never a low-confidence ship of a known-broken manifest. The cross-check budget is the SHARED
+    # refinement budget, already spent by the jury revises.
+    planner = FakePlanner([make_plan_result()])
+    jury = FakePlannerJury([_revise(), _revise()])
+    bad = make_cross_check_result([make_cross_check_finding(location="facets[0]")])
+    final = await _run_state(
+        planner, jury, validator=FakeCrossCheckValidator([bad]), refinement_cap=1
+    )
+
+    assert final.status is PlanPipelineStatus.HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED

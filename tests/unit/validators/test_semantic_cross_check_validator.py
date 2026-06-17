@@ -289,7 +289,7 @@ def test_live_findings_route_to_the_planner() -> None:
         assert responsible_agent_for(finding) is ResponsibleAgent.PLANNER
 
 
-def test_reserved_phase3_codes_have_no_route() -> None:
+def test_reserved_deferred_codes_have_no_route() -> None:
     # The inert code-vs-manifest codes are not routable in Phase 2 — responsible_agent_for raises
     # loudly rather than guessing an agent (they cannot be produced this phase, so a live finding
     # never carries one). There is no affected_platforms code — that check is moot by design
