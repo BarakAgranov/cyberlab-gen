@@ -189,14 +189,25 @@ def _list_element_annotation(annotation: object) -> object:
 
 
 def resolve_framework_owned(root: type[BaseModel], segments: list[str | int]) -> bool:
-    """True iff ``segments`` resolves through ``root``'s schema to a ``FrameworkOwned`` field.
+    """True iff ``segments`` *target or descend into* a ``FrameworkOwned`` field of ``root``'s schema.
 
     Walks the field *annotations* (not a data instance), unwrapping ``T | None`` / ``list[T]`` /
-    the ``Provenance[T]`` generic at each step, so it lands on the exact ``(model, field)`` the
-    ``field_path`` targets and reads that field's inline marker (ADR 0087). A ``[i]`` index segment
-    descends a ``list[T]`` to ``T``. Returns ``False`` for a path that does not resolve in the
-    schema (or resolves ambiguously through a multi-model union mid-walk) — the deep-set then raises
-    the precise :class:`RefinementPathError`; this guard's sole job is to reject an owned *target*.
+    the ``Provenance[T]`` generic at each step, reading each field's inline marker (ADR 0087). A
+    ``[i]`` index segment descends a ``list[T]`` to ``T``.
+
+    **Ancestor-aware (ADR 0091 follow-up).** Ownership is checked at *every* string segment, not only
+    the terminal one: if any ancestor segment names an owned field, the whole sub-tree is owned and
+    the path is rejected. The earlier terminal-only walk regressed the deleted flat positional
+    check's leading-segment rule — a patch that *descended into* an owned container slipped the guard
+    (a trailing index on the owned ``material_discrepancies`` list; a sub-field of the owned
+    ``reproducibility`` / ``core.reproducibility`` block), re-opening the ``§1.6`` forge hole an LLM
+    ``revise`` patch could drive. Because ownership is read off each *exact* model, the authored
+    ``phases[*].steps[*].reproducibility`` (``StepBlock`` unmarked) stays a legitimate target while
+    the owned ``core.reproducibility`` (``CoreBlock`` marked) and its sub-fields are rejected.
+
+    Returns ``False`` for a path that does not resolve in the schema (or resolves ambiguously through
+    a multi-model union mid-walk) — the deep-set then raises the precise :class:`RefinementPathError`;
+    this guard's sole job is to reject an owned *target*.
     """
     current: object = root
     last = len(segments) - 1
@@ -204,15 +215,12 @@ def resolve_framework_owned(root: type[BaseModel], segments: list[str | int]) ->
         if isinstance(segment, int):
             current = _list_element_annotation(current)
             continue
-        models = list(_models_in_annotation(current))
-        if i == last:
-            return any(
-                segment in framework_owned_fields(model)
-                for model in models
-                if segment in model.model_fields
-            )
-        carriers = [model for model in models if segment in model.model_fields]
-        if len(carriers) != 1:
+        carriers = [m for m in _models_in_annotation(current) if segment in m.model_fields]
+        # Owned at ANY position — terminal or ancestor — means the path targets or descends into a
+        # framework-owned field, which an LLM patch may not author.
+        if any(segment in framework_owned_fields(model) for model in carriers):
+            return True
+        if i == last or len(carriers) != 1:
             return False
         current = carriers[0].model_fields[segment].annotation
     return False

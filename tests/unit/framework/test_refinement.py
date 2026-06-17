@@ -589,6 +589,47 @@ def test_resolver_returns_false_for_an_unresolvable_path() -> None:
     assert resolve_framework_owned(LabManifest, ["core", "no_such_field"]) is False
 
 
+def test_resolver_rejects_descent_into_owned_attackspec_containers() -> None:
+    # REGRESSION GUARD (ADR 0091 follow-up): the terminal-only walk only rejected a path whose
+    # *exact* (model, field) is marked owned, so a patch that descends INTO a framework-owned
+    # container slipped through — a trailing index on the owned `material_discrepancies` list, or a
+    # sub-field of the owned `reproducibility` block. That re-opened the §1.6 forge hole the deleted
+    # flat check closed via its leading-segment rule (which rejected the whole subtree). An owned
+    # ANCESTOR must reject the whole subtree.
+    assert resolve_framework_owned(AttackSpec, ["material_discrepancies", 0]) is True
+    assert (
+        resolve_framework_owned(AttackSpec, ["material_discrepancies", 0, "source_of_record"])
+        is True
+    )
+    assert (
+        resolve_framework_owned(AttackSpec, ["reproducibility", "classification_lab_level"]) is True
+    )
+
+
+def test_resolver_rejects_descent_into_owned_manifest_reproducibility() -> None:
+    # The manifest counterpart: core.reproducibility is framework-DERIVED (ADR 0090); patching a
+    # sub-field (classification_lab_level) is still authoring the owned block, so it must be rejected
+    # even though the *whole* core.reproducibility rejection (tested above) terminates one level up.
+    assert (
+        resolve_framework_owned(
+            LabManifest, ["core", "reproducibility", "classification_lab_level"]
+        )
+        is True
+    )
+
+
+def test_resolver_still_allows_descent_into_authored_per_step_reproducibility() -> None:
+    # The ancestor-aware fix must NOT over-reject: phases[*].steps[*].reproducibility is authored
+    # content (StepBlock is not owned), so descending into a sub-field of it stays a legitimate
+    # patch target — ownership is read off each exact model, not the shared leaf name.
+    assert (
+        resolve_framework_owned(
+            LabManifest, ["phases", 0, "steps", 0, "reproducibility", "classification"]
+        )
+        is False
+    )
+
+
 # --- LabManifest targeted-patch refinement (ADR 0089/0090) -----------------
 # apply_field_patch is generic over SpecEnvelope, so the same convergent deep-set serves the
 # Planner's manifest revise loop. These pin the manifest path behaviour the Planner.refine relies
@@ -652,3 +693,22 @@ def test_manifest_patch_allows_authored_per_step_reproducibility() -> None:
         patched.phases[0].steps[0].reproducibility.classification
         is ReproducibilityTier.PARTIAL_SIMULATION
     )
+
+
+def test_manifest_patch_rejects_descent_into_core_reproducibility() -> None:
+    # End-to-end guard for the always-reachable manifest case: core.reproducibility is required and
+    # framework-derived, so `core.reproducibility.classification_lab_level` resolves on every
+    # manifest. The terminal-only walk allowed this descent (the §1.6 regression); the ancestor-aware
+    # resolver rejects it at apply_field_patch, before the deep-set runs.
+    with pytest.raises(RefinementPathError):
+        apply_field_patch(
+            make_manifest(),
+            RefinementPatch(
+                patches=[
+                    FieldPatch(
+                        field_path="core.reproducibility.classification_lab_level",
+                        new_value="full",
+                    )
+                ]
+            ),
+        )

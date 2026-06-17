@@ -39,7 +39,9 @@ not assemble a manifest at all.
    + its `_reachable_models` helper are **deleted** (not kept as an AttackSpec fast-path). One
    mechanism, no drift between two framework-owned computations. The resolver is behaviour-equivalent
    to the flat buckets on every AttackSpec case (the existing AttackSpec patch-path tests pass
-   unchanged) and strictly more precise on the manifest.
+   unchanged) and strictly more precise on the manifest. **[Corrected — see the Amendment below: as
+   first written the resolver was *terminal-only* and was NOT behaviour-equivalent; it dropped the
+   flat check's leading-segment whole-subtree protection. The made-ancestor-aware version is.]**
 
 3. **`apply_field_patch` is generic over the versioned-artifact base** —
    `apply_field_patch[S: SpecEnvelope](prior: S, patch) -> S` — re-validating via
@@ -83,3 +85,42 @@ remains as spec-agnostic defence-in-depth behind the path check (it already reco
 - **Defer the resolver and reject all `reproducibility`-leaf patches on the manifest.** Rejected: it
   would wrongly reject legitimate authored per-step content patches — a correctness hole, not a
   conservative default.
+
+## Amendment (2026-06-17): the resolver was terminal-only — made ancestor-aware
+
+**Found during the Task-5 pre-work resolver audit** (an adversarial verification pass + a direct
+read of the resolver against real `HEAD`). The resolver as first landed checked the
+`FrameworkOwned` marker **only on the terminal `(model, field)`** the path named. The deleted flat
+check had two rules — `head in root_names` (a *leading* segment that is a root-owned field rejects
+the **whole sub-tree**) **and** `leaf in leaf_names`. Decision point 2 above carried over only the
+leaf rule; the leading-segment rule was silently dropped. So the resolver was **not**
+behaviour-equivalent on AttackSpec — it **regressed** the whole-sub-tree protection for any patch
+that *descended into* a root-owned container:
+
+- `material_discrepancies[0]` and `material_discrepancies[0].source_of_record` — trailing index /
+  sub-field of the owned `material_discrepancies` list → the walk fell through to `return False`.
+- `reproducibility.classification_lab_level` (AttackSpec) and `core.reproducibility.<sub>`
+  (LabManifest) — a sub-field of the owned (framework-*derived*) reproducibility block.
+
+Each **bypassed** `_reject_framework_owned_path`, so a jury-`revise` patch could author a
+framework-owned field via the refine path — the exact `§1.6` / ADR 0085 forge hole the guard exists
+to close. The patch-value shape scrub (`_scrub_node`) does **not** compensate: it only resets
+`Provenance`/`cve_id`-shaped nodes, so a bare-enum `new_value` (e.g. `"full"`) and a
+`MaterialDiscrepancy`'s own non-`Provenance` content survive untouched. (Confirmed against
+`git show 6fc47f5^`: the old check's `if head in root_names: raise`.)
+
+**Fix.** `resolve_framework_owned` now reads ownership at **every** string segment — terminal *or*
+ancestor: if any segment names a field marked `FrameworkOwned` on its carrier model, the path
+*targets or descends into* an owned field and is rejected. Because ownership is still read off each
+**exact** model, the precision ADR 0091 was built for is preserved: the authored
+`phases[*].steps[*].reproducibility` (`StepBlock` unmarked) stays a legitimate target, while the
+owned `core.reproducibility` / `AttackSpec.reproducibility` and *all their sub-fields* are rejected.
+This restores the flat check's whole-sub-tree protection without re-introducing its leaf-name
+collision (the reason the resolver replaced it in the first place).
+
+**Tests** (`tests/unit/framework/test_refinement.py`, RED→GREEN): resolver-level — descent into the
+owned AttackSpec `material_discrepancies` (trailing index + sub-field) and `reproducibility` sub-field
+→ `True`; manifest `core.reproducibility.classification_lab_level` → `True`; the over-reject guard —
+`phases[0].steps[0].reproducibility.classification` stays `False`. End-to-end —
+`apply_field_patch` on the always-reachable `core.reproducibility.classification_lab_level` raises
+`RefinementPathError` before the deep-set. `just verify` green (848 passed / 1 skipped).

@@ -118,3 +118,17 @@ extends to the second artifact for free) and the marker-aware resolver consumes 
   for AttackSpec and expires precisely at LabManifest refinement (the named trigger).
 - ADR 0086's inventory table is now descriptive history, not the source of truth; its
   four-mechanism split and its "recorded, not built" Planner prerequisites carry forward here.
+
+## Amendment (2026-06-17): the resolver consumer must be ancestor-aware
+
+The marker-aware resolver this ADR anticipated landed in **ADR 0091**, but as first written it
+read the marker only on the **terminal** `(model, field)` — narrower than the flat check it
+replaced, whose leading-segment rule rejected the **whole sub-tree** under a root-owned field.
+That regressed the guard: a refinement patch *descending into* a framework-owned container
+(`material_discrepancies[i]`, a sub-field of the owned `reproducibility` / `core.reproducibility`
+block) bypassed `_reject_framework_owned_path` and could author an owned field via the refine path
+— the `§1.6` forge hole this ADR's "one guard per field" principle exists to prevent. The
+principle holds; the **consumer** under-applied it. Fixed by making `resolve_framework_owned` check
+ownership at **every** segment (target *or* ancestor) while still reading each marker off the
+**exact** model, so the per-step authored `reproducibility` stays patchable. Details + tests in
+**ADR 0091 → Amendment**.
