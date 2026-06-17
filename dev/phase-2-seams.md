@@ -122,17 +122,15 @@ they are built. The rest, tracked:
   Layer-2 check asserting `StepBlock.reproducibility == source ChainStep.reproducibility`; decide
   whether an explicit `StepBlock → chain_step` back-ref is needed then (it depends on whether the
   Per-phase Generator needs an explicit step→tier mapping). Phase-2 Task-3 call.
-- **Marker-aware refinement path→type resolver** (ADR 0087). The AttackSpec patch-path check is a
-  flat positional denylist (root-marked field → top-level segment; nested-marked → leaf name),
-  generated from the inline `FrameworkOwned` markers. It is correct for AttackSpec (its one
-  ambiguous name, `reproducibility`, is positionally separable) and **expires at LabManifest
-  refinement**, where `CoreBlock.reproducibility` (owned, nested) collides with
-  `phases[*].steps[*].reproducibility` (content, nested) — both nested, so position can't tell
-  them apart. **Trigger:** the first time refinement runs over a `LabManifest`. Build a resolver
-  that walks a `field_path` string (with `[i]` indices, through `Optional`/`list[T]`/`Provenance[T]`)
-  to its exact `(model, field)` and reads that field's marker — and mark the manifest's
-  framework-owned fields inline at their definition sites then (the declaration extends for free).
-  Until then the patch-value scrub (`_scrub_node`, shape-based) is the residual this subsumes.
+- **Marker-aware refinement path→type resolver** (ADR 0087) — **LANDED in Task 4 (ADR 0091).** The
+  trigger (first refinement over a `LabManifest`) fired with `Planner.refine`. `resolve_framework_owned`
+  walks the artifact schema (`Optional`/`list[T]`/`Provenance[T]`, `[i]` indices) to the exact
+  `(model, field)` and reads its marker; it **replaced** the flat positional `framework_owned_path_buckets`
+  (deleted) for *both* artifacts (behaviour-equivalent on AttackSpec, strictly more precise on the
+  manifest); `apply_field_patch` is now generic over `SpecEnvelope`; `CoreBlock.reproducibility` is
+  marked `FrameworkOwned` inline. The patch-value scrub (`_scrub_node`, shape-based) remains as
+  defence-in-depth. Resolved the `CoreBlock.reproducibility` (owned) vs `phases[*].steps[*].reproducibility`
+  (content) collision the flat check could not.
 - **Stamp-mechanism fields join the marker set** (ADR 0087). `spec_version` and
   `extraction_metadata.model` are framework-owned via the *stamp* mechanism, not *reset*; they are
   intentionally unmarked today because a mechanism-less `FrameworkOwned` marker would mis-drive the

@@ -345,6 +345,84 @@ warnings), 812 passed / 1 skipped (+9 since Task 2).
 
 ---
 
+## Task 4: Planner-Jury (verify-only) + refinement extension + route-back  (2026-06-17)
+
+**Built.** Three commits.
+- **Marker-aware path resolver (ADR 0091).** `provenance_guard.resolve_framework_owned(root, segments)`
+  walks the artifact schema (unwrapping `Optional` / `list[T]` / `Provenance[T]`, descending `[i]`)
+  to the exact `(model, field)` a `field_path` names and reads its inline `FrameworkOwned` marker —
+  **replacing** the flat positional `framework_owned_path_buckets` (deleted, with `_reachable_models`)
+  for *both* artifacts. `apply_field_patch` is now generic over `SpecEnvelope`
+  (`type(prior).model_validate`), so the same convergent deep-set serves AttackSpec and LabManifest.
+  `CoreBlock.reproducibility` marked `Annotated[..., FrameworkOwned()]`. Tests: resolver unit cases +
+  manifest patch (convergence/byte-identity, `core.reproducibility` rejected, per-step content
+  allowed); the two AttackSpec marker-drift pins rewired onto `framework_owned_fields`.
+- **Planner route-back via `PlanAttempt` (ADR 0092).** `PlanOutcome {planned, attackspec_incoherent,
+  cannot_plan}` + `PlannerRefusal` + the discriminated `PlanAttempt` wrapper (coupling validator),
+  in the leaf `agents/results.py`; `PlanResult` extended (outcome + optional manifest/refusal +
+  reprompts). `Planner.plan` forces `PlanAttempt`; `Planner.refine` adds the manifest targeted-patch
+  path (re-deriving `core.reproducibility` after the patch — guard every path); `_finalize_manifest`
+  factored. `errors.PlanningError` (the refine patch-budget halt). Tests: route-back/cannot_plan
+  outcomes, the coupling validator, refine convergence/re-derive/owned-target-rejection.
+- **Planner-Jury + plan coordinator (ADR 0093).** `agents/planner_jury/` — `PlannerJury(ToolUsingAgent)`,
+  `verify_only_tools=True` (ADR 0078), reuses `JuryVerdict`, own 0.7 rubric-floor placeholder +
+  asymmetric discipline. `framework/plan_orchestrator.py` — `build_plan_pipeline` / `run_plan_pipeline`
+  / `finalize_plan_outcome` (Planner → Planner-Jury, linear): `revise` → `Planner.refine` (bounded by
+  `refinement_cap`) → exhaust → `low_jury_confidence`; `reject`/`cannot_plan` → halt;
+  `attackspec_incoherent` → `ROUTE_BACK_TO_EXTRACTOR` (a *returned* outcome); sub-floor-approve
+  backstop (ADR-0067 mirror); global iteration cap (ADR 0056). `framework/graph_support.py`
+  (`traced_async` / `traced_sync`) extracted and shared — the extract orchestrator refactored onto
+  them (`_traced_*` deleted, `Callable` import dropped). Tests: the four exit-criterion paths + cannot_plan,
+  sub-floor-approve, the cap, the driver outcome mapping; `FakePlanner`/`FakePlannerJury` + plan-result
+  builders in `pipeline_fakes`. +32 tests (812 → 844 passed / 1 skipped).
+
+**Decisions.** ADR 0091 (marker-aware resolver lands; generic `apply_field_patch`; flat buckets
+deleted), 0092 (the `PlanAttempt` outcome wrapper + route-back; placement in the leaf to break a
+cycle), 0093 (the plan-refinement coordinator + the Planner-Jury reusing `JuryVerdict`).
+
+**Surprises / drift.**
+- **Import cycle (the placement crux).** Putting the Planner outcome types in
+  `agents/planner/outcome.py` created an `agents`↔`framework` load-time cycle: the leaf `results.py`
+  (ADR 0075) importing `agents.planner.outcome` runs `agents.planner.__init__` → `planner.py` →
+  `extractor.extractor` *mid-init* (which imports `results` to begin with). Moved
+  `PlanOutcome`/`PlannerRefusal`/`PlanAttempt` into the leaf `results.py` itself (the one cycle-free
+  home, alongside `PlanResult`), deleted `outcome.py`. The `agents.planner` surface re-exports them.
+- **`PlanResult.manifest` is now optional** (a failed plan has no manifest) — the small ADR-0090
+  contract evolution; Task-3 tests updated to narrow with `assert ... is not None`. Nothing consumes
+  `PlanResult` yet.
+- **The coordinator returns *all* terminal states (never raises)**, diverging from the extract
+  `run_pipeline` (which raises on halts): route-back must be a returned value, and returning halts
+  uniformly defers the CLI halt-vs-route-back-vs-ship policy to the Task-6 verb.
+- **`CoreBlock.reproducibility` marked `FrameworkOwned` is NOT a manifest-lock violation** (Task-1
+  lock): an `Annotated` marker is metadata — the on-disk shape is byte-identical — and the field was
+  already specified framework-derived (`schema.md §4.8`). No manifest friction logged.
+- **Planner-Jury reuses `JuryVerdict`** (not a bespoke verdict): `§5.8`/`§3.2.7` say "same shape as
+  Extractor-Jury"; the four dimensions read naturally for the manifest.
+- **Adversarial review** (a 4-dimension review→refute workflow over the diff: invariants, resolver
+  correctness, contract fidelity, coordinator bugs) surfaced **no findings**.
+
+**Deferred.**
+- **Task 6:** the `plan` verb; wiring `ROUTE_BACK_TO_EXTRACTOR` to a real Extractor re-run
+  (cross-pipeline); inserting the Layer-2 node into the plan graph; persistence; the manifest
+  framework stamps (`spec_version`, `GenerationBlock.model`) at the persist seam (seams §2).
+- **Task 5:** Validator Layer 2 (the coordinator has no Layer-2 node yet); the
+  `StepBlock.reproducibility` carry-integrity check (seams §2, still open).
+- **Task 7:** the Planner's `propose_facet`; the *jury-driven* missing-value-type route-back (the
+  *Planner-driven* route-back is built — the §5.7 "Planner-Jury flags a missing value type" detection
+  is a proposals-era concern).
+- The `Stage`/`Node` refactor — `graph_support` shares only the trace wrappers; the larger
+  consolidation lands at the first parallel node (Generators), per seams ③.1.
+
+**Doc edits surfaced** (per ADR 0084): `dev/phase-2-seams.md §2` — the marker-aware resolver item
+marked **LANDED** (ADR 0091). No `docs/` (architecture-tier) edits — `schema.md §4.8` /
+`agents.md §5.7`/`§5.8` / `pipeline.md §3.2.6`–`§3.2.7` already specify what landed; the ADRs record
+the mechanisms.
+
+**Verify.** `just verify` green — ruff + format clean, pyright 0 errors (40 pre-existing click/yaml
+warnings), 844 passed / 1 skipped (+32 since Task 3).
+
+---
+
 ## Execution-log entry template
 
 ```
