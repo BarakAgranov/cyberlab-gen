@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from cyberlab_gen.framework.provenance_guard import framework_owned_path_buckets
+from cyberlab_gen.framework.provenance_guard import resolve_framework_owned
 from cyberlab_gen.framework.refinement import (
     FieldPatch,
     RefinementPatch,
@@ -50,7 +50,15 @@ from cyberlab_gen.schemas.enums import (
     ProvisioningMechanism,
     ReproducibilityTier,
 )
-from cyberlab_gen.schemas.provenance import CitationBlock, ProvenanceFloat, ProvenanceString
+from cyberlab_gen.schemas.framework_owned import framework_owned_fields
+from cyberlab_gen.schemas.manifest import CoreBlock, LabManifest, StepBlock
+from cyberlab_gen.schemas.provenance import (
+    CitationBlock,
+    Provenance,
+    ProvenanceFloat,
+    ProvenanceString,
+)
+from tests.unit.framework.pipeline_fakes import make_manifest
 
 if TYPE_CHECKING:
     from pydantic import JsonValue
@@ -317,28 +325,27 @@ def test_patch_allows_legitimate_nested_reproducibility_refine() -> None:
     )
 
 
-def test_patch_check_denylist_matches_declared_markers() -> None:
-    # The denylist is generated from the inline FrameworkOwned markers (ADR 0087). Pin it so that
-    # neither a new framework-owned field added without a marker, nor a marker removed, can
-    # silently change patch-path coverage — the markdown-inventory drift this ADR closes. If this
-    # fails, a field's ownership changed: update the marker and this pin together, deliberately.
-    root_names, leaf_names = framework_owned_path_buckets()
-    assert root_names == {"material_discrepancies", "reproducibility"}
-    assert leaf_names == {
+def test_attackspec_framework_owned_markers_pinned() -> None:
+    # The patch-path resolver reads the inline FrameworkOwned markers (ADR 0087). Pin the markers
+    # on each carrying model so that neither a new framework-owned field added without a marker, nor
+    # a marker removed, can silently change patch-path coverage — the markdown-inventory drift this
+    # ADR closes. If this fails, a field's ownership changed: update the marker and this pin
+    # together, deliberately.
+    assert framework_owned_fields(AttackSpec) == {"material_discrepancies", "reproducibility"}
+    assert framework_owned_fields(CveReference) == {"source_of_record"}
+    assert framework_owned_fields(Provenance[str]) == {
         "framework_enriched",
         "discrepancy_with_blog",
         "overridden_blog_value",
         "discrepancy_classification",
-        "source_of_record",
     }
 
 
 def test_every_declared_owned_field_is_rejected_on_the_patch_path() -> None:
     # Both-paths coverage (ADR 0087, item 3): every framework-owned field — the top-level rollups
-    # AND the nested leaves — is rejected when a patch targets it. Generated from the markers, so
-    # a newly-marked field that is not exercised here makes this test fail (the set assertions).
-    root_names, leaf_names = framework_owned_path_buckets()
-    for name in root_names:
+    # AND the nested leaves — is rejected when a patch targets it. Derived from the markers, so a
+    # newly-marked field that is not exercised here makes this test fail (the set assertions).
+    for name in framework_owned_fields(AttackSpec):
         with pytest.raises(RefinementPathError):
             apply_field_patch(
                 _spec(), RefinementPatch(patches=[FieldPatch(field_path=name, new_value=None)])
@@ -352,7 +359,8 @@ def test_every_declared_owned_field_is_rejected_on_the_patch_path() -> None:
         ),
         "source_of_record": "external_references.cves[0].source_of_record",
     }
-    assert set(leaf_paths) == leaf_names  # every declared leaf is exercised below
+    nested_owned = framework_owned_fields(CveReference) | framework_owned_fields(Provenance[str])
+    assert set(leaf_paths) == nested_owned  # every declared nested leaf is exercised below
     for path in leaf_paths.values():
         with pytest.raises(RefinementPathError):
             apply_field_patch(
@@ -532,3 +540,115 @@ def test_patch_rejects_a_non_integer_index_segment() -> None:
                 ]
             ),
         )
+
+
+# --- marker-aware path→type resolver (ADR 0087) ----------------------------
+# The resolver walks the artifact schema to the exact (model, field) a path names and reads that
+# field's inline FrameworkOwned marker — replacing the flat positional denylist, which cannot
+# separate the manifest's owned `core.reproducibility` from the authored
+# `phases[*].steps[*].reproducibility` (both nested, same leaf name).
+
+
+def test_resolver_marks_attackspec_owned_paths() -> None:
+    # Top-level rollups, a nested CVE leaf, and a Provenance leaf all resolve to owned. Segments are
+    # the dotted-path-with-integer-indices convention (dotted name -> str, [i] -> int).
+    owned_segments: list[list[str | int]] = [
+        ["material_discrepancies"],
+        ["reproducibility"],
+        ["external_references", "cves", 0, "source_of_record"],
+        ["thesis", "summary", "framework_enriched"],
+    ]
+    for segments in owned_segments:
+        assert resolve_framework_owned(AttackSpec, segments) is True
+
+
+def test_resolver_allows_attackspec_authored_per_step_reproducibility() -> None:
+    # The per-step ChainStep.reproducibility shares the leaf name with the owned top-level block
+    # but is authored content — the resolver reads ownership off the *exact* model, not the name,
+    # so it is NOT owned (a legitimate patch target).
+    assert (
+        resolve_framework_owned(AttackSpec, ["chain", "chain_steps", 0, "reproducibility"]) is False
+    )
+
+
+def test_resolver_separates_manifest_owned_from_authored_reproducibility() -> None:
+    # The collision the flat positional check could not handle (ADR 0087 / seams §2): on the
+    # LabManifest, core.reproducibility is framework-owned (derived) while
+    # phases[*].steps[*].reproducibility is authored content — both nested, same leaf name.
+    assert framework_owned_fields(CoreBlock) == {"reproducibility"}  # marked owned (derived)
+    assert "reproducibility" not in framework_owned_fields(StepBlock)  # authored content
+    assert resolve_framework_owned(LabManifest, ["core", "reproducibility"]) is True
+    assert (
+        resolve_framework_owned(LabManifest, ["phases", 0, "steps", 0, "reproducibility"]) is False
+    )
+
+
+def test_resolver_returns_false_for_an_unresolvable_path() -> None:
+    # A path that does not resolve in the schema is not "owned"; the deep-set raises the precise
+    # RefinementPathError instead (the resolver's sole job is to reject an owned *target*).
+    assert resolve_framework_owned(LabManifest, ["core", "no_such_field"]) is False
+
+
+# --- LabManifest targeted-patch refinement (ADR 0089/0090) -----------------
+# apply_field_patch is generic over SpecEnvelope, so the same convergent deep-set serves the
+# Planner's manifest revise loop. These pin the manifest path behaviour the Planner.refine relies
+# on: convergence, the owned-block rejection, and the authored-content allow.
+
+
+def _mdump(manifest: LabManifest) -> dict[str, object]:
+    return manifest.model_dump(mode="json", by_alias=True)
+
+
+def test_manifest_patch_replaces_only_the_flagged_field() -> None:
+    prior = make_manifest()
+    new_desc = _prov_value("a corrected step description", ref="§5")
+    patched = apply_field_patch(
+        prior,
+        RefinementPatch(
+            patches=[FieldPatch(field_path="phases[0].steps[0].description", new_value=new_desc)]
+        ),
+    )
+    assert patched.phases[0].steps[0].description.value == "a corrected step description"
+    # Non-regression: overwrite ONLY the flagged path in the prior dump; the dumps must then be
+    # byte-identical — proof nothing else moved (the convergence property, now for the manifest).
+    prior_dump = _mdump(prior)
+    patched_dump = _mdump(patched)
+    prior_dump["phases"][0]["steps"][0]["description"] = patched_dump["phases"][0]["steps"][0][  # type: ignore[index]
+        "description"
+    ]
+    assert patched_dump == prior_dump
+
+
+def test_manifest_patch_rejects_core_reproducibility() -> None:
+    # core.reproducibility is framework-DERIVED (ADR 0090); a patch may not author it. The flat
+    # positional check could not reject this without also rejecting the authored per-step block —
+    # the resolver does (it reads the exact field's marker).
+    with pytest.raises(RefinementPathError):
+        apply_field_patch(
+            make_manifest(),
+            RefinementPatch(
+                patches=[FieldPatch(field_path="core.reproducibility", new_value=None)]
+            ),
+        )
+
+
+def test_manifest_patch_allows_authored_per_step_reproducibility() -> None:
+    # The authored per-step tier IS a legitimate patch target (the flat check would wrongly reject
+    # it on the manifest); the resolver allows it because StepBlock.reproducibility is not owned.
+    new_repro = PerStepReproducibility(
+        classification=ReproducibilityTier.PARTIAL_SIMULATION,
+        caveats=_pstr("now simulated"),
+        why=_pstr("destructive payload"),
+    ).model_dump(mode="json", by_alias=True)
+    patched = apply_field_patch(
+        make_manifest(),
+        RefinementPatch(
+            patches=[
+                FieldPatch(field_path="phases[0].steps[0].reproducibility", new_value=new_repro)
+            ]
+        ),
+    )
+    assert (
+        patched.phases[0].steps[0].reproducibility.classification
+        is ReproducibilityTier.PARTIAL_SIMULATION
+    )

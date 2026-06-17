@@ -27,8 +27,7 @@ was already ``external_api``), silently dropping it.
 """
 
 from collections.abc import Iterator
-from functools import cache
-from typing import Any, cast, get_args
+from typing import Any, cast, get_args, get_origin
 
 from pydantic import BaseModel, JsonValue
 
@@ -146,17 +145,19 @@ def neutralize_patch_provenance(new_value: JsonValue) -> JsonValue:
     return new_value
 
 
-# --- framework-owned-field path buckets (ADR 0087) -------------------------
+# --- marker-aware refinement path→type resolver (ADR 0087) -----------------
 #
-# The refinement patch-path check rejects any field_path that *targets* a framework-owned field.
-# The denylist is GENERATED from the inline ``FrameworkOwned`` markers (never hand-typed),
-# bucketed by where the marker sits: a marker on the ``AttackSpec`` root is matched as a
-# top-level segment; a marker on a nested model (``Provenance``, ``CveReference``) is matched as
-# the target leaf name. This is why the top-level ``reproducibility`` block is rejected while the
-# per-step ``chain.chain_steps[*].reproducibility`` — a different ``(model, field)``, authored
-# content — is not. The flat positional match is correct for AttackSpec (its one ambiguous name,
-# ``reproducibility``, is positionally separable) and expires at LabManifest refinement, where a
-# marker-aware path→type resolver replaces it (ADR 0087 "recorded, not built").
+# The refinement patch-path check rejects any ``field_path`` that *targets* a framework-owned
+# field. Phase 1 generated a flat positional denylist (root-marked field → top-level segment;
+# nested-marked field → leaf name) from the inline ``FrameworkOwned`` markers. That was correct for
+# ``AttackSpec`` — its one ambiguous name, ``reproducibility``, is owned only at the *top level*
+# (``AttackSpec.reproducibility``) while the per-step ``chain.chain_steps[*].reproducibility`` is
+# authored content — because position separated them. It **expires at LabManifest refinement**
+# (ADR 0087, ``dev/phase-2-seams.md`` §2): there ``CoreBlock.reproducibility`` (owned) and
+# ``phases[*].steps[*].reproducibility`` (content) are BOTH nested, so position cannot tell them
+# apart. So the patch path now walks the *schema* from the artifact root to the exact
+# ``(model, field)`` the path names and reads that field's marker — no positional heuristic, correct
+# for both artifacts. The patch-value shape scrub (:func:`_scrub_node`) remains as defence-in-depth.
 
 
 def _models_in_annotation(annotation: object) -> Iterator[type[BaseModel]]:
@@ -172,32 +173,46 @@ def _models_in_annotation(annotation: object) -> Iterator[type[BaseModel]]:
         yield from _models_in_annotation(arg)
 
 
-def _reachable_models(root: type[BaseModel]) -> set[type[BaseModel]]:
-    """Every ``BaseModel`` reachable from ``root`` through its field annotations (cycle-safe)."""
-    seen: set[type[BaseModel]] = set()
-    stack: list[type[BaseModel]] = [root]
-    while stack:
-        model = stack.pop()
-        if model in seen:
-            continue
-        seen.add(model)
-        for info in model.model_fields.values():
-            stack.extend(_models_in_annotation(info.annotation))
-    return seen
+def _list_element_annotation(annotation: object) -> object:
+    """The element annotation of a ``list[T]`` (unwrapping a surrounding ``list[T] | None``).
 
-
-@cache
-def framework_owned_path_buckets() -> tuple[frozenset[str], frozenset[str]]:
-    """``(root-owned top-level field names, nested-owned leaf field names)`` for ``AttackSpec``.
-
-    Generated from the inline ``FrameworkOwned`` markers across the AttackSpec model tree
-    (ADR 0087), so the patch-path denylist cannot drift from the schema. Cached: the schema is
-    immutable at runtime.
+    Returns the bare ``object`` sentinel when ``annotation`` is not a list, so the caller's model
+    lookup yields nothing and the path is treated as un-owned (the deep-set then raises the precise
+    :class:`RefinementPathError` for the malformed shape).
     """
-    root_names = framework_owned_fields(AttackSpec)
-    leaf_names: set[str] = set()
-    for model in _reachable_models(AttackSpec):
-        if model is AttackSpec:
+    for candidate in (annotation, *get_args(annotation)):
+        if get_origin(candidate) is list:
+            args = get_args(candidate)
+            if args:
+                return args[0]
+    return object
+
+
+def resolve_framework_owned(root: type[BaseModel], segments: list[str | int]) -> bool:
+    """True iff ``segments`` resolves through ``root``'s schema to a ``FrameworkOwned`` field.
+
+    Walks the field *annotations* (not a data instance), unwrapping ``T | None`` / ``list[T]`` /
+    the ``Provenance[T]`` generic at each step, so it lands on the exact ``(model, field)`` the
+    ``field_path`` targets and reads that field's inline marker (ADR 0087). A ``[i]`` index segment
+    descends a ``list[T]`` to ``T``. Returns ``False`` for a path that does not resolve in the
+    schema (or resolves ambiguously through a multi-model union mid-walk) — the deep-set then raises
+    the precise :class:`RefinementPathError`; this guard's sole job is to reject an owned *target*.
+    """
+    current: object = root
+    last = len(segments) - 1
+    for i, segment in enumerate(segments):
+        if isinstance(segment, int):
+            current = _list_element_annotation(current)
             continue
-        leaf_names |= framework_owned_fields(model)
-    return root_names, frozenset(leaf_names)
+        models = list(_models_in_annotation(current))
+        if i == last:
+            return any(
+                segment in framework_owned_fields(model)
+                for model in models
+                if segment in model.model_fields
+            )
+        carriers = [model for model in models if segment in model.model_fields]
+        if len(carriers) != 1:
+            return False
+        current = carriers[0].model_fields[segment].annotation
+    return False

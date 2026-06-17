@@ -36,11 +36,11 @@ from pydantic import JsonValue
 
 from cyberlab_gen.errors import CyberlabGenError
 from cyberlab_gen.framework.provenance_guard import (
-    framework_owned_path_buckets,
     neutralize_patch_provenance,
+    resolve_framework_owned,
 )
-from cyberlab_gen.schemas.attack_spec import AttackSpec
 from cyberlab_gen.schemas.base import InternalModel
+from cyberlab_gen.schemas.envelope import SpecEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -83,29 +83,34 @@ class RefinementPatch(InternalModel):
     patches: list[FieldPatch]
 
 
-def apply_field_patch(prior: AttackSpec, patch: RefinementPatch) -> AttackSpec:
+def apply_field_patch[S: SpecEnvelope](prior: S, patch: RefinementPatch) -> S:
     """Deep-set ``patch`` onto a copy of ``prior`` and re-validate the whole spec.
 
-    Dumps ``prior`` to its JSON form (the lossless ``model_dump`` ↔ ``model_validate``
-    round-trip the ``to_yaml`` / ``from_yaml`` surface already relies on), writes each
-    patch's ``new_value`` at its ``field_path``, then re-validates the **entire** assembled
-    dict via ``AttackSpec.model_validate`` — so every cross-field invariant (provenance
-    rules, scope consistency, monotonic step numbers, ``extra="forbid"``) is enforced, not
-    just the patched fields (requirement R2). ``prior`` is never mutated (the dump is a
-    fresh dict).
+    Generic over the versioned-artifact base (:class:`~cyberlab_gen.schemas.envelope.SpecEnvelope`)
+    so it serves both the ``AttackSpec`` jury-revise path (``Extractor.refine``) and the
+    ``LabManifest`` one (``Planner.refine``, ADR 0089/0090). Dumps ``prior`` to its JSON form (the
+    lossless ``model_dump`` ↔ ``model_validate`` round-trip the ``to_yaml`` / ``from_yaml`` surface
+    already relies on), writes each patch's ``new_value`` at its ``field_path``, then re-validates
+    the **entire** assembled dict via ``type(prior).model_validate`` — so every cross-field
+    invariant (provenance rules, scope consistency, monotonic step numbers, ``extra="forbid"``) is
+    enforced, not just the patched fields (requirement R2). ``prior`` is never mutated (the dump is
+    a fresh dict).
 
     Raises :class:`RefinementPathError` when a path doesn't resolve onto the prior spec,
     and ``pydantic.ValidationError`` when the assembled spec is invalid — the caller
-    (``Extractor.refine``) catches both and re-prompts within a bounded budget (R1).
+    (``Extractor.refine`` / ``Planner.refine``) catches both and re-prompts within a bounded
+    budget (R1).
     """
+    model_type = type(prior)
     data: dict[str, object] = prior.model_dump(mode="json", by_alias=True)
     for field_patch in patch.patches:
         segments = _parse_path(field_patch.field_path)
         # A patch may not *target* a framework-owned field: a bare scalar leaf (e.g. ...
-        # source_of_record / ...framework_enriched) or a top-level index (material_discrepancies /
-        # reproducibility) slips the shape-based value-scrub below, so reject it by path here
-        # (ADR 0087). The denylist is generated from the inline FrameworkOwned markers.
-        _reject_framework_owned_path(segments, field_patch.field_path)
+        # source_of_record / ...framework_enriched) or a nested owned block (the manifest's
+        # core.reproducibility) slips the shape-based value-scrub below, so reject it by path here
+        # (ADR 0087). Ownership is read from the inline FrameworkOwned markers by walking the
+        # artifact schema to the exact (model, field) the path names.
+        _reject_framework_owned_path(model_type, segments, field_patch.field_path)
         # The patch value is LLM-authored content for a flagged path; like a first-run extract it
         # must not author framework-owned provenance/ids *nested inside* a legitimately-targeted
         # content sub-tree (a whole-Provenance patch at a content field). Scrub the patch sub-tree
@@ -113,30 +118,26 @@ def apply_field_patch(prior: AttackSpec, patch: RefinementPatch) -> AttackSpec:
         # (ADR 0085).
         scrubbed = neutralize_patch_provenance(field_patch.new_value)
         _set_by_path(data, segments, scrubbed, path=field_patch.field_path)
-    return AttackSpec.model_validate(data)
+    return model_type.model_validate(data)
 
 
-def _reject_framework_owned_path(segments: list[str | int], field_path: str) -> None:
+def _reject_framework_owned_path(
+    model_type: type[SpecEnvelope], segments: list[str | int], field_path: str
+) -> None:
     """Raise :class:`RefinementPathError` if ``segments`` target a framework-owned field (ADR 0087).
 
     A jury-``revise`` patch is LLM-authored; it may never author a field the framework owns. The
-    value-scrub catches a whole-object forgery by shape, but a bare scalar leaf or a top-level
-    index slips it — so reject by path. The denylist is **generated** from the inline
-    ``FrameworkOwned`` markers (``framework_owned_path_buckets``): a marker on the AttackSpec root
-    is matched as the leading segment; a marker on a nested model as the target leaf name.
+    value-scrub catches a whole-object forgery by shape, but a bare scalar leaf or a nested owned
+    block slips it — so reject by path. Ownership is resolved by walking ``model_type``'s schema to
+    the exact ``(model, field)`` the path names and reading that field's inline ``FrameworkOwned``
+    marker (:func:`~cyberlab_gen.framework.provenance_guard.resolve_framework_owned`) — correct for
+    both ``AttackSpec`` and ``LabManifest`` (where the owned ``core.reproducibility`` and the
+    authored ``phases[*].steps[*].reproducibility`` share a leaf name but not ownership).
     """
-    root_names, leaf_names = framework_owned_path_buckets()
-    head = segments[0]
-    if isinstance(head, str) and head in root_names:
+    if resolve_framework_owned(model_type, segments):
         raise RefinementPathError(
-            f"field_path {field_path!r} targets the framework-owned top-level field {head!r}; "
-            "an LLM patch may not author it (ADR 0087)"
-        )
-    leaf = segments[-1]
-    if isinstance(leaf, str) and leaf in leaf_names:
-        raise RefinementPathError(
-            f"field_path {field_path!r} targets the framework-owned field {leaf!r}; "
-            "an LLM patch may not author it (ADR 0087)"
+            f"field_path {field_path!r} targets a framework-owned field on "
+            f"{model_type.__name__}; an LLM patch may not author it (ADR 0087)"
         )
 
 

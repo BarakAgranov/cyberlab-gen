@@ -15,7 +15,7 @@ bare. Lab-level ``reproducibility`` is *derived* by the framework, never authore
 
 import re
 from datetime import datetime
-from typing import Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -42,6 +42,7 @@ from cyberlab_gen.schemas.enums import (
     StepComposition,
 )
 from cyberlab_gen.schemas.envelope import SpecEnvelope
+from cyberlab_gen.schemas.framework_owned import FrameworkOwned
 from cyberlab_gen.schemas.primitives import (
     ExecutionContext,
     FacetName,
@@ -75,8 +76,17 @@ class CoreBlock(ArtifactModel):
 
     ``reproducibility`` reuses the AttackSpec's ``ReproducibilityBlock``; its
     ``classification_lab_level`` is *derived* from per-step tiers (Phase-2 Task 2),
-    not authored. ``cve_references`` is the manifest-side CVE list (carried forward
-    by the Planner), distinct from the AttackSpec's ``external_references.cves``.
+    not authored — so it is marked ``FrameworkOwned`` (ADR 0087/0090): the Planner's
+    ``plan``/``refine`` overwrite it with ``derive_lab_reproducibility`` and a
+    refinement patch may not target it (rejected by the marker-aware path resolver,
+    :func:`cyberlab_gen.framework.provenance_guard.resolve_framework_owned`). This is
+    the manifest's nested counterpart to the AttackSpec's top-level
+    ``reproducibility``, and the reason the flat positional patch-path check is
+    replaced by the resolver: ``CoreBlock.reproducibility`` (owned, nested) and
+    ``phases[*].steps[*].reproducibility`` (authored content, nested) share the leaf
+    name but not the ownership. ``cve_references`` is the manifest-side CVE list
+    (carried forward by the Planner), distinct from the AttackSpec's
+    ``external_references.cves``.
     """
 
     id: KebabId
@@ -86,7 +96,7 @@ class CoreBlock(ArtifactModel):
     thesis: ProvenanceString
     severity: Provenance[Severity]
     cve_references: list[CveReference] = Field(default_factory=list[CveReference])
-    reproducibility: ReproducibilityBlock
+    reproducibility: Annotated[ReproducibilityBlock, FrameworkOwned()]
     generation: GenerationBlock
 
 
