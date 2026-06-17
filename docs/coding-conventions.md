@@ -227,6 +227,16 @@ Boolean variables and fields start with `is_`, `has_`, `should_`, `can_`, or sim
 
 Functions that return a value are nouns or noun phrases (`load_registry`, `compute_content_hash`); functions that perform an action without a meaningful return are verbs (`emit_artifact`, `validate_envelope`). Predicates that return `bool` start with `is_` / `has_` / similar.
 
+### 5.5 Ordinal and phased constructs take a descriptive name in code
+
+Any construct the architecture numbers or sequences — a **validation layer**, a **phase**, a **tier**, a **stage**, a **step** — takes a *meaningful, descriptive name* in all code: identifiers, filenames, types, enums, enum members, functions, variables. The bare ordinal — "Layer 2", "Phase 3", "Tier 1", "Stage 4" — is a **documentation-side slot reference only**, and the token (`layer2` / `layer_2` / `l2` / `L2` / `phase3` / `tier1` / …) must not appear in any code identifier.
+
+- **Precedent.** Validator Layer 1 is `static_schema_validator` everywhere — module, class (`StaticSchemaValidator`), enum (`StaticSchemaCode`), report keys, graph node id — never `layer1` (ADR 0046). Validator Layer 2 is `semantic_cross_check_validator` / `SemanticCrossCheck*` (its §6.5 architectural title). The pattern generalizes from validation layers to *every* ordinal construct.
+- **A brief's shorthand is a placeholder, not a name.** When a task brief writes `L2Code`, `layer2.py`, or "the Phase-3 generator," that is a slot reference to be **resolved to the descriptive name when the code lands** — never carried into code "for now" and renamed later. Replace it at landing.
+- **Comments and docstrings may still say "the second validation layer" / "Phase 3"** to orient a reader against the architecture docs — descriptive prose referencing the ordinal is fine. What's banned is the ordinal living in a *name*. (Loop-level shorthand like `L3` in a comment for an ADR-0056 cap, or a generated-lab artifact path like `attack/phase_1_initial_access.py` in an example string, is prose/domain data, not a tool identifier — out of scope of this rule.)
+
+**Why.** Readability and maintainability are first-class engineering goals, equal to scalability and decoupling. A name you have to decode against a numbering scheme — and that silently goes stale when the architecture renumbers — is debt. A descriptive name says what the thing *is*; the ordinal says only where it sits in a list. Cite ADR 0046 and this section when naming a new numbered construct.
+
 ---
 
 ## 6. Errors and logging
