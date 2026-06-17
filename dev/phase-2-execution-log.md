@@ -516,6 +516,89 @@ warnings), 861 passed / 1 skipped (+13 Task-5 tests; the resolver fix added the 
 
 ---
 
+## Pre-Task-6: surfaced items + the staged-verb-status governance  (2026-06-17)
+
+Three governance/reconciliation commits landed before Task 6 (the two items surfaced from Task 5 +
+the verb-status question the architect raised for Task 6).
+
+- **`affected_platforms` cross-check is moot by design (ADR 0095, `fix`+`docs`).** Architect ruling
+  resolving ADR 0094 D4: `schema.md §4.4` wins — platforms are facet-derived (the `target:*` facets
+  *are* the platform set, validated at Layer 1), `CoreBlock` has no `affected_platforms` field, so a
+  Layer-2 cross-check has no operand and is **moot**, not deferred. Rewrote `validation.md §6.5` (the
+  one architecture-tier edit, ADR 0084); **removed** the can-never-fire `INCONSISTENT_AFFECTED_PLATFORMS`
+  code (kept the genuinely-deferred Phase-3 codes); renamed the test (§5.5: dropped a `phase3` ordinal
+  token). No behaviour change.
+- **Finding-base severity tracked, not built (seams §2).** The ADR-0073 `Finding` has no severity, so
+  a warn-level finding is inexpressible (ADR 0094 dec 8). Recorded the trigger: the likely *second*
+  consumer is the **Critic** (Layer-5 high-severity halts, `§1.6`); when it lands, severity goes on the
+  ADR-0073 base, generalized (ADR-0068 one-home), designed against both the `runtime:*` warning and the
+  Critic at once.
+- **`extract`/`plan` are permanent staged entry points (ADR 0096, `docs`).** Resolved the architect's
+  "is this verb temporary?" question: Framing 2 (permanent, coexist with `generate` which runs the
+  stages internally) — `architecture.md §2.1` already states it; propagated to `CLAUDE.md` + a §2.3
+  diagram note (the one genuine lag behind §2.1).
+
+---
+
+## Task 6: `plan` verb + orchestrator wiring + persistence (the slice end-to-end)  (2026-06-17)
+
+**Built.** Four commits. The Phase-2 slice is runnable: `cyberlab-gen plan <attack-spec.yaml>` →
+`lab.yaml`.
+- **Generalized stamp home + plan persistence (`state/`).** `stamp_framework_provenance` is now generic
+  over `SpecEnvelope` and dispatches on artifact type: `AttackSpec` → `extraction_metadata.model`;
+  `LabManifest` → `core.generation.{model, tool_version, timestamp}` (billed **Planner** model via the
+  one `billed_model` reader + package version + stamp time). `persist_plan_artifacts` is the thin
+  plan-side sibling of `persist_pipeline_artifacts` — separate state shapes, **one** shared billed-model
+  invariant (not copied; ADR 0086/0068). `RunKind.PLAN` + `MANIFEST_FILENAME`. +6 unit tests.
+- **Semantic cross-check ship gate (`framework/plan_orchestrator.py`).** A sync `CROSS_CHECK` node
+  (`graph_support.traced_sync`) after the jury. Every ship path (clean approve *and* revise-cap-exhausted
+  low-confidence) routes through it; pass → ship, findings → Planner refine on the **shared** cap (via
+  `responsible_agent_for`), budget-spent unresolved → `HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED` (a
+  known-broken manifest never ships behind a confidence flag, `§1.6`). `_findings_to_feedback` adapter
+  (structured→structured). +5 tests; `FakeCrossCheckValidator` in `pipeline_fakes`.
+- **The `plan` verb (`cli/plan.py` + `cli/main.py`).** `PlanRunner` seam (sync) + `PipelinePlanRunner` +
+  `run_plan`; mirrors `extract` (no orchestrator-private reach). Loads via the spec_kind gate (rejects a
+  non-AttackSpec cleanly), stamps once at the ship boundary (cwd `lab.yaml` + run-dir mirror share one
+  timestamp), persists on every exit path; route-back → actionable re-extract message + persisted
+  `PlannerRefusal`. Promoted the real codebuild AttackSpec as a committed fixture (no paid run). +6
+  integration tests (fake-driven).
+
+**Decisions.** ADR 0095 (`affected_platforms` moot), 0096 (staged verbs permanent), 0097 (Task 6: the
+cross-check ship gate incl. the low-confidence-path-too design, the generalized stamp, the scoped
+route-back, the verb).
+
+**Surprises / drift.**
+- **The cross-check must gate the low-confidence ship too**, not only the clean approve — else a
+  revise-cap-exhausted manifest could ship `low_jury_confidence` while mechanically broken. Resolved by
+  routing both ship paths through `CROSS_CHECK` (the jury sets a `pending_low_confidence` flag; the
+  cross-check owns the terminal status). Architect-ruled HALT (not low-conf ship) on cap-exhausted
+  cross-check findings.
+- **`PlanRunResult` field types must be runtime imports.** `verdict`/`refusal` are Pydantic fields, so
+  `JuryVerdict`/`PlannerRefusal` can't be TYPE_CHECKING-only (the same lesson as the orchestrators'
+  field-type imports) — caught by the integration test's `model_rebuild` error.
+- **Third status taxonomy.** `PlanPipelineStatus → RunStatus` is a lossy bridge (seams §2's two-taxonomy
+  debt, now a third consumer); mapped pragmatically with the precise status in `halt_reason`.
+- **Adversarial review (5-agent review→refute over the diff, Opus): 1 confirmed finding of 4 dimensions.**
+  A malformed `attack-spec.yaml` escaped the load gate's clean-error contract (the YAML *parse* sat
+  outside the try/except) → uncaught `ruamel` traceback. Fixed (wrap parse+gate together, catch
+  `YAMLError`) + a regression test. All other candidate findings refuted.
+
+**Deferred.** The auto cross-pipeline re-extract loop behind `ROUTE_BACK_TO_EXTRACTOR` (Task 7+, shape
+in ADR 0097); the post-Planner interrupt + `--interactive`/`--auto` on `plan` (Task 8); `Stage`/`Node`
++ reducer channels (first parallel node, Phase 3); status-taxonomy consolidation (seams §2);
+`StepBlock.reproducibility` carry-integrity (seams §2); a shared `_code_version` home (minor). **The
+single real paid `plan` run on the codebuild fixture is the maintainer's** (eval-is-user-run) —
+exit-criterion 3 ("real Planner output") is met by that run.
+
+**Doc edits surfaced** (ADR 0084): `validation.md §6.5` (ADR 0095), `architecture.md §2.3` note +
+`CLAUDE.md` (ADR 0096), `CLAUDE.md` status flip (`plan`/Planner now callable). All listed in the
+session summary.
+
+**Verify.** `just verify` green — ruff + format clean, pyright 0 errors (40 pre-existing click/yaml
+warnings), 878 passed / 1 skipped (+17 since Task 5).
+
+---
+
 ## Execution-log entry template
 
 ```
