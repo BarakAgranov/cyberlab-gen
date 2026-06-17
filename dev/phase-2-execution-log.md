@@ -423,6 +423,99 @@ warnings), 844 passed / 1 skipped (+32 since Task 3).
 
 ---
 
+## Pre-Task-5: resolver regression fix + governance (2026-06-17)
+
+Three commits landed before Task 5 (architect-directed, surfaced from the Task-5 pre-work
+verification pass — a 3-agent fan-out + adversarial refutation that gated the go on the three
+"unsure" items).
+
+- **Resolver §1.6 regression (`fix`, ADR 0091/0087 amended).** The Task-4 marker-aware
+  `resolve_framework_owned` was **terminal-only**: it rejected a refinement patch only when the
+  *exact* `(model, field)` is `FrameworkOwned`, silently dropping the deleted flat check's
+  leading-segment whole-subtree protection. A jury-`revise` patch **descending into** an owned
+  container bypassed `_reject_framework_owned_path` and could author a framework-owned field via the
+  refine path (`material_discrepancies[0]`, `reproducibility.classification_lab_level` on AttackSpec,
+  `core.reproducibility.<sub>` on the manifest) — the exact ADR-0085 forge hole; the shape scrub
+  doesn't compensate (a bare-enum `new_value` survives). Confirmed a regression vs `6fc47f5^`
+  (`if head in root_names: raise`). Fixed: ownership now read at **every** segment (terminal *or*
+  ancestor) off each exact model, so authored `phases[*].steps[*].reproducibility` stays patchable.
+  +4 tests (RED→GREEN). The `len(carriers) != 1` branch (errs toward ALLOW on a multi-model union)
+  carries a comment + a confirmed "no divergent-ownership union in today's schema" note.
+- **Naming convention (`docs`).** `coding-conventions.md §5.5`: generalised ADR 0046's
+  validator-layer rule to **every** ordinal/phased construct (layer/phase/tier/stage/step) — the
+  ordinal is a doc-side slot reference, never a code identifier; a brief's shorthand (`L2Code`) is a
+  placeholder resolved to the descriptive name at landing. Grep audit: zero code-identifier
+  violations (all hits are comments / generated-lab path examples).
+- **Sub-agent model policy (`docs`).** `CLAUDE.md`: delegated agents / workflows default to Opus
+  4.8; newest Sonnet only for mechanical/narrow tasks; never Haiku — a weak model's "couldn't
+  refute it" is false confidence on safety-critical verification.
+
+---
+
+## Task 5: Semantic cross-check validator (the second validation layer)  (2026-06-17)
+
+**Built.** `validators/semantic_cross_check_validator.py` (descriptive name per the new §5.5 — no
+ordinal token): `SemanticCrossCheckCode` (3 live + 2 reserved-Phase-3 + 1 reserved-vacuous),
+`SemanticCrossCheckFinding`/`Result` on the ADR-0073 base (`+passed`), and
+`SemanticCrossCheckValidator(registries)` whose `validate(manifest)` runs the three **live
+cross-block-within-manifest** checks: facet `implies` (each declared facet's implied facets must be
+declared; finding, never auto-added), facet `incompatible_with` (symmetric, each pair once), and
+`produces_world_state` `runtime_generated` `identifier_source` resolution against the phase's
+declared `outputs[].name` (canonical `phase_outputs.<name>`). Read-only (model_dump before==after
+test) and route-free. The code-vs-manifest `references_lab_outputs` cross-check is built **inert** as
+the module fn `references_lab_outputs_findings()` (returns `[]`; both directions documented for
+Phase 3). Routing seam: module-level `ResponsibleAgent` + `responsible_agent_for(finding)` → PLANNER
+for every live code (raises for reserved). Re-exported from `validators/__init__`. Tests: 13 in
+`tests/unit/validators/test_semantic_cross_check_validator.py` (clean-pass, each live check's
+flag + pass paths, the `phase_outputs.` prefix requirement, symmetric incompatibility-once,
+no-mutation, inert no-op, routing→PLANNER, reserved-codes-raise, ADR-0073 subclassing). An
+adversarial 3-lens review of the diff (§6.5 spec-fidelity / contract / scope-edges) returned **no
+code defects** — the two added tests close the coverage nits it surfaced.
+
+**Decisions.** ADR 0094 (scope; descriptive naming; the live/inert/reserved split; the routing seam;
+the two surfaced doc gaps; the deferrals). Resolver fix: ADR 0091/0087 **amended** (see Pre-Task-5).
+
+**Surprises / drift.**
+- **`affected_platforms` consistency (§6.5) is VACUOUS in v1 — surfaced, not implemented.** `§6.5`
+  verifies a `core.affected_platforms` field against `target:*` facets, but `CoreBlock` declares no
+  such field and is `extra="forbid"`, and `§4.4` derives platforms from facets — so a Layer-1-valid
+  manifest can never carry it; the check has no left-hand operand. Code `INCONSISTENT_AFFECTED_PLATFORMS`
+  reserved, **no check implemented** (implementing one = dead code; adding the field = manifest-lock
+  + §4.4 violation). This is a `validation.md §6.5` ↔ `schema.md §4.4` drift — **surfaced for the
+  architect** (ADR 0094 D4), not silently resolved. The pre-work verification (analyst + both
+  opposing skeptics) unanimously classified it vacuous.
+- **`identifier_source` has no schema-enforced format** — free `NonEmptyString | None`; the canonical
+  `phase_outputs.<name>` is documented prose (§4.5/§6.5). Layer 2 enforces it; doesn't contradict the
+  model. The schema's `_identifier_rules` guarantees it's non-None for `runtime_generated`, so the
+  resolution check is reachable.
+- **Graph-node insertion is Task 6, not Task 5.** The brief's Task-5 item 4 ("wire into the
+  mechanical stack; route to the Planner") overlaps Task-6 item 2 ("wire the graph: Planner → Jury →
+  Layer 2") and the Task-4 log's deferral. Resolved conservatively (ADR 0094 D7): Task 5 ships the
+  validator + the `responsible_agent_for` routing **contract** (unit-tested → PLANNER); Task 6
+  inserts the node and wires the edge, consuming the same mapping.
+
+**Deferred.**
+- **Task 6:** insert the semantic-cross-check node into the `plan` graph + wire route-to-Planner
+  (consumes `responsible_agent_for`).
+- **Phase 3:** light up `references_lab_outputs_findings` (needs generated IaC); the per-cloud /
+  lab-level code-vs-manifest checks.
+- **Architect:** reconcile `validation.md §6.5` `affected_platforms` (note v1-vacuous, or a future
+  schema bump adds the field with Planner persistence).
+- **When warn-level findings are needed:** the non-first-class `runtime:*` warning (§6.5) — the
+  ADR-0073 `Finding` base has no `severity` level, so a warn-level finding is currently
+  inexpressible; deferred rather than bolting severity on for one out-of-scope warning.
+- `StepBlock.reproducibility` carry-integrity (manifest↔AttackSpec; seams §2) — a cross-*artifact*
+  check, not cross-block-within-manifest, and not in the Task-5 work-items; still open.
+
+**Doc edits surfaced** (ADR 0084): none architecture-tier in Task 5 itself — the `affected_platforms`
+drift is *surfaced for the architect*, not edited. The naming rule (`coding-conventions.md §5.5`) and
+the model policy (`CLAUDE.md`) landed as the separate governance commits above.
+
+**Verify.** `just verify` green — ruff + format clean, pyright 0 errors (40 pre-existing click/yaml
+warnings), 861 passed / 1 skipped (+13 Task-5 tests; the resolver fix added the other +4).
+
+---
+
 ## Execution-log entry template
 
 ```

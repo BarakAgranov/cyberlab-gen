@@ -6,17 +6,26 @@ v2-deferred). The Validator is **framework code, not an agent**
 deterministic checks and never invokes an LLM. ADR 0022 records this subpackage's
 location.
 
-Phase 1 ships static schema validation only (static schema + registry reference
-resolution + ``spec_kind`` discriminator), implemented in ``static_schema_validator`` —
-descriptively named per ADR 0026, and per ADR 0046 the descriptive name is now used
-*everywhere*, including report/metric keys and the graph node id (the numbered
-numbered ``layerN`` token survives nowhere in code). Later validation passes land in Phase 2
-beside it as one descriptively-named module per pass. Each pass *returns findings*; it
-never routes — the orchestrator
+Phase 1 ships static schema validation (static schema + registry reference resolution +
+``spec_kind`` discriminator), implemented in ``static_schema_validator`` — descriptively
+named per ADR 0026, and per ADR 0046 / ``coding-conventions.md §5.5`` the descriptive name
+is used *everywhere*, including report/metric keys and the graph node id (an ordinal
+``layerN`` token survives nowhere in code). Phase 2 adds the **semantic cross-check** over the
+``LabManifest`` (``semantic_cross_check_validator``, ``validation.md §6.5``). Each pass
+*returns findings*; it never routes — the orchestrator
 (``cyberlab_gen.framework.orchestrator``) reads the result and decides what to do
 (``validation.md §6.10``, ``architecture.md §1.5``).
 """
 
+from cyberlab_gen.validators.semantic_cross_check_validator import (
+    ResponsibleAgent,
+    SemanticCrossCheckCode,
+    SemanticCrossCheckFinding,
+    SemanticCrossCheckResult,
+    SemanticCrossCheckValidator,
+    references_lab_outputs_findings,
+    responsible_agent_for,
+)
 from cyberlab_gen.validators.static_schema_validator import (
     PendingProposals,
     StaticSchemaCode,
@@ -27,8 +36,15 @@ from cyberlab_gen.validators.static_schema_validator import (
 
 __all__ = [
     "PendingProposals",
+    "ResponsibleAgent",
+    "SemanticCrossCheckCode",
+    "SemanticCrossCheckFinding",
+    "SemanticCrossCheckResult",
+    "SemanticCrossCheckValidator",
     "StaticSchemaCode",
     "StaticSchemaFinding",
     "StaticSchemaResult",
     "StaticSchemaValidator",
+    "references_lab_outputs_findings",
+    "responsible_agent_for",
 ]
