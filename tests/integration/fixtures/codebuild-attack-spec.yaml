@@ -1,0 +1,1148 @@
+spec_version: 1
+spec_kind: AttackSpec
+source:
+  url: 
+    https://www.wiz.io/blog/wiz-research-codebreach-vulnerability-aws-codebuild
+  canonical_url: 
+    https://www.wiz.io/blog/wiz-research-codebreach-vulnerability-aws-codebuild
+  title: 'CodeBreach: Infiltrating the AWS Console Supply Chain and Hijacking AWS
+    GitHub Repositories via CodeBuild'
+  publisher:
+    name: Wiz
+    domain: www.wiz.io
+    kind: vendor_lab
+  authors:
+  - Yuval Avrahami
+  - Nir Ohfeld
+  published_at: '2026-01-15T00:00:00Z'
+  fetched_at: '2026-06-10T04:06:37.507519Z'
+  content_hash: 456f176d9a01a582c1665320ac7ff5b9347b3699e53b1ed990fa5510f3c46a77
+  fetch_method: http_get
+  word_count: 3342
+extraction_outcome: in_scope
+extraction_outcome_reason:
+thesis:
+  types:
+  - webhook_filter_bypass
+  - ci_cd_supply_chain_compromise
+  - misconfiguration
+  summary:
+    value: Wiz Research discovered 'CodeBreach', a critical supply chain 
+      vulnerability where four AWS-owned GitHub repositories' CodeBuild CI 
+      pipelines used an ACTOR_ID webhook filter built on an unanchored regex. 
+      The missing ^ and $ anchors meant any GitHub user whose numeric ID was a 
+      superstring of an approved maintainer's ID could bypass the allow-list. By
+      racing to register a new GitHub App bot user whose sequential ID 
+      'eclipsed' a trusted maintainer's ID, an unauthenticated attacker could 
+      trigger a privileged build via a malicious pull request, dump GitHub 
+      credentials from build-environment process memory, and escalate to full 
+      repository administrator over the AWS JavaScript SDK (aws/aws-sdk-js-v3) 
+      and related repos — enabling a platform-wide supply chain compromise.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "Intro: 'Just two missing characters in a Regex filter allowed unauthenticated
+        attackers to infiltrate the build environment and leak privileged credentials.'"
+      location:
+    - kind: blog_passage
+      reference: "Section 'Unanchored: How a Subtle Flaw Led to CI Compromise' and
+        'When IDs Align'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  attacker_objective:
+    value: Achieve a full takeover of key AWS GitHub repositories — most notably
+      the AWS JavaScript SDK that powers the AWS Console — in order to inject 
+      malicious code into a release and launch a platform-wide supply chain 
+      compromise.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "Intro: 'The issue allowed a complete takeover of key AWS GitHub
+        repositories - most notably the AWS JavaScript SDK... attackers could have
+        injected malicious code to launch a platform-wide compromise'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  vulnerability_story:
+    value: CodeBuild projects connected to GitHub hold GitHub credentials in the
+      build environment's memory by default. The four affected AWS repositories 
+      defended PR-triggered builds with an ACTOR_ID webhook filter — an 
+      allow-list of approved maintainer GitHub IDs — but the filter is a regex 
+      and the patterns were not anchored with ^ and $. An unanchored regex 
+      matches any string that merely contains the pattern, so a longer GitHub ID
+      containing an approved ID as a substring bypasses the filter. Because 
+      GitHub assigns sequential numeric IDs (~200k/day), a new ID 'eclipsing' a 
+      short 6-7 digit maintainer ID becomes registerable roughly every five 
+      days; the attacker wins the registration race via the GitHub App manifest 
+      flow, then triggers a privileged build and dumps the GitHub PAT from 
+      process memory.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'To interact with GitHub, CodeBuild requires GitHub credentials,
+        which are, by default, present in the memory of the build environment.'"
+      location:
+    - kind: blog_passage
+      reference: "'Without the start ^ and end $ anchors to require an exact match...
+        any GitHub user ID that is a superstring of an approved ID could bypass the
+        filter.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  duration_as_described:
+    value: Research and disclosure spanned from August 25th, 2025 (report to 
+      AWS) to January 15th, 2026 (public disclosure). The core actor-ID-bypass 
+      issue was mitigated by AWS within 48 hours of disclosure. The attack 
+      itself involved a recurring ~5-day 'eclipse' window for a target ID to 
+      become registerable; the credential-theft-to-takeover exploit executed 
+      within moments of submitting a PR.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: 'Responsible Disclosure Timeline: August 25th 2025 ... January 15th
+        2026'
+      location:
+    - kind: blog_passage
+      reference: "'a new, longer ID containing it would become available for registration
+        approximately every five days'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+facets:
+- target:aws
+- target:aws_codebuild
+- target:github_repository
+- target:github_actor_id_filter
+- target:aws_iam
+external_references:
+  cves: []
+  related_blogs: []
+  advisories:
+  - advisory_id: aws-codebuild-codebreach-advisory
+    source: aws
+    url:
+    description:
+      value: AWS published an advisory on the CodeBreach issue and implemented 
+        global CodeBuild hardening, most notably the Pull Request Comment 
+        Approval build gate. The blog links to 'the AWS Advisory here'.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'AWS also implemented global hardening measures within the CodeBuild
+          service... Read the AWS Advisory here.'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+  mitre_techniques:
+  - technique_id: T1190
+    name:
+      value: Exploit Public-Facing Application (unanchored regex filter bypass)
+      source: llm_inference
+      citations:
+      - kind: blog_passage
+        reference: "'any GitHub user ID that is a superstring of an approved ID could
+          bypass the filter'"
+        location:
+      confidence: 0.6
+      confidence_source: model_self_reported
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    tactic_ids: []
+  - technique_id: T1195.002
+    name:
+      value: 'Supply Chain Compromise: Compromise Software Supply Chain'
+      source: llm_inference
+      citations:
+      - kind: blog_passage
+        reference: "'attackers could have injected malicious payloads right before
+          a release was published'"
+        location:
+      confidence: 0.7
+      confidence_source: model_self_reported
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    tactic_ids: []
+  - technique_id: T1552
+    name:
+      value: Unsecured Credentials (GitHub token in build-process memory)
+      source: llm_inference
+      citations:
+      - kind: blog_passage
+        reference: "'GitHub credentials... are, by default, present in the memory
+          of the build environment'"
+        location:
+      confidence: 0.65
+      confidence_source: model_self_reported
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    tactic_ids: []
+real_world_incidents:
+  status: none_observed
+  evidence_source:
+    value: AWS audited the logs of all public build repositories and associated 
+      CloudTrail logs and determined no other actor had taken advantage of the 
+      unanchored regex issue; the only exploitation was the Wiz 
+      proof-of-concept. The blog references prior related incidents (Amazon Q, 
+      Nx S1ngularity) as analogous but separate attacks.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'AWS audited the logs of all public build repositories as well as
+        associated CloudTrail logs and determined that no other actor had taken advantage
+        of the unanchored regex issue demonstrated by the Wiz research team.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  incidents: []
+chain:
+  chain_steps:
+  - id: discover-public-codebuild
+    step_number: 1
+    title: Discover AWS repositories with public CodeBuild projects building on 
+      PRs
+    description:
+      value: 'The researchers searched for GitHub repositories connected to Public
+        CodeBuild projects, which expose their settings, build logs, and webhook filter
+        configurations via a publicly accessible dashboard linked from commit statuses.
+        They found seven AWS-owned repos with public CodeBuild pages, four of which
+        were active and configured to run builds on pull requests: aws/aws-sdk-js-v3,
+        aws/aws-lc, corretto/amazon-corretto-crypto-provider, and awslabs/open-data-registry.'
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'we decided to search for GitHub repositories connected to Public
+          CodeBuild projects. When set to public, CodeBuild projects expose their
+          settings via a publicly accessible dashboard'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    blog_excerpt: "When set to public, CodeBuild projects expose their settings via
+      a publicly accessible dashboard and automatically link to it in the status of
+      any commit that triggers a build. From the dashboard, anyone can view the project's
+      build logs and configurations - including the exact webhook filters being used.
+      ... We quickly found seven AWS-owned repositories with public CodeBuild pages.
+      Of those, four were active and configured to run builds on pull requests: The
+      AWS SDK for JavaScript (aws/aws-sdk-js-v3), AWS Libcrypto (aws/aws-lc), Amazon
+      Corretto Crypto Provider (corretto/amazon-corretto-crypto-provider), The Registry
+      of Open Data on AWS (awslabs/open-data-registry)"
+    techniques:
+      mitre:
+      - T1593
+      - T1596
+      tradecraft:
+      - name: recon:public-codebuild-dashboard-enumeration
+        description:
+          value: Enumerate public CodeBuild project dashboards to read webhook 
+            filter configuration and build logs of AWS-owned repositories.
+          source: llm_inference
+          citations:
+          - kind: blog_passage
+            reference: "'anyone can view the project's build logs and configurations
+              - including the exact webhook filters being used'"
+            location:
+          confidence: 0.8
+          confidence_source: model_self_reported
+          requires_user_confirmation: false
+          reason:
+          discrepancy_with_blog: false
+          overridden_blog_value:
+          discrepancy_classification:
+          framework_enriched: false
+        evades_what:
+    preconditions: []
+    postconditions: []
+    detections: []
+    reproducibility:
+      classification: partial_simulation
+      caveats:
+        value: The specific AWS public CodeBuild projects have been remediated; 
+          a lab can reproduce the discovery primitive (a public CodeBuild 
+          project exposing its webhook filter config) but not the exact AWS 
+          targets.
+        source: llm_inference
+        citations: []
+        confidence: 0.75
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+      why:
+        value: The mechanism (public CodeBuild dashboards exposing webhook 
+          filters) is generic and reproducible with a self-hosted public 
+          CodeBuild project, but the original public targets are fixed and now 
+          hardened.
+        source: llm_inference
+        citations: []
+        confidence: 0.75
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+    depends_on: []
+    provisioning_mechanism: manual
+  - id: identify-unanchored-regex
+    step_number: 2
+    title: Identify the unanchored ACTOR_ID regex filter flaw
+    description:
+      value: All four projects implemented an ACTOR_ID filter locking builds to 
+        approved maintainers, but the IDs were separated by a pipe (|) 
+        character, revealing the filter is a regex pattern rather than a simple 
+        list. The regex patterns were not anchored with ^ and $, so a regex 
+        engine matches any string that merely contains an approved ID. Any 
+        GitHub user ID that is a superstring of an approved ID therefore 
+        bypasses the filter. All four repos used short maintainer IDs (6 or 7 
+        digits).
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'the filter wasn't a simple list, it was a regex pattern. And
+          it had a fatal flaw.'"
+        location:
+      - kind: blog_passage
+        reference: "'Without the start ^ and end $ anchors... any GitHub user ID that
+          is a superstring of an approved ID could bypass the filter.'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    blog_excerpt: "The user IDs weren't separated by commas or spaces, but by a pipe
+      | character. That small detail was the key: in regular expressions, the | character
+      means \"OR\". ... The issue was simple but critical: the regex patterns weren't
+      anchored. Without the start ^ and end $ anchors to require an exact match, a
+      regex engine doesn't look for a string that perfectly matches the pattern, but
+      one that merely contains it. This meant that any GitHub user ID that is a superstring
+      of an approved ID could bypass the filter."
+    techniques:
+      mitre:
+      - T1190
+      tradecraft:
+      - name: discovery:unanchored-regex-bypass
+        description:
+          value: Recognize that an unanchored regex allow-list (ACTOR_ID filter 
+            without ^/$ anchors) permits superstring identifiers to bypass the 
+            intended exact-match check.
+          source: blog_explicit
+          citations:
+          - kind: blog_passage
+            reference: "'the regex patterns weren't anchored. Without the start ^
+              and end $ anchors...'"
+            location:
+          confidence:
+          confidence_source:
+          requires_user_confirmation: false
+          reason:
+          discrepancy_with_blog: false
+          overridden_blog_value:
+          discrepancy_classification:
+          framework_enriched: false
+        evades_what:
+    preconditions: []
+    postconditions: []
+    detections: []
+    reproducibility:
+      classification: full
+      caveats:
+        value: The flaw is a generic regex anchoring mistake easily reproduced 
+          in a lab webhook filter.
+        source: llm_inference
+        citations: []
+        confidence: 0.85
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+      why:
+        value: An unanchored ACTOR_ID regex filter can be configured identically
+          in a controlled CodeBuild project, and the superstring-match behavior 
+          is deterministic.
+        source: llm_inference
+        citations: []
+        confidence: 0.85
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+    depends_on:
+    - discover-public-codebuild
+    provisioning_mechanism: manual
+  - id: register-eclipse-id
+    step_number: 3
+    title: Win the race to register a GitHub ID that 'eclipses' a trusted 
+      maintainer ID
+    description:
+      value: Because GitHub assigns unique sequential numeric IDs (~200,000/day,
+        ~2/second), a new longer ID containing a short maintainer's ID 
+        inevitably becomes available roughly every five days (an 'eclipse'). 
+        reCAPTCHA blocks automated standard sign-ups, and GitHub organizations 
+        (which share the ID pool) cannot open PRs. The breakthrough was the 
+        GitHub App manifest flow, which generates a bot user able to interact 
+        with PRs and can be made atomic — the bot is created only when a final 
+        confirmation URL is visited. The attackers used the 
+        organization-creation API as an ID sampling tool to predict the eclipse,
+        prepared 200 GitHub App manifest confirmation URLs, waited until the 
+        live ID count was ~100 IDs away from the target, then visited all 200 
+        URLs simultaneously, capturing target ID 226755743 which contained a 
+        trusted aws/aws-sdk-js-v3 maintainer ID.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'GitHub creates roughly 200,000 new IDs each day... a new, longer
+          ID containing it would become available for registration approximately every
+          five days. We dubbed this... an \"eclipse\"'"
+        location:
+      - kind: blog_passage
+        reference: "'We waited until the live ID count was just ~100 IDs away from
+          the target ID, and then visited all 200 URLs at once... The target ID was
+          226755743'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    blog_excerpt: "The real breakthrough came from GitHub Apps. Creating an app generates
+      a corresponding bot user (e.g. app-name[bot]) that can interact with pull requests.
+      It's also possible to automate app creation via the manifest flow. While it's
+      composed of a few steps, it can be made atomic: the app and its bot are only
+      created when a final confirmation URL is visited. This allowed us to prepare
+      hundreds of app creation requests in advance and then, at the precise moment,
+      visit all their confirmation URLs simultaneously. ... We also initiated the
+      manifest flow for 200 new GitHub Apps, collecting their unique confirmation
+      URLs. We waited until the live ID count was just ~100 IDs away from the target
+      ID, and then visited all 200 URLs at once, triggering a flood of new bot user
+      registrations. The target ID was 226755743, which contained a trusted maintainer
+      ID for the aws/aws-sdk-js-v3 repository."
+    techniques:
+      mitre:
+      - T1136.003
+      - T1586
+      tradecraft:
+      - name: tradecraft:github-id-sampling
+        description:
+          value: Use the GitHub organization-creation API as a real-time ID 
+            sampler to predict the moment a target sequential ID becomes 
+            registerable.
+          source: blog_explicit
+          citations:
+          - kind: blog_passage
+            reference: "'We repurposed this API into an ID sampling tool: we could
+              create an organization, check its ID... and then immediately delete
+              it.'"
+            location:
+          confidence:
+          confidence_source:
+          requires_user_confirmation: false
+          reason:
+          discrepancy_with_blog: false
+          overridden_blog_value:
+          discrepancy_classification:
+          framework_enriched: false
+        evades_what:
+      - name: tradecraft:manifest-flow-id-race
+        description:
+          value: Exploit the atomic GitHub App manifest confirmation-URL flow to
+            batch-create hundreds of bot users at a precise instant, winning a 
+            sequential-ID race condition against global registration traffic.
+          source: blog_explicit
+          citations:
+          - kind: blog_passage
+            reference: "'it can be made atomic: the app and its bot are only created
+              when a final confirmation URL is visited... visit all their confirmation
+              URLs simultaneously.'"
+            location:
+          confidence:
+          confidence_source:
+          requires_user_confirmation: false
+          reason:
+          discrepancy_with_blog: false
+          overridden_blog_value:
+          discrepancy_classification:
+          framework_enriched: false
+        evades_what:
+    preconditions: []
+    postconditions: []
+    detections: []
+    reproducibility:
+      classification: demonstration_only
+      caveats:
+        value: This step depends on live GitHub's global sequential-ID 
+          assignment and registration traffic, which cannot be faithfully 
+          reproduced in an isolated lab; only the technique can be 
+          demonstrated/described, not re-run against real GitHub.
+        source: llm_inference
+        citations: []
+        confidence: 0.8
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+      why:
+        value: Winning the eclipse race requires GitHub's real-world ID sequence
+          and timing; it is inherently a race condition against external 
+          infrastructure and not deterministically reproducible offline.
+        source: blog_explicit
+        citations:
+        - kind: blog_passage
+          reference: "'This was practically a race condition against the entire world,
+            with roughly two new GitHub users created every second.'"
+          location:
+        confidence:
+        confidence_source:
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+    depends_on:
+    - identify-unanchored-regex
+    provisioning_mechanism: cli_scripts
+  - id: trigger-build-dump-creds
+    step_number: 4
+    title: Trigger a privileged build via malicious PR and dump GitHub 
+      credentials from memory
+    description:
+      value: With the bot user able to bypass the ACTOR_ID filter, the 
+        researchers opened a pull request against aws/aws-sdk-js-v3 that fixed a
+        legitimate issue but buried a malicious NPM package dependency designed 
+        to execute in the build environment. Submitting the PR triggered a 
+        CodeBuild build; the payload dumped the memory of a process in the build
+        environment to extract the GitHub credentials. A prior CodeBuild 
+        memory-dump mitigation (added after the Amazon Q incident) had 
+        overlooked this particular process. The recovered credential was a 
+        GitHub Classic PAT belonging to aws-sdk-js-automation, scoped with repo 
+        and admin:repo_hook.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'Buried within the PR was the real payload: a new NPM package
+          dependency designed to execute in the build environment and extract the
+          GitHub credentials.'"
+        location:
+      - kind: blog_passage
+        reference: "'Our payload retrieved the GH token by dumping the memory of a
+          process within the build environment.'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    blog_excerpt: 'We chose to target the aws/aws-sdk-js-v3 repository, preparing
+      a pull request that fixes a legitimate issue. Buried within the PR was the real
+      payload: a new NPM package dependency designed to execute in the build environment
+      and extract the GitHub credentials. We submitted the PR, and soon after received
+      a notification: a build had been triggered. Moments later, we had successfully
+      obtained the GitHub credentials of the aws-sdk-js-v3 CodeBuild project. ...
+      Our payload retrieved the GH token by dumping the memory of a process within
+      the build environment. A previous memory dump mitigation in CodeBuild, which
+      AWS implemented in response to the Amazon Q incident, overlooked this particular
+      process. ... The credentials we obtained were a GitHub Classic Personal Access
+      Token (PAT) belonging to the aws-sdk-js-automation user.'
+    techniques:
+      mitre:
+      - T1195.002
+      - T1059
+      - T1003
+      - T1552
+      tradecraft:
+      - name: tradecraft:malicious-pr-build-payload
+        description:
+          value: Smuggle a malicious NPM dependency inside an otherwise 
+            legitimate pull request so it executes during the CI build and dumps
+            the GitHub token from build-process memory.
+          source: blog_explicit
+          citations:
+          - kind: blog_passage
+            reference: "'a new NPM package dependency designed to execute in the build
+              environment and extract the GitHub credentials'"
+            location:
+          confidence:
+          confidence_source:
+          requires_user_confirmation: false
+          reason:
+          discrepancy_with_blog: false
+          overridden_blog_value:
+          discrepancy_classification:
+          framework_enriched: false
+        evades_what:
+    preconditions:
+    - value: Attacker controls a GitHub bot user whose numeric ID bypasses the 
+        ACTOR_ID filter and can open a PR.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'With our bot user able to bypass the ACTOR_ID filter, we were
+          ready to execute the proof-of-concept.'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    postconditions:
+    - value: Attacker holds a GitHub Classic PAT (aws-sdk-js-automation) with 
+        repo and admin:repo_hook scopes.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'Initially though, our access was scoped by the token's permissions:
+          repo and admin:repo_hook.'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    detections: []
+    reproducibility:
+      classification: partial_simulation
+      caveats:
+        value: The PR-triggered build and a malicious NPM dependency executing 
+          in the build environment are reproducible in a controlled CodeBuild 
+          project; the specific overlooked-process memory-dump path was patched 
+          by AWS and GitHub credentials in memory can be simulated with a 
+          stand-in token.
+        source: llm_inference
+        citations: []
+        confidence: 0.7
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+      why:
+        value: A lab CodeBuild project building untrusted PRs with a credential 
+          present in process memory can be stood up; the exact AWS-patched 
+          process is no longer dumpable but the credential-in-memory primitive 
+          is generic.
+        source: llm_inference
+        citations: []
+        confidence: 0.7
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+    depends_on:
+    - register-eclipse-id
+    provisioning_mechanism: mixed
+  - id: escalate-to-admin-takeover
+    step_number: 5
+    title: Escalate the PAT to repository administrator and confirm supply-chain
+      blast radius
+    description:
+      value: The aws-sdk-js-automation user had full admin privileges over the 
+        repository, but the stolen token was initially scoped to repo and 
+        admin:repo_hook. The researchers abused the token's repo scope (which 
+        can manage repository collaborators) to invite their own GitHub user as 
+        a repository administrator. As administrators they could push to main, 
+        approve any PR, and exfiltrate repository secrets — a clear path for 
+        injecting malicious payloads right before a weekly SDK release to GitHub
+        then NPM. The same token also had full admin over several other JS 
+        SDK-related repos, including three private repositories (apparent 
+        private mirrors). The same ACTOR_ID bypass was present in at least three
+        other AWS repos (two automation accounts and one AWS employee's personal
+        account). The researchers halted and reported to AWS.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'we abused the token's repo scope, which can manage repository
+          collaborators, and invited our own GitHub user to be a repository administrator.'"
+        location:
+      - kind: blog_passage
+        reference: "'As administrators, we could now push code directly to the main
+          branch, approve any pull request, and exfiltrate repository secrets.'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    blog_excerpt: "We quickly confirmed that the aws-sdk-js-automation user had full
+      admin privileges over the repository. Initially though, our access was scoped
+      by the token's permissions: repo and admin:repo_hook. To escalate privileges,
+      we abused the token's repo scope, which can manage repository collaborators,
+      and invited our own GitHub user to be a repository administrator. As administrators,
+      we could now push code directly to the main branch, approve any pull request,
+      and exfiltrate repository secrets. This level of control provided a clear path
+      for supply chain attacks. The JavaScript SDK is released on a weekly basis to
+      GitHub and then to NPM. Abusing this frequent release schedule, attackers could
+      have injected malicious payloads right before a release was published, compromising
+      it."
+    techniques:
+      mitre:
+      - T1098
+      - T1195.002
+      - T1078
+      tradecraft:
+      - name: tradecraft:pat-scope-collaborator-escalation
+        description:
+          value: Leverage a stolen GitHub PAT's repo scope to add the attacker's
+            own account as a repository administrator, escalating from limited 
+            token scopes to full repo control.
+          source: blog_explicit
+          citations:
+          - kind: blog_passage
+            reference: "'we abused the token's repo scope, which can manage repository
+              collaborators, and invited our own GitHub user to be a repository administrator.'"
+            location:
+          confidence:
+          confidence_source:
+          requires_user_confirmation: false
+          reason:
+          discrepancy_with_blog: false
+          overridden_blog_value:
+          discrepancy_classification:
+          framework_enriched: false
+        evades_what:
+    preconditions:
+    - value: Attacker holds the aws-sdk-js-automation PAT with repo and 
+        admin:repo_hook scopes.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'our access was scoped by the token's permissions: repo and admin:repo_hook'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    postconditions:
+    - value: Attacker is a full administrator of aws/aws-sdk-js-v3 and several 
+        related repos, able to push to main, approve PRs, and exfiltrate secrets
+        ahead of weekly releases.
+      source: blog_explicit
+      citations:
+      - kind: blog_passage
+        reference: "'we could now push code directly to the main branch, approve any
+          pull request, and exfiltrate repository secrets.'"
+        location:
+      confidence:
+      confidence_source:
+      requires_user_confirmation: false
+      reason:
+      discrepancy_with_blog: false
+      overridden_blog_value:
+      discrepancy_classification:
+      framework_enriched: false
+    detections: []
+    reproducibility:
+      classification: partial_simulation
+      caveats:
+        value: PAT-scope-to-admin escalation via the collaborator API is 
+          reproducible against a controlled GitHub repo with a stand-in PAT; the
+          real AWS repos and the actual release-injection were not performed and
+          the token was revoked.
+        source: llm_inference
+        citations: []
+        confidence: 0.75
+        confidence_source: model_self_reported
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+      why:
+        value: The escalation primitive (repo scope -> add admin collaborator) 
+          is a generic GitHub behavior reproducible in a lab; the downstream 
+          release-injection was demonstrated only as a path, not executed.
+        source: blog_explicit
+        citations:
+        - kind: blog_passage
+          reference: "'given the demonstrated takeover and its potential impact, we
+            halted further research and immediately reported the issues to AWS.'"
+          location:
+        confidence:
+        confidence_source:
+        requires_user_confirmation: false
+        reason:
+        discrepancy_with_blog: false
+        overridden_blog_value:
+        discrepancy_classification:
+        framework_enriched: false
+    depends_on:
+    - trigger-build-dump-creds
+    provisioning_mechanism: cli_scripts
+  alternative_paths: []
+defender_techniques: []
+defenses:
+- id: pr-comment-approval-gate
+  description:
+    value: Enable the new CodeBuild Pull Request Comment Approval build gate to 
+      prevent untrusted pull requests from triggering privileged builds. AWS 
+      introduced this as a global hardening measure.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'the new Pull Request Comment Approval build gate offers organizations
+        a simple and secure path to prevent untrusted builds.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  applicability: customer_actionable
+  addresses_chain_steps:
+  - trigger-build-dump-creds
+  detection_path:
+  detection_format:
+- id: anchored-webhook-regex
+  description:
+    value: If relying on webhook filters, ensure their regex patterns are 
+      anchored (with ^ and $) so allow-list IDs require an exact match and 
+      cannot be bypassed by superstrings.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'If you must rely on webhook filters, ensure their regex patterns
+        are anchored.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  applicability: customer_actionable
+  addresses_chain_steps:
+  - identify-unanchored-regex
+  - register-eclipse-id
+  detection_path:
+  detection_format:
+- id: codebuild-hosted-runners
+  description:
+    value: Alternatively, use CodeBuild-hosted runners to manage build triggers 
+      via GitHub workflows.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'Alternatively, use CodeBuild-hosted runners to manage build triggers
+        via GitHub workflows.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  applicability: architectural_mitigation
+  addresses_chain_steps:
+  - trigger-build-dump-creds
+  detection_path:
+  detection_format:
+- id: fine-grained-pat-least-privilege
+  description:
+    value: 'Secure the CodeBuild-GitHub connection: generate a unique fine-grained
+      PAT per CodeBuild project, strictly limit its permissions to the minimum required,
+      and consider using a dedicated unprivileged GitHub account for the integration.'
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'Generate a unique, fine-grained Personal Access Token (PAT) for
+        each CodeBuild project. Strictly limit the PAT's permissions... Consider using
+        a dedicated unprivileged GitHub account'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  applicability: customer_actionable
+  addresses_chain_steps:
+  - trigger-build-dump-creds
+  - escalate-to-admin-takeover
+  detection_path:
+  detection_format:
+- id: build-process-memory-protection
+  description:
+    value: AWS implemented additional hardening so non-privileged builds cannot 
+      access the project's GitHub credentials via memory dumping, extending the 
+      prior memory-dump mitigation to cover the previously overlooked process. 
+      Noted as not bulletproof since credentials still reside in memory and 
+      Linux privesc exploits could circumvent it.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'Following our disclosure, CodeBuild now protects this process as
+        well.'"
+      location:
+    - kind: blog_passage
+      reference: "September 2025 timeline: 'AWS implements additional hardening to
+        prevent non-privileged builds from accessing the project's credentials via
+        memory dumping.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  applicability: vendor_only
+  addresses_chain_steps:
+  - trigger-build-dump-creds
+  detection_path:
+  detection_format:
+reproducibility:
+  classification_lab_level: partial_simulation
+  caveats:
+  - The eclipse/ID-race step depends on real GitHub infrastructure and cannot be
+    deterministically reproduced offline.
+  - AWS has patched the specific overlooked-process memory-dump path and the 
+    affected repos' filters.
+  - Downstream supply-chain release injection was a demonstrated path, not 
+    executed.
+  overall_assessment:
+    value: The lab can faithfully reproduce most primitives — a public CodeBuild
+      project with an unanchored ACTOR_ID regex filter, a malicious-PR-triggered
+      build, a GitHub credential present in build-process memory, and 
+      PAT-scope-to-admin escalation via the collaborator API — using self-hosted
+      infrastructure and stand-in credentials. The one step that cannot be 
+      faithfully reproduced is the 'eclipse' GitHub ID race (step 3), which 
+      depends on GitHub's live global sequential-ID assignment and registration 
+      traffic and is demonstration_only. The real AWS targets and the actual 
+      release-injection are out of scope (token revoked, PoC halted).
+    source: llm_inference
+    citations: []
+    confidence: 0.7
+    confidence_source: model_self_reported
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  derivation_trace:
+  - 'step discover-public-codebuild: partial_simulation'
+  - 'step identify-unanchored-regex: full'
+  - 'step register-eclipse-id: demonstration_only (weakest faithful-reproduction tier
+    in chain)'
+  - 'step trigger-build-dump-creds: partial_simulation'
+  - 'step escalate-to-admin-takeover: partial_simulation'
+  - 'lab-level: mixed tiers with a demonstration_only step -> partial_simulation overall'
+gaps:
+- field_path: external_references.cves
+  reason: The blog describes a misconfiguration (unanchored regex in CodeBuild 
+    pipelines) and explicitly clarifies it is not a service-wide CVE; no CVE 
+    identifier is assigned or referenced.
+  severity: Low
+- field_path: external_references.advisories.url
+  reason: The blog links to 'the AWS Advisory here' but the verbatim text does 
+    not include the resolved URL.
+  severity: Low
+- field_path: chain.chain_steps.techniques.mitre
+  reason: The blog does not name any MITRE ATT&CK technique IDs; all technique 
+    IDs are llm_inference and may be imprecise (no mitre lookup source available
+    this phase).
+  severity: Medium
+material_discrepancies: []
+extraction_metadata:
+  extractor_version: 1.0.0
+  model: claude-opus-4-8
+  completeness_score: 0.86
+  unknown_fields:
+  - external_references.advisories.url
+  - external_references.cves
+  citations_count: 40
+  notes_for_planner: Central technique is an unanchored ACTOR_ID regex (webhook 
+    filter bypass) enabling untrusted PRs to trigger privileged CodeBuild 
+    builds, followed by GitHub PAT theft from build-process memory and PAT-scope
+    escalation to repo admin. Proposed new value_type 
+    github_personal_access_token (flows from step 4 to step 5), new thesis_type 
+    webhook_filter_bypass, and new facet target:github_actor_id_filter. Step 3 
+    (the GitHub ID 'eclipse' race) is the hardest to reproduce — it is 
+    demonstration_only and depends on live GitHub ID sequencing; consider a 
+    simulated ID-assignment service for a lab. No CVE (misconfiguration, not a 
+    service CVE). MITRE technique IDs are llm_inference only — blog names none.
+extras:
+- name: blast_radius_sdk_prevalence
+  description:
+    value: Wiz's analysis states 66% of cloud environments include the 
+      JavaScript SDK (two of every three environments host an instance), and the
+      AWS Console itself bundles recent SDK versions — an example request 
+      included user credentials and used an SDK version released just 18 days 
+      prior. The stolen token also had full admin over several other JS 
+      SDK-related repos including three private repositories (apparent private 
+      mirrors). The same ACTOR_ID bypass existed in at least three other AWS 
+      repos (two automation accounts, one AWS employee's personal account).
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'a staggering 66% of cloud environments include the JavaScript SDK'"
+      location:
+    - kind: blog_passage
+      reference: "'the same ACTOR_ID filter bypass was present in at least three other
+        AWS GitHub repositories... one was a personal GitHub account of an AWS employee.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  source: blog_explicit
+  citations: []
+- name: related_prior_attacks
+  description:
+    value: "The blog situates CodeBreach in a trend of CI/CD supply-chain attacks:
+      the Nx S1ngularity incident and a July/recent attack abusing a similar CodeBuild
+      issue against users of the Amazon Q VS Code extension (an attacker exploited
+      a misconfigured CodeBuild project to compromise the extension's GitHub repo
+      and inject malicious code into main; payload executed on end users but failed
+      due to a typo)."
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "'This issue follows a familiar pattern seen in recent supply-chain
+        attacks like the Nx S1ngularity incident... a threat actor abused a similar
+        CodeBuild issue to launch a supply chain attack against users of the Amazon
+        Q VS Code extension.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  source: blog_explicit
+  citations: []
+- name: aws_impact_statement
+  description:
+    value: AWS stated it mitigated the core actor-ID-bypass within 48 hours, 
+      added protections for all build processes holding GitHub 
+      tokens/credentials in memory, audited all other public build environments 
+      and CloudTrail logs, and determined there was no impact on the 
+      confidentiality or integrity of any customer environment or AWS service.
+    source: blog_explicit
+    citations:
+    - kind: blog_passage
+      reference: "Statement from AWS: 'AWS determined there was no impact of the identified
+        issue on the confidentiality or integrity of any customer environment or any
+        AWS service.'"
+      location:
+    confidence:
+    confidence_source:
+    requires_user_confirmation: false
+    reason:
+    discrepancy_with_blog: false
+    overridden_blog_value:
+    discrepancy_classification:
+    framework_enriched: false
+  source: blog_explicit
+  citations: []

@@ -37,6 +37,7 @@ def _reset_module_state() -> None:  # pyright: ignore[reportUnusedFunction]
     """
     cli_main.last_invocation_context = None
     cli_main.extract_runner_factory = None
+    cli_main.plan_runner_factory = None
     cli_output.set_debug(False)
 
 

@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from cyberlab_gen.cli.extract import ExtractRunner
+    from cyberlab_gen.cli.plan import PlanRunner
 
 # Test hook: integration tests read this after ``runner.invoke`` to assert
 # that the global flags were plumbed into the per-invocation context.
@@ -69,6 +70,12 @@ extract_runner_factory: "Callable[[LocalState], ExtractRunner] | None" = None
 # wants to exercise the interactive menus. ``None`` → use the real check
 # (production); ``True``/``False`` → force the TTY verdict. Reset between tests.
 stdin_tty_override: bool | None = None
+
+# Test seam (mirrors ``extract_runner_factory``): the ``plan`` verb builds its
+# runner through this factory. Tests override it to inject a fake ``PlanRunner``
+# so the verb wiring + persistence are exercised without a live provider. ``None``
+# → the verb builds the production ``PipelinePlanRunner``. Reset between tests.
+plan_runner_factory: "Callable[[LocalState], PlanRunner] | None" = None
 
 
 app = typer.Typer(
@@ -339,6 +346,84 @@ def extract(
         raise typer.Exit(code=2) from exc
     if written is None:
         raise typer.Exit(code=1)  # aborted / out-of-scope-auto / budget-abort
+
+
+def _build_plan_runner(
+    state: LocalState, ledger: CostLedger, *, show_cost: bool = False
+) -> "PlanRunner":
+    """Build the production :class:`PipelinePlanRunner` (or the injected fake).
+
+    Mirrors :func:`_build_extract_runner` (ADR 0024): the ``plan_runner_factory`` test seam lets the
+    CLI tests supply a fake runner so the verb + persistence are driven without a live provider. In
+    production this wires the Planner + Planner-Jury + the semantic cross-check validator onto a
+    single ``CostRecordingProvider`` bound to ``ledger`` (so the billed model is recorded for the
+    persist-time stamp, ADR 0065/0068); the agents raise ``HardFailure`` if no provider is configured.
+    """
+    if plan_runner_factory is not None:
+        return plan_runner_factory(state)
+    from cyberlab_gen.agents.planner.planner import Planner
+    from cyberlab_gen.agents.planner_jury.jury import PlannerJury
+    from cyberlab_gen.cli.plan import PipelinePlanRunner
+    from cyberlab_gen.providers.anthropic_provider import AnthropicProvider
+    from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
+    from cyberlab_gen.providers.ranking import build_provider_registry
+    from cyberlab_gen.registries.merge import load_merged_registries
+    from cyberlab_gen.validators.semantic_cross_check_validator import SemanticCrossCheckValidator
+
+    registry = build_provider_registry()
+    provider = CostRecordingProvider(
+        AnthropicProvider(),
+        ledger,
+        purpose="cli",
+        on_call=output.print_cost if show_cost else None,
+    )
+    registries = load_merged_registries()
+    return PipelinePlanRunner(
+        planner=Planner(provider=provider, registry=registry, registries=registries),
+        jury=PlannerJury(provider=provider, registry=registry, registries=registries),
+        validator=SemanticCrossCheckValidator(registries=registries),
+    )
+
+
+@app.command()
+def plan(
+    ctx: typer.Context,
+    attack_spec: Annotated[
+        Path,
+        typer.Argument(help="Path to a validated attack-spec.yaml (the `extract` output)."),
+    ],
+) -> None:
+    """Plan a lab from a validated ``attack-spec.yaml``, writing ``lab.yaml`` (Phase 2).
+
+    Runs the linear pipeline Planner → Planner-Jury → semantic cross-check and persists the run.
+    A permanent staged entry point (ADR 0096); non-interactive in Phase 2 (the post-Planner interrupt
+    is a later phase).
+    """
+    from cyberlab_gen.cli.plan import run_plan
+    from cyberlab_gen.errors import CyberlabGenError
+
+    cli_ctx = ctx.obj
+    assert isinstance(cli_ctx, CliContext)
+    runner = _build_plan_runner(cli_ctx.state, cli_ctx.cost_ledger, show_cost=cli_ctx.show_cost)
+    # The run store persists every run's artifacts on every exit path (ADR 0039).
+    cli_ctx.state.ensure_runs_dir()
+    run_store = RunStore(cli_ctx.state.runs_dir)
+    try:
+        with persisting_signal_guard():
+            written = run_plan(
+                spec_path=attack_spec,
+                runner=runner,
+                ledger=cli_ctx.cost_ledger,
+                run_store=run_store,
+            )
+    except KeyboardInterrupt as exc:  # Ctrl-C / SIGINT / (converted) SIGTERM
+        output.print_error("interrupted; the partial run was saved to the run store", exc=exc)
+        raise typer.Exit(code=130) from exc
+    except CyberlabGenError as exc:
+        output.print_error(f"planning failed: {exc}", exc=exc)
+        raise typer.Exit(code=1) from exc
+    if written is None:
+        raise typer.Exit(code=1)  # route-back / halt (actionable message already printed)
 
 
 @app.command()
