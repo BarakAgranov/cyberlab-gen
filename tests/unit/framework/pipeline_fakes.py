@@ -19,7 +19,12 @@ from cyberlab_gen.agents.extractor_jury.schema import (
     JuryVerdict,
     Verdict,
 )
-from cyberlab_gen.agents.results import ExtractionResult
+from cyberlab_gen.agents.results import (
+    ExtractionResult,
+    PlanAttempt,
+    PlannerRefusal,
+    PlanOutcome,
+)
 from cyberlab_gen.registries.merge import load_merged_registries
 from cyberlab_gen.schemas.attack_spec import (
     AttackSpec,
@@ -300,6 +305,43 @@ def make_manifest(*, step_tiers: list[ReproducibilityTier] | None = None) -> Lab
                 iac_reference="terraform.output.bucket_name",
             ),
         ],
+    )
+
+
+def make_plan_attempt(*, step_tiers: list[ReproducibilityTier] | None = None) -> PlanAttempt:
+    """A ``planned`` PlanAttempt wrapping :func:`make_manifest` — the Planner's forced output."""
+    return PlanAttempt(outcome=PlanOutcome.PLANNED, manifest=make_manifest(step_tiers=step_tiers))
+
+
+def make_route_back_attempt(
+    *, field_paths: list[str] | None = None, summary: str = "step preconditions do not match"
+) -> PlanAttempt:
+    """An ``attackspec_incoherent`` PlanAttempt — the Planner surfaces a defect it may not repair.
+
+    Drives the route-back-to-Extractor path: the Planner flags AttackSpec incoherence with structured
+    detail and produces no manifest (``agents.md §5.7``).
+    """
+    return PlanAttempt(
+        outcome=PlanOutcome.ATTACKSPEC_INCOHERENT,
+        refusal=PlannerRefusal(
+            summary=summary,  # type: ignore[arg-type]
+            attack_spec_field_paths=field_paths or ["chain.chain_steps[1].description"],  # type: ignore[arg-type]
+            detail="step 2 assumes credentials step 1 never establishes",  # type: ignore[arg-type]
+        ),
+    )
+
+
+def make_cannot_plan_attempt(
+    *, summary: str = "the AttackSpec has no plannable chain"
+) -> PlanAttempt:
+    """A ``cannot_plan`` PlanAttempt — gaps too large to plan around; the run halts."""
+    return PlanAttempt(
+        outcome=PlanOutcome.CANNOT_PLAN,
+        refusal=PlannerRefusal(
+            summary=summary,  # type: ignore[arg-type]
+            attack_spec_field_paths=["chain.chain_steps"],  # type: ignore[arg-type]
+            detail="every chain step is not_reproducible; no lab content remains",  # type: ignore[arg-type]
+        ),
     )
 
 

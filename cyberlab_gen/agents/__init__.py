@@ -27,8 +27,11 @@ from cyberlab_gen.agents.extractor_jury import (
     Verdict,
 )
 from cyberlab_gen.agents.planner import (
+    PlanAttempt,
     Planner,
+    PlannerRefusal,
     PlannerToolExecutor,
+    PlanOutcome,
     planner_tool_definitions,
 )
 from cyberlab_gen.agents.prompts import (
@@ -57,8 +60,11 @@ __all__ = [
     "JuryFieldFeedback",
     "JuryScores",
     "JuryVerdict",
+    "PlanAttempt",
+    "PlanOutcome",
     "PlanResult",
     "Planner",
+    "PlannerRefusal",
     "PlannerToolExecutor",
     "ProposedFacet",
     "ProposedThesisType",

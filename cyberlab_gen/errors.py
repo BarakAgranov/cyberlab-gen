@@ -359,6 +359,29 @@ class ProposalCapExceeded(ExtractionError):  # noqa: N818 — parallels BudgetEx
     """
 
 
+class PlanningError(CyberlabGenError):
+    """Planning-stage errors (``pipeline.md §3.2.6``, ``agents.md §5.7``).
+
+    Pins ``stage='planning'``. Raised by the Planner stage
+    (``cyberlab_gen.agents.planner``) when its targeted-patch ``refine`` exhausts the
+    bounded re-prompt budget — the model repeatedly emitted a ``RefinementPatch`` that did
+    not *apply or validate* against the prior manifest (a malformed-output recovery,
+    ``validation.md §6.10.1`` mechanism 2). Mirrors ``ExtractionError`` for the Extractor's
+    refine path; distinct from the framework's *route-back* (a ``PlanOutcome`` the Planner
+    emits, not an exception) and from ``ProviderError`` (the provider succeeded
+    mechanically). A clean halt, never an unbounded spin (ADR 0054 R1).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        run_id: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(message, stage="planning", run_id=run_id, cause=cause)
+
+
 class ValidationError(CyberlabGenError):
     """A mechanical Validator layer halted the pipeline (``validation.md §6.4``).
 
