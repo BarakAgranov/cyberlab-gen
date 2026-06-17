@@ -25,10 +25,12 @@ token. It runs deterministic checks — **no LLM, no network**.
 **The code-vs-manifest checks are inert until Phase 3** (they need generated IaC/code that does not
 exist yet): the ``references_lab_outputs`` bidirectional cross-check is built as
 :func:`references_lab_outputs_findings` (returns nothing this phase; Phase 3 supplies the generated
-reference set and wires it). **The ``affected_platforms`` consistency check (``§6.5``) is vacuous in
-v1** — ``CoreBlock`` has no ``affected_platforms`` field and is ``extra="forbid"``, and ``§4.4``
-derives platforms from ``target:*`` facets — so it is reserved (``INCONSISTENT_AFFECTED_PLATFORMS``)
-but not implemented (ADR 0094; surfaced for the architect).
+reference set and wires it). **There is no ``affected_platforms`` consistency check — it is moot by
+design** (not deferred): platforms are facet-derived (``schema.md §4.4``) and validated at Layer 1
+via registry membership; they *are* the ``target:*`` facets, not a separate field. ``CoreBlock``
+carries no ``affected_platforms`` field (and is ``extra="forbid"``), so there is no independent
+operand to cross-check and no reserved code (ADR 0094 D4 → ADR 0095; ``validation.md §6.5``
+reconciled).
 
 The validator **never mutates** the manifest and **never routes**: it returns a
 ``SemanticCrossCheckResult`` of findings, and the orchestrator decides what to do
@@ -69,8 +71,6 @@ class SemanticCrossCheckCode(StrEnum):
     UNDECLARED_LAB_OUTPUT_REFERENCE = "undeclared_lab_output_reference"
     #: per-phase IaC references a ``lab_resources`` entry the Planner did not declare.
     UNDECLARED_LAB_RESOURCE_REFERENCE = "undeclared_lab_resource_reference"
-    # --- reserved, vacuous in v1 (CoreBlock has no affected_platforms field; ADR 0094) ---
-    INCONSISTENT_AFFECTED_PLATFORMS = "inconsistent_affected_platforms"
 
 
 class SemanticCrossCheckFinding(Finding[SemanticCrossCheckCode]):
@@ -175,7 +175,8 @@ class SemanticCrossCheckValidator:
         ``produces_world_state`` ``identifier_source`` resolution). Read-only: never raises on an
         inconsistency — those are findings; the orchestrator decides routing
         (``architecture.md §1.5``). The code-vs-manifest checks are inert this phase
-        (:func:`references_lab_outputs_findings`); ``affected_platforms`` is vacuous in v1 (ADR 0094).
+        (:func:`references_lab_outputs_findings`); there is no ``affected_platforms`` check — it is
+        moot by design (platforms are facet-derived, ``schema.md §4.4``; ADR 0095).
         """
         findings: list[SemanticCrossCheckFinding] = []
         findings.extend(self._check_facet_implies(manifest))

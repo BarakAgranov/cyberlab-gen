@@ -290,13 +290,13 @@ def test_live_findings_route_to_the_planner() -> None:
 
 
 def test_reserved_phase3_codes_have_no_route() -> None:
-    # The inert code-vs-manifest codes and the vacuous affected_platforms code are not routable in
-    # Phase 2 — responsible_agent_for raises loudly rather than guessing an agent (they cannot be
-    # produced this phase, so a live finding never carries one).
+    # The inert code-vs-manifest codes are not routable in Phase 2 — responsible_agent_for raises
+    # loudly rather than guessing an agent (they cannot be produced this phase, so a live finding
+    # never carries one). There is no affected_platforms code — that check is moot by design
+    # (platforms are facet-derived, schema.md §4.4; ADR 0095), not a reserved/deferred one.
     for code in (
         SemanticCrossCheckCode.UNDECLARED_LAB_OUTPUT_REFERENCE,
         SemanticCrossCheckCode.UNDECLARED_LAB_RESOURCE_REFERENCE,
-        SemanticCrossCheckCode.INCONSISTENT_AFFECTED_PLATFORMS,
     ):
         finding = SemanticCrossCheckFinding(code=code, location="phases[0]", detail="x")
         with pytest.raises(NotImplementedError):
