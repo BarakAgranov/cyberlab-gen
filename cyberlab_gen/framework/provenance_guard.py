@@ -220,6 +220,11 @@ def resolve_framework_owned(root: type[BaseModel], segments: list[str | int]) ->
         # framework-owned field, which an LLM patch may not author.
         if any(segment in framework_owned_fields(model) for model in carriers):
             return True
+        # Terminal & not owned → not an owned target. A mid-walk multi-model union (len != 1) is
+        # treated as un-owned — this errs toward ALLOW, sound only while no schema field is a
+        # divergent-ownership model-union (an `A | B` hiding an owned field below the union point);
+        # none exists today. If one ever lands, pin it with a test (the deep-set still raises
+        # RefinementPathError for a path that truly does not resolve).
         if i == last or len(carriers) != 1:
             return False
         current = carriers[0].model_fields[segment].annotation
