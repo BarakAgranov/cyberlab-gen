@@ -20,19 +20,23 @@ deliberately does not own them.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
 
 from cyberlab_gen.providers.base import AgentLabel
+from cyberlab_gen.schemas.attack_spec import AttackSpec
+from cyberlab_gen.schemas.manifest import LabManifest
 from cyberlab_gen.state.run_store import (
     ENRICHMENT_FILENAME,
     JURY_VERDICT_FILENAME,
+    MANIFEST_FILENAME,
     SPEC_FILENAME,
 )
 
 if TYPE_CHECKING:
+    from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict
     from cyberlab_gen.framework.orchestrator import PipelineState
     from cyberlab_gen.providers.cost_ledger import CostLedger
-    from cyberlab_gen.schemas.attack_spec import AttackSpec
     from cyberlab_gen.schemas.envelope import SpecEnvelope
     from cyberlab_gen.state.run_store import RunHandle
 
@@ -88,17 +92,74 @@ def stamp_spec_version[S: SpecEnvelope](spec: S) -> S:
     return spec.model_copy(update={"spec_version": current})
 
 
-def stamp_framework_provenance(spec: AttackSpec, ledger: CostLedger) -> AttackSpec:
-    """Apply every *stamp-mechanism* framework-owned field in one call.
+def _tool_version() -> str | None:
+    """The installed ``cyberlab-gen`` version (a SemVer), for ``GenerationBlock.tool_version``.
 
-    The single STAMP seam before a spec ships or persists: the billed model (ADR 0065) and the
-    schema version (ADR 0069). Stamp is one of the four framework-owned-field mechanisms (ADR 0086:
-    stamp / reset / derive / absent-from-LLM-schema); the *reset* mechanism has its own home
-    (``framework/provenance_guard.py``). Ownership itself is declared inline on each field
-    (``FrameworkOwned``, ADR 0087), so a new stamp-mechanism field is added here and marked there.
-    Callers use this rather than the individual stampers so a stamp-seam field is never forgotten.
+    ``None`` when the package metadata is unavailable (mirrors ``cli/extract._code_version``); the
+    caller then keeps the manifest's existing value rather than stamping an invalid one.
     """
-    return stamp_spec_version(stamp_billed_model(spec, ledger))
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("cyberlab-gen")
+    except PackageNotFoundError:  # pragma: no cover - always installed under test/CI
+        return None
+
+
+def _stamp_manifest_generation(manifest: LabManifest, ledger: CostLedger) -> LabManifest:
+    """Stamp the manifest's framework-owned ``GenerationBlock`` — billed model, tool version, time.
+
+    ``model`` is the **billed** Planner model from the ledger (ADR 0065 — never the LLM self-report);
+    ``tool_version`` the installed package version; ``timestamp`` the stamp time. All three of
+    ``GenerationBlock``'s fields are framework facts the LLM must not author (ADR 0086 inventory —
+    the whole block is framework-stamped, so leaving any to the LLM would be an unguarded hole). Each
+    falls back to the manifest's existing value when its source is unavailable (empty ledger / missing
+    package metadata), mirroring ``stamp_billed_model``'s no-op-when-nothing-billed. A surgical nested
+    ``model_copy``.
+    """
+    billed = billed_model(ledger, agent_label=AgentLabel.PLANNER)
+    tool_version = _tool_version()
+    prior = manifest.core.generation
+    generation = prior.model_copy(
+        update={
+            "model": billed if billed is not None else prior.model,
+            "tool_version": tool_version if tool_version is not None else prior.tool_version,
+            "timestamp": datetime.now(UTC),
+        }
+    )
+    core = manifest.core.model_copy(update={"generation": generation})
+    return manifest.model_copy(update={"core": core})
+
+
+def stamp_framework_provenance[S: SpecEnvelope](spec: S, ledger: CostLedger) -> S:
+    """Apply every *stamp-mechanism* framework-owned field in one call, dispatching on artifact type.
+
+    The single STAMP seam before any artifact ships or persists — generic over ``SpecEnvelope`` so it
+    is the ONE home for the billed-model + schema-version invariants across **both** artifacts (ADR
+    0086/0068: generalize the one stamp home; never copy the billed-model read). Stamp is one of the
+    four framework-owned-field mechanisms (ADR 0086: stamp / reset / derive / absent-from-LLM-schema);
+    the *reset* mechanism has its own home (``framework/provenance_guard.py``).
+
+    - **schema version** (both artifacts, ADR 0069): ``stamp_spec_version`` (already generic).
+    - **billed model** (ADR 0065 — billed, never the LLM self-report): an ``AttackSpec`` carries it on
+      ``extraction_metadata.model`` (the Extractor's billed model); a ``LabManifest`` on
+      ``core.generation.model`` (the Planner's). Both read the one :func:`billed_model` reader.
+    - **generation metadata** (``LabManifest`` only): ``core.generation.{tool_version, timestamp}`` are
+      stamped here too (the GenerationBlock is wholly framework-owned).
+
+    Stamp-mechanism fields are intentionally **not** marked ``FrameworkOwned`` inline (a mechanism-less
+    marker would mis-drive the reset-walk to blank them; seams §2 / ADR 0087) — the overwrite here is
+    their guard, and it runs on every exit path because callers persist from a ``finally``. Idempotent
+    except the manifest ``timestamp`` (stamp once at the ship boundary; persistence only re-stamps an
+    unmirrored partial).
+    """
+    spec = stamp_spec_version(spec)
+    if isinstance(spec, AttackSpec):
+        # The runtime type is preserved (a same-type ``model_copy``), so the cast back to ``S`` is safe.
+        return cast("S", stamp_billed_model(spec, ledger))
+    if isinstance(spec, LabManifest):
+        return cast("S", _stamp_manifest_generation(spec, ledger))
+    return spec  # pragma: no cover - no third SpecEnvelope kind exists
 
 
 def persist_pipeline_artifacts(
@@ -143,9 +204,46 @@ def persist_pipeline_artifacts(
     )
 
 
+def persist_plan_artifacts(
+    handle: RunHandle,
+    *,
+    manifest: LabManifest | None,
+    verdict: JuryVerdict | None,
+    ledger: CostLedger,
+    content_hash: str | None = None,
+) -> None:
+    """Write a ``plan`` run's artifacts + lineage with the **billed** Planner model stamped — one home.
+
+    The Phase-2 sibling of :func:`persist_pipeline_artifacts` (extract). It does **not** copy the
+    billed-model invariant: it calls the same :func:`billed_model` reader and the same generalized
+    :func:`stamp_framework_provenance` (ADR 0086/0068). The two persist functions are separate only
+    because their in-flight state shapes differ (``PipelineState`` vs the plan coordinator's outcome) —
+    one shared invariant, two thin callers, not one over-generalized function.
+
+    The manifest persisted is stamped (billed Planner model + version + generation metadata) and written
+    only when the ship boundary has not already mirrored it (the ``MANIFEST_FILENAME not in artifacts``
+    guard — a clean ship mirrors the stamped manifest to the run dir, so this fills only a
+    not-yet-mirrored / halted-manifest case, and never re-stamps a fresh ``timestamp`` over a mirrored
+    one). ``lineage.model`` is sourced from the ledger regardless of whether a manifest was produced, so
+    the record carries the billed Planner model on **every** exit path (ADR 0068).
+
+    Best-effort by contract: callers invoke this from a ``finally`` and keep their own terminal-status
+    resolution + ``finalize``.
+    """
+    if manifest is not None and MANIFEST_FILENAME not in handle.record.artifacts:
+        handle.write_artifact(MANIFEST_FILENAME, stamp_framework_provenance(manifest, ledger))
+    if verdict is not None and JURY_VERDICT_FILENAME not in handle.record.artifacts:
+        handle.write_artifact(JURY_VERDICT_FILENAME, verdict)
+    handle.update_lineage(
+        input_hash=content_hash if content_hash else None,
+        model=billed_model(ledger, agent_label=AgentLabel.PLANNER),
+    )
+
+
 __all__ = [
     "billed_model",
     "persist_pipeline_artifacts",
+    "persist_plan_artifacts",
     "stamp_billed_model",
     "stamp_framework_provenance",
     "stamp_spec_version",

@@ -60,6 +60,9 @@ logger = logging.getLogger(__name__)
 RUN_RECORD_FILENAME = "run.json"
 COST_FILENAME = "cost.yaml"
 SPEC_FILENAME = "spec.yaml"
+MANIFEST_FILENAME = (
+    "manifest.yaml"  # the LabManifest a `plan` run produces (run-dir mirror of lab.yaml)
+)
 JURY_VERDICT_FILENAME = "jury-verdict.yaml"
 ENRICHMENT_FILENAME = "enrichment.yaml"
 RUN_LOG_FILENAME = "run.log"
@@ -71,6 +74,7 @@ class RunKind(StrEnum):
     """Which entry point produced the run — real deliverable vs. measurement."""
 
     EXTRACT = "extract"
+    PLAN = "plan"
     EVAL = "eval"
 
 
