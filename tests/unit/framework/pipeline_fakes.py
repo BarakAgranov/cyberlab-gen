@@ -24,6 +24,7 @@ from cyberlab_gen.agents.results import (
     PlanAttempt,
     PlannerRefusal,
     PlanOutcome,
+    PlanResult,
 )
 from cyberlab_gen.registries.merge import load_merged_registries
 from cyberlab_gen.schemas.attack_spec import (
@@ -470,6 +471,88 @@ class CrashOnceJury:
         if self.calls == 1:
             raise RuntimeError("boom in jury")
         return self._verdicts[min(self.calls - 2, len(self._verdicts) - 1)]
+
+
+# --- plan-pipeline result builders + agent fakes ---------------------------
+
+
+def make_plan_result(manifest: LabManifest | None = None) -> PlanResult:
+    """A ``planned`` PlanResult wrapping a finalized manifest (the Planner's success envelope)."""
+    return PlanResult(outcome=PlanOutcome.PLANNED, manifest=manifest or make_manifest(), lookups=[])
+
+
+def make_route_back_result() -> PlanResult:
+    """An ``attackspec_incoherent`` PlanResult — drives the route-back-to-Extractor decision."""
+    attempt = make_route_back_attempt()
+    return PlanResult(outcome=attempt.outcome, refusal=attempt.refusal, lookups=[])
+
+
+def make_cannot_plan_result() -> PlanResult:
+    """A ``cannot_plan`` PlanResult — drives the halt-with-gap-report decision."""
+    attempt = make_cannot_plan_attempt()
+    return PlanResult(outcome=attempt.outcome, refusal=attempt.refusal, lookups=[])
+
+
+class FakePlanner:
+    """Records plan()/refine() calls and returns scripted PlanResults in sequence.
+
+    The coordinator routes on ``PlanResult.outcome``; a jury ``revise`` routes to :meth:`refine`,
+    the first run to :meth:`plan`. By default ``refine`` echoes the prior manifest as a ``planned``
+    result (a no-op patch); pass ``refine_results`` to script distinct patched outputs.
+    """
+
+    def __init__(
+        self,
+        plan_results: list[PlanResult],
+        *,
+        refine_results: list[PlanResult] | None = None,
+    ) -> None:
+        self._plan_results = plan_results
+        self._refine_results = refine_results
+        self.plan_calls = 0
+        self.refine_calls: list[tuple[LabManifest, list[JuryFieldFeedback]]] = []
+
+    async def plan(self, attack_spec: AttackSpec, *, preferences: str | None = None) -> PlanResult:
+        del attack_spec, preferences
+        idx = min(self.plan_calls, len(self._plan_results) - 1)
+        self.plan_calls += 1
+        return self._plan_results[idx]
+
+    async def refine(
+        self,
+        *,
+        prior_manifest: LabManifest,
+        attack_spec: AttackSpec,
+        feedback: list[JuryFieldFeedback],
+        preferences: str | None = None,
+    ) -> PlanResult:
+        del attack_spec, preferences
+        self.refine_calls.append((prior_manifest, list(feedback)))
+        if self._refine_results is not None:
+            idx = min(len(self.refine_calls) - 1, len(self._refine_results) - 1)
+            return self._refine_results[idx]
+        return make_plan_result(prior_manifest)  # default: echo the prior manifest (no-op patch)
+
+
+class FakePlannerJury:
+    """Records every review() call and returns scripted verdicts in sequence.
+
+    ``reviewed_manifests`` records what the jury *saw*, so a test can assert the jury reviews the
+    patched manifest on a refinement iteration.
+    """
+
+    def __init__(self, verdicts: list[JuryVerdict], *, rubric_floor: float = 0.7) -> None:
+        self._verdicts = verdicts
+        self.calls = 0
+        self.rubric_floor = rubric_floor
+        self.reviewed_manifests: list[LabManifest] = []
+
+    async def review(self, *, manifest: LabManifest, attack_spec: AttackSpec) -> JuryVerdict:
+        del attack_spec
+        self.reviewed_manifests.append(manifest)
+        idx = min(self.calls, len(self._verdicts) - 1)
+        self.calls += 1
+        return self._verdicts[idx]
 
 
 # --- ingestion stub helper (typed, so callers avoid untyped monkeypatch lambdas) ---

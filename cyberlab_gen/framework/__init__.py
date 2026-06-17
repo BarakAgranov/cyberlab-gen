@@ -44,6 +44,14 @@ from cyberlab_gen.framework.orchestrator import (
     reject_interactive_when_headless,
     run_pipeline,
 )
+from cyberlab_gen.framework.plan_orchestrator import (
+    PlanPipelineOutcome,
+    PlanPipelineState,
+    PlanPipelineStatus,
+    build_plan_pipeline,
+    finalize_plan_outcome,
+    run_plan_pipeline,
+)
 from cyberlab_gen.framework.reproducibility import (
     classify_lab_level,
     derive_lab_reproducibility,
@@ -65,17 +73,23 @@ __all__ = [
     "PipelineOutcome",
     "PipelineState",
     "PipelineStatus",
+    "PlanPipelineOutcome",
+    "PlanPipelineState",
+    "PlanPipelineStatus",
     "RefinementFeedback",
     "SkippedLookup",
     "build_pipeline",
+    "build_plan_pipeline",
     "classify_lab_level",
     "compute_content_hash",
     "derive_lab_reproducibility",
     "enrich",
+    "finalize_plan_outcome",
     "ingest",
     "normalize_html",
     "read_cached",
     "read_cached_text",
     "reject_interactive_when_headless",
     "run_pipeline",
+    "run_plan_pipeline",
 ]

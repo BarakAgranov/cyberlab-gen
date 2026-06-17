@@ -34,6 +34,7 @@ from cyberlab_gen.agents.planner import (
     PlanOutcome,
     planner_tool_definitions,
 )
+from cyberlab_gen.agents.planner_jury import PlannerJury
 from cyberlab_gen.agents.prompts import (
     BASE_PROMPT_FILENAME,
     OVERLAY_DIRNAME,
@@ -64,6 +65,7 @@ __all__ = [
     "PlanOutcome",
     "PlanResult",
     "Planner",
+    "PlannerJury",
     "PlannerRefusal",
     "PlannerToolExecutor",
     "ProposedFacet",
