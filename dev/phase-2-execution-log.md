@@ -533,10 +533,12 @@ the verb-status question the architect raised for Task 6).
   consumer is the **Critic** (Layer-5 high-severity halts, `§1.6`); when it lands, severity goes on the
   ADR-0073 base, generalized (ADR-0068 one-home), designed against both the `runtime:*` warning and the
   Critic at once.
-- **`extract`/`plan` are permanent staged entry points (ADR 0096, `docs`).** Resolved the architect's
-  "is this verb temporary?" question: Framing 2 (permanent, coexist with `generate` which runs the
-  stages internally) — `architecture.md §2.1` already states it; propagated to `CLAUDE.md` + a §2.3
-  diagram note (the one genuine lag behind §2.1).
+- **`extract`/`plan` are developer / eval commands, not user surface (ADR 0096, `docs`).** Resolved
+  the architect's "is this verb temporary?" question. *(Corrected post-Task-6: the first pass concluded
+  "permanent staged entry points" from §2.1's then-current both/and prose, but that §2.1 text was itself
+  the Task-0 defect; the ruling is dev/eval-only. §2.1 reframed — extract/plan out of the user-surface
+  list into a "Developer / eval commands" subsection — `CLAUDE.md` + `--help` (grouped, not hidden)
+  follow. See ADR 0096's Correction.)*
 
 ---
 
@@ -563,7 +565,8 @@ the verb-status question the architect raised for Task 6).
   `PlannerRefusal`. Promoted the real codebuild AttackSpec as a committed fixture (no paid run). +6
   integration tests (fake-driven).
 
-**Decisions.** ADR 0095 (`affected_platforms` moot), 0096 (staged verbs permanent), 0097 (Task 6: the
+**Decisions.** ADR 0095 (`affected_platforms` moot), 0096 (extract/plan are dev/eval commands, not user
+surface — corrected post-Task-6 from an initial "permanent" framing), 0097 (Task 6: the
 cross-check ship gate incl. the low-confidence-path-too design, the generalized stamp, the scoped
 route-back, the verb).
 

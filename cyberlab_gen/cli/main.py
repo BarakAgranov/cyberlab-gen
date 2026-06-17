@@ -276,7 +276,7 @@ def _build_extract_runner(
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Developer / eval commands")
 def extract(
     ctx: typer.Context,
     url: Annotated[
@@ -385,7 +385,7 @@ def _build_plan_runner(
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Developer / eval commands")
 def plan(
     ctx: typer.Context,
     attack_spec: Annotated[
@@ -396,7 +396,8 @@ def plan(
     """Plan a lab from a validated ``attack-spec.yaml``, writing ``lab.yaml`` (Phase 2).
 
     Runs the linear pipeline Planner → Planner-Jury → semantic cross-check and persists the run.
-    A permanent staged entry point (ADR 0096); non-interactive in Phase 2 (the post-Planner interrupt
+    A **developer / eval command** (ADR 0096), not part of the user surface — it runs one stage in
+    isolation; real users invoke `generate`. Non-interactive in Phase 2 (the post-Planner interrupt
     is a later phase).
     """
     from cyberlab_gen.cli.plan import run_plan

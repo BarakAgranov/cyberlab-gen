@@ -281,14 +281,14 @@ The eval harness is part of the codebase, co-located with the pipeline. Its blog
 
 ### 2.1 User-surface commands
 
-cyberlab-gen exposes these CLI verbs. The generation pipeline runs end-to-end via `generate`, or stage-by-stage via `extract` → `plan` → `generate`, each consuming the prior stage's typed artifact:
+cyberlab-gen exposes four user-facing CLI verbs. The user-facing pipeline is `generate <url>`, which runs all pipeline stages internally:
 
-- **`extract <url>`** — runs the front half of the pipeline (Ingestion → Extractor → Extractor-Jury → pre-Planner enrichment), producing a validated `AttackSpec`. The staged-pipeline entrypoint; `generate` runs it internally.
-- **`plan <attack-spec.yaml>`** — consumes a validated `AttackSpec` and runs the Planner → Planner-Jury → Layer 2, producing a draft `LabManifest` (`lab.yaml`) skeleton — no code, IaC, or docs yet.
 - **`generate <url>`** — the headline path. Takes a blog URL, runs the generation pipeline, produces a lab directory. Modes: `--interactive` (default; pauses at typed-artifact interrupts) and `--auto` (no interrupts except budget-overrun). See `pipeline.md §3.1`.
 - **`validate <lab-dir>`** — runs mechanical validation layers against an already-generated lab. Refuses old-schema artifacts with a "regenerate from blog URL" message. Used in CI or after manual edits to a lab. Most users never invoke it directly; their generated labs were already validated during `generate`.
 - **`fix <lab-dir>`** — interactive REPL for post-generation debugging. The user describes problems they encountered running the lab; the Repair Agent proposes minimal patches, asks clarifying questions, or explains when the problem is in the user's environment. The Repair Agent has no write access (framework applies patches only after user approval), no cloud access, and no lab execution; the user reviews every patch before application. See `pipeline.md §3.4` and `agents.md §5.16` for the full boundary specification.
 - **`telemetry submit`** — sends queued local reports (after sanitization preview) to the project's endpoint. See `pipeline.md §3.6`.
+
+**Developer / eval commands (not part of the user surface).** `extract <url>` and `plan <attack-spec.yaml>` each run a *single* pipeline stage in isolation — the front half (Ingestion → Extractor → Extractor-Jury → enrichment → a validated `AttackSpec`) and the planning stage (Planner → Planner-Jury → semantic cross-check → a draft `lab.yaml` skeleton) respectively — so a stage can be built, tested, and evaluated on its own, each consuming the prior stage's typed artifact. They exist for **development and evaluation only**: `generate` runs the same stages internally, and a real user only ever invokes `generate`. They are deliberately **not** part of the user surface (absent from the §2.3 diagram) and are grouped under a separate "Developer / eval commands" heading in `--help` so they are never mistaken for the intended interface (ADR 0096).
 
 ### 2.2 Properties of the system
 
@@ -362,7 +362,7 @@ cyberlab-gen exposes these CLI verbs. The generation pipeline runs end-to-end vi
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-The CLI box above shows the headline surface (`generate` / `fix` / `validate` / `telemetry submit`). The staged entry points `extract <url>` and `plan <attack-spec.yaml>` (§2.1) are omitted from the diagram for space, not because they are transitional: they are **permanent** per-stage entry points that run the same pipeline stages `generate` composes end-to-end (ADR 0096). Each emits the typed artifact the next stage consumes; `generate` runs them internally.
+The CLI box above shows the complete user surface (`generate` / `fix` / `validate` / `telemetry submit`). `extract` and `plan` are **developer / eval commands** (run a single stage in isolation for build/test/eval — §2.1), **not** part of the user surface, so they are deliberately absent here (ADR 0096).
 
 ---
 

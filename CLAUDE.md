@@ -12,7 +12,7 @@ Phase 2 — the plan slice runs end-to-end. The `plan` verb works: `cyberlab-gen
 
 **Still stubs:** `generate`, `validate`, `fix`, and `telemetry submit` print a not-implemented message and exit non-zero. The downstream agents — **the Per-phase / Lab-level / Cleanup / Docs Generators, the Critic, the Repair Agent** — do **not** exist yet. Do not assume any of them is callable, and do not build the `generate` pipeline unless the task explicitly says to. The most recent git tag (`v0.0.1-setup`) is stale and lags the real state by dozens of commits — trust the `dev/` execution logs and ADRs over the tag until it is re-cut.
 
-**`extract`/`plan` are permanent staged entry points, not scaffolding** (ADR 0096). Per `architecture.md §2.1` the pipeline runs end-to-end via `generate` *or* stage-by-stage via `extract → plan → generate`, each consuming the prior stage's typed artifact; `generate` runs the same stages internally. The staged verbs **coexist** with `generate` and are **not** subsumed when it ships — do not read them as temporary dev verbs to be removed later.
+**`extract`/`plan` are developer / eval commands, NOT the user surface** (ADR 0096). They each run a *single* pipeline stage in isolation — to build, test, and evaluate that stage — and have no use for a real user. The user-facing pipeline is `generate <url>`, which runs the same stages internally (`architecture.md §2.1`, "Developer / eval commands"). In `--help` they are grouped under a separate dev/eval heading, not as peers of `generate`/`validate`/`fix`/`telemetry submit`.
 
 ## Build, test, verify
 

@@ -1,11 +1,12 @@
 """The ``plan`` verb's engine: load an AttackSpec, run the plan pipeline, persist, write ``lab.yaml``.
 
-Architectural source: ``architecture.md §2.1`` (``plan`` is a *permanent* staged entry point — ADR
-0096), ``pipeline.md §3.2.6``/``§3.2.7`` (the Planner + Planner-Jury stages), ``§3.1`` (deterministic
-state machine, typed cross-stage boundaries). The plan pipeline itself — Planner → Planner-Jury →
-semantic cross-check (the second mechanical validation layer) — lives in
+Architectural source: ``architecture.md §2.1`` (``plan`` is a **developer / eval command**, not part
+of the user surface — ADR 0096), ``pipeline.md §3.2.6``/``§3.2.7`` (the Planner + Planner-Jury stages),
+``§3.1`` (deterministic state machine, typed cross-stage boundaries). The plan pipeline itself —
+Planner → Planner-Jury → semantic cross-check (the second mechanical validation layer) — lives in
 :mod:`cyberlab_gen.framework.plan_orchestrator`; this module is the thin CLI engine + run-store
-persistence, mirroring :mod:`cyberlab_gen.cli.extract`.
+persistence, mirroring :mod:`cyberlab_gen.cli.extract`. Real users invoke ``generate``, which runs the
+same stages internally.
 
 The ``plan`` verb in :mod:`cyberlab_gen.cli.main` is thin: it parses the argument, builds a
 :class:`PlanRunner`, and delegates here. This module owns the load / persist / write-``lab.yaml``
