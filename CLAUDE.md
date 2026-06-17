@@ -10,6 +10,8 @@ Phase 1 — the front half of the pipeline runs for real against a paid provider
 
 **Still stubs:** `generate`, `validate`, `fix`, and `telemetry submit` print a not-implemented message and exit non-zero. The downstream agents — **Planner, the Per-phase / Lab-level / Cleanup / Docs Generators, the Critic, the Repair Agent** — do **not** exist yet. Do not assume any of them is callable, and do not build the `generate` pipeline unless the task explicitly says to. The most recent git tag (`v0.0.1-setup`) is stale and lags the real state by dozens of commits — trust the `dev/` execution logs and ADRs over the tag until it is re-cut.
 
+**`extract`/`plan` are permanent staged entry points, not scaffolding** (ADR 0096). Per `architecture.md §2.1` the pipeline runs end-to-end via `generate` *or* stage-by-stage via `extract → plan → generate`, each consuming the prior stage's typed artifact; `generate` runs the same stages internally. The staged verbs **coexist** with `generate` and are **not** subsumed when it ships — do not read them as temporary dev verbs to be removed later.
+
 ## Build, test, verify
 
 `just verify` is the gate. It runs `ruff check`, `ruff format --check`, `pyright` (strict), and `pytest`. Run it before declaring any task done. CI re-runs it on every push. Other targets in the `justfile`: `just test`, `just lint`, `just format`. Pull exact command behavior from the `justfile` and `pyproject.toml`, not from documentation that describes intent.

@@ -362,6 +362,8 @@ cyberlab-gen exposes these CLI verbs. The generation pipeline runs end-to-end vi
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+The CLI box above shows the headline surface (`generate` / `fix` / `validate` / `telemetry submit`). The staged entry points `extract <url>` and `plan <attack-spec.yaml>` (§2.1) are omitted from the diagram for space, not because they are transitional: they are **permanent** per-stage entry points that run the same pipeline stages `generate` composes end-to-end (ADR 0096). Each emits the typed artifact the next stage consumes; `generate` runs them internally.
+
 ---
 
 ## 8. Open questions and deferred decisions
