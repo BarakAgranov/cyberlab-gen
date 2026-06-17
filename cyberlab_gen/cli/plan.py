@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from pydantic import Field
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML, YAMLError
 from ruamel.yaml.compat import StringIO
 
 # Runtime imports (not TYPE_CHECKING): ``JuryVerdict`` / ``PlannerRefusal`` are field types on the
@@ -215,10 +215,14 @@ def _load_attack_spec(spec_path: Path) -> AttackSpec:
         raw = spec_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise CyberlabGenError(f"cannot read attack-spec file {spec_path}: {exc}") from exc
-    data = _yaml().load(StringIO(raw))
+    # The parse and the gate share one wrap: a malformed file (a ruamel ``YAMLError``) and a bad/missing
+    # ``spec_kind`` (``load_spec``'s ``ValueError``) are both clean usage errors, never a raw traceback
+    # (mirrors ``cli/extract``'s edit-revalidation wrap). ``SpecVersionError`` is already a
+    # ``CyberlabGenError`` and propagates with its specific message.
     try:
+        data = _yaml().load(StringIO(raw))
         spec = load_spec(data)
-    except ValueError as exc:
+    except (YAMLError, ValueError) as exc:
         raise CyberlabGenError(f"{spec_path} is not a valid spec file: {exc}") from exc
     if not isinstance(spec, AttackSpec):
         raise CyberlabGenError(

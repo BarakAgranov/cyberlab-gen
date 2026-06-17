@@ -144,6 +144,23 @@ def test_plan_rejects_a_lab_manifest_input(tmp_path: Path, monkeypatch: pytest.M
     assert "AttackSpec" in result.output
 
 
+def test_plan_rejects_malformed_yaml_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A syntactically-malformed spec file is a clean usage error (a wrapped CyberlabGenError), never an
+    # uncaught ruamel traceback — the load gate's clean-exit contract holds for the parse step too.
+    _install_plan_runner(monkeypatch, _FakePlanRunner([_planned()]))
+    bad = tmp_path / "broken.yaml"
+    bad.write_text("spec_kind: AttackSpec\nfacets: [unclosed\n  : : :\n", encoding="utf-8")
+    state_dir = tmp_path / "state"
+
+    result = runner.invoke(app, ["--state-dir", str(state_dir), "plan", str(bad)])
+
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)  # no raw traceback
+    assert "not a valid spec file" in result.output
+
+
 # --- persistence: billed Planner model on the manifest + lineage ---------------
 
 
