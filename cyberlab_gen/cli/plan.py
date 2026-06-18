@@ -36,6 +36,7 @@ from ruamel.yaml.compat import StringIO
 # ``PlanRunResult`` Pydantic model, so the names must resolve at runtime for the model to be built
 # (same reasoning as the orchestrators' field-type imports).
 from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict
+from cyberlab_gen.agents.proposals import ProposedFacet
 from cyberlab_gen.agents.results import PlannerRefusal
 from cyberlab_gen.cli import output
 from cyberlab_gen.framework.plan_orchestrator import (
@@ -107,6 +108,9 @@ class PlanRunResult(InternalModel):
     low_jury_confidence: bool = False
     unresolved_feedback: list[str] = Field(default_factory=list[str])
     halt_reason: str | None = None
+    #: The Planner's in-flight facet proposals (Task 7 / ADR 0099): captured + reported, never promoted
+    #: by the ``plan`` verb (overlay write + the per-proposal interrupt are Task 8).
+    facet_proposals: list[ProposedFacet] = Field(default_factory=list[ProposedFacet])
 
     def shipped(self) -> bool:
         """True when the run produced a manifest to write (clean or low-confidence ship)."""
@@ -196,6 +200,7 @@ def _outcome_to_run_result(outcome: PlanPipelineOutcome) -> PlanRunResult:
         low_jury_confidence=outcome.low_jury_confidence,
         unresolved_feedback=outcome.unresolved_feedback,
         halt_reason=outcome.halt_reason,
+        facet_proposals=list(outcome.facet_proposals),
     )
 
 
@@ -358,11 +363,20 @@ def _ship_or_report(
 
 
 def _emit_plan_report(result: PlanRunResult) -> None:
-    """Print the ship-path report tail (low-confidence + unresolved jury feedback)."""
+    """Print the ship-path report tail (low-confidence + unresolved jury feedback + facet proposals)."""
     if result.low_jury_confidence:
         output.print_info("\nShipped with low_jury_confidence. Unresolved jury feedback:")
         for item in result.unresolved_feedback:
             output.print_info(f"  - {item}")
+    if result.facet_proposals:
+        # Captured, not promoted (Task 7 / ADR 0099): the overlay write + per-proposal review is the
+        # post-Planner interrupt (Task 8). Surface them so the eval / maintainer sees what was proposed.
+        output.print_info(
+            f"\nPlanner proposed {len(result.facet_proposals)} facet(s) "
+            "(captured for review, not promoted to the overlay this run):"
+        )
+        for facet in result.facet_proposals:
+            output.print_info(f"  - {facet.name} — {facet.description}")
 
 
 def _report_route_back(result: PlanRunResult, *, source_url: str) -> None:

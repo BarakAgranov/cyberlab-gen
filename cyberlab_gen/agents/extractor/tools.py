@@ -65,6 +65,13 @@ _PROPOSE_TOOL_NAMES = frozenset(
     {TOOL_PROPOSE_VALUE_TYPE, TOOL_PROPOSE_FACET, TOOL_PROPOSE_THESIS_TYPE}
 )
 
+#: The Extractor's facet-authority hint, surfaced when a proposal's category is out of authority. A
+#: per-agent input (ADR 0099): the Planner passes its own (``runtime:*`` / lab-derived) hint.
+_EXTRACTOR_FACET_AUTHORITY_HINT = (
+    "The Extractor proposes only target:* and blog-derived lab_class_signal:* facets; runtime:* and "
+    "lab-derived facets are the Planner's."
+)
+
 #: Source id the Phase-1 ``external_lookup`` wires to a live (recordable) client.
 _NVD_SOURCE_ID = "nvd"
 
@@ -81,6 +88,69 @@ class ExternalLookupRecord(InternalModel):
     params: dict[str, Any]
     found: bool
     detail: str
+
+
+def external_lookup_definition(registered_source_ids: list[str] | None = None) -> ToolDefinition:
+    """The shared read-only ``external_lookup`` tool schema (reused by the Planner, ADR 0099).
+
+    ``registered_source_ids`` names the servable sources so the model stops guessing ids; ``None``
+    falls back to a generic clause. One home for the lookup schema so it stays identical across agents.
+    """
+    if registered_source_ids:
+        sources_clause = (
+            "Registered source ids you may use: "
+            + ", ".join(repr(s) for s in registered_source_ids)
+            + ". Any other source_id is treated as unavailable."
+        )
+    else:
+        sources_clause = "Use only source ids registered in external_data_sources."
+    return ToolDefinition(
+        name=TOOL_EXTERNAL_LOOKUP,
+        description=(
+            "Look up an identifier against an authoritative external data source "
+            "(e.g. source_id='nvd', params={'cve_id': 'CVE-2024-1234'}). "
+            f"{sources_clause} "
+            "Do NOT use this for MITRE ATT&CK technique ids — there is no 'mitre' / "
+            "'mitre_attack' lookup source this phase. Cite the technique ids the blog "
+            "names from the blog (source: blog_explicit); the framework does not reject a "
+            "well-formed technique id it cannot verify. Required before claiming any "
+            "external_api-sourced value (search-before-claim)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source_id": {"type": "string"},
+                "params": {"type": "object"},
+            },
+            "required": ["source_id", "params"],
+        },
+    )
+
+
+def propose_facet_definition(
+    facet_categories: frozenset[str], *, description: str
+) -> ToolDefinition:
+    """The ``propose_facet`` tool schema, parameterized by the proposing agent's category authority.
+
+    The ``category`` enum is exactly the agent's allowed categories (ADR 0099 — authority is a
+    per-agent input): the Extractor advertises ``{target, lab_class_signal}``; the Planner
+    ``{runtime, lab_class_signal}``. ``description`` is the agent-specific guidance.
+    """
+    return ToolDefinition(
+        name=TOOL_PROPOSE_FACET,
+        description=description,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "category": {"type": "string", "enum": sorted(facet_categories)},
+                "description": {"type": "string"},
+                "applies_at_levels": {"type": "array", "items": {"type": "string"}},
+                "reasoning": {"type": "string"},
+            },
+            "required": ["name", "category", "description", "applies_at_levels", "reasoning"],
+        },
+    )
 
 
 def extractor_tool_definitions(
@@ -101,36 +171,8 @@ def extractor_tool_definitions(
     availability, not a prose rule. The jury keeps ``external_lookup`` so it can still independently
     verify ``external_api`` responses (``agents.md §5.5``).
     """
-    if registered_source_ids:
-        sources_clause = (
-            "Registered source ids you may use: "
-            + ", ".join(repr(s) for s in registered_source_ids)
-            + ". Any other source_id is treated as unavailable."
-        )
-    else:
-        sources_clause = "Use only source ids registered in external_data_sources."
     tools = [
-        ToolDefinition(
-            name=TOOL_EXTERNAL_LOOKUP,
-            description=(
-                "Look up an identifier against an authoritative external data source "
-                "(e.g. source_id='nvd', params={'cve_id': 'CVE-2024-1234'}). "
-                f"{sources_clause} "
-                "Do NOT use this for MITRE ATT&CK technique ids — there is no 'mitre' / "
-                "'mitre_attack' lookup source this phase. Cite the technique ids the blog "
-                "names from the blog (source: blog_explicit); the framework does not reject a "
-                "well-formed technique id it cannot verify. Required before claiming any "
-                "external_api-sourced value (search-before-claim)."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "source_id": {"type": "string"},
-                    "params": {"type": "object"},
-                },
-                "required": ["source_id", "params"],
-            },
-        ),
+        external_lookup_definition(registered_source_ids),
         ToolDefinition(
             name=TOOL_PROPOSE_VALUE_TYPE,
             description=(
@@ -151,24 +193,13 @@ def extractor_tool_definitions(
                 "required": ["name", "description", "reasoning"],
             },
         ),
-        ToolDefinition(
-            name=TOOL_PROPOSE_FACET,
+        propose_facet_definition(
+            EXTRACTOR_FACET_CATEGORIES,
             description=(
                 "Propose a new target:* or blog-derived lab_class_signal:* facet. "
                 "runtime:* and lab-derived facets are the Planner's authority and "
                 "are rejected here."
             ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "category": {"type": "string", "enum": sorted(EXTRACTOR_FACET_CATEGORIES)},
-                    "description": {"type": "string"},
-                    "applies_at_levels": {"type": "array", "items": {"type": "string"}},
-                    "reasoning": {"type": "string"},
-                },
-                "required": ["name", "category", "description", "applies_at_levels", "reasoning"],
-            },
         ),
         ToolDefinition(
             name=TOOL_PROPOSE_THESIS_TYPE,
@@ -207,12 +238,22 @@ class ExtractorToolExecutor:
         registries: MergedRegistries,
         nvd_client: NvdClient | None = None,
         verify_only: bool = False,
+        facet_categories: frozenset[str] = EXTRACTOR_FACET_CATEGORIES,
+        facet_authority_hint: str = _EXTRACTOR_FACET_AUTHORITY_HINT,
+        refused_propose_tools: frozenset[str] = frozenset(),
     ) -> None:
         self._registries = registries
         self._nvd_client = nvd_client
         #: A review-only executor (the Extractor-Jury; ADR 0078) refuses the ``propose_*`` write
         #: tools at execution too — defense-in-depth behind the withheld tool advertisements.
         self._verify_only = verify_only
+        #: The facet categories this agent may propose (the per-agent authority input, ADR 0099):
+        #: the Extractor's by default; ``PlannerToolExecutor`` passes the Planner's.
+        self._facet_categories = facet_categories
+        self._facet_authority_hint = facet_authority_hint
+        #: ``propose_*`` tools this agent refuses at execution even when not ``verify_only`` (the
+        #: Planner refuses propose_value_type / propose_thesis_type — Extractor authority, ADR 0099).
+        self._refused_propose_tools = refused_propose_tools
         self.lookups: list[ExternalLookupRecord] = []
         self.value_type_proposals: list[ProposedValueType] = []
         self.facet_proposals: list[ProposedFacet] = []
@@ -224,12 +265,16 @@ class ExtractorToolExecutor:
         Returning ``is_error=True`` (rather than raising) keeps the tool-use loop
         alive so the model can recover within its iteration budget.
         """
-        if self._verify_only and call.tool_name in _PROPOSE_TOOL_NAMES:
-            # The propose_* write tools are not available to review-only agents (ADR 0078); they are
-            # not advertised, so this only fires on a misconfiguration — fail it mechanically.
+        if (self._verify_only and call.tool_name in _PROPOSE_TOOL_NAMES) or (
+            call.tool_name in self._refused_propose_tools
+        ):
+            # A propose_* write tool outside this agent's authority: withheld from review-only agents
+            # (ADR 0078), and from a producer that does not own that vocabulary (the Planner refuses
+            # value-type / thesis-type proposals — Extractor authority, ADR 0099). Not advertised, so
+            # this only fires on a misconfiguration — fail it mechanically (defense-in-depth).
             return ToolResult(
                 call_id=call.call_id,
-                content=f"tool {call.tool_name!r} is not available to a review-only agent",
+                content=f"tool {call.tool_name!r} is not available to this agent",
                 is_error=True,
             )
         if call.tool_name == TOOL_EXTERNAL_LOOKUP:
@@ -372,20 +417,17 @@ class ExtractorToolExecutor:
 
     def _propose_facet(self, call: ToolCall) -> ToolResult:
         category = str(call.arguments.get("category", ""))
-        if category not in EXTRACTOR_FACET_CATEGORIES:
-            # Mechanical authority gate, not LLM discretion (schema.md §4.16). The
-            # proposal is dropped (not recorded), but this is NOT an error result
-            # (ADR 0043): an out-of-authority category can never be fixed by repeating,
-            # and as a ModelRetry (tool-retry budget 1) it would escalate to a fatal
-            # ToolRetryError over an *optional* proposal. The model is told why and
-            # continues.
+        if category not in self._facet_categories:
+            # Mechanical authority gate, not LLM discretion (schema.md §4.16; the authority is a
+            # per-agent input, ADR 0099). The proposal is dropped (not recorded), but this is NOT an
+            # error result (ADR 0043): an out-of-authority category can never be fixed by repeating,
+            # and as a ModelRetry (tool-retry budget 1) it would escalate to a fatal ToolRetryError
+            # over an *optional* proposal. The model is told why and continues.
             return ToolResult(
                 call_id=call.call_id,
                 content=(
-                    f"facet category {category!r} is not the Extractor's authority — "
-                    "proposal not recorded. The Extractor proposes only target:* and "
-                    "blog-derived lab_class_signal:* facets (runtime:* and lab-derived "
-                    "facets are the Planner's). Continue."
+                    f"facet category {category!r} is not recorded — it is not in this agent's facet "
+                    f"authority. {self._facet_authority_hint} Continue."
                 ),
                 is_error=False,
             )
@@ -440,5 +482,7 @@ __all__ = [
     "TOOL_PROPOSE_VALUE_TYPE",
     "ExternalLookupRecord",
     "ExtractorToolExecutor",
+    "external_lookup_definition",
     "extractor_tool_definitions",
+    "propose_facet_definition",
 ]

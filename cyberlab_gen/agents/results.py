@@ -22,6 +22,7 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
+# ``ProposedFacet`` is already imported below for ``ExtractionResult``; ``PlanResult`` reuses it.
 # Runtime imports (not TYPE_CHECKING): these are the field types of a Pydantic model, so Pydantic
 # must resolve them at class-definition time. None of them import ``framework`` at runtime, and the
 # two ``agents`` imports are leaf submodules (``extractor.tools`` / ``proposals``) that do not import
@@ -132,8 +133,9 @@ class PlanResult(InternalModel):
     :class:`PlannerRefusal` and ``manifest=None`` (the manifest is optional because a failed plan has
     none — the ADR-0090 contract evolution, small and with no consumer yet). ``lookups`` is the
     external-lookup trace; ``reprompts`` counts targeted-patch re-prompts on the ``refine`` path (0
-    for a clean ``plan``). For the Wave-1 slice the Planner is non-proposing (``propose_facet`` is
-    Task 7), so there is no proposal side-channel yet; Task 7 adds ``facet_proposals`` here.
+    for a clean ``plan``). ``facet_proposals`` is the Planner's in-flight ``runtime:*`` / lab-derived
+    ``lab_class_signal:*`` facet proposals (Task 7 / ADR 0099) — **captured** for the framework, never
+    promoted here (overlay write is Task 8). Empty when the Planner proposed nothing.
     """
 
     outcome: PlanOutcome
@@ -141,6 +143,7 @@ class PlanResult(InternalModel):
     refusal: PlannerRefusal | None = None
     lookups: list[ExternalLookupRecord]
     reprompts: int = 0
+    facet_proposals: list[ProposedFacet] = Field(default_factory=list[ProposedFacet])
 
 
 __all__ = [

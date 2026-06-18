@@ -198,3 +198,19 @@ def load_merged_registries(overlay_dir: Path | None = None) -> MergedRegistries:
     bundled = load_bundled()
     overlay = load_overlay(overlay_dir)
     return merge_layers(bundled, overlay)
+
+
+def reload_merged_registries(overlay_dir: Path | None = None) -> MergedRegistries:
+    """Re-read the merged registries after an overlay write — the stale-snapshot invalidation seam.
+
+    ``MergedRegistries`` is ``frozen`` (``architecture.md §1.5`` — shared state is immutable), so a
+    proposal accepted to the overlay does NOT mutate the in-process snapshot. A second proposer in the
+    same process (the Planner after the Extractor, in ``generate``) must therefore re-read to see
+    just-accepted entries (``dev/phase-2-seams.md §2``; ADR 0099). This is that re-read: it reloads
+    bundled + overlay from disk and returns a fresh, immutable view. Currently the only sound caller is
+    the future two-proposer flow (Planner promotion is Task 8; ``generate`` is Phase 3) — it is named
+    here so that wiring re-reads at one documented seam rather than re-deriving it. Identical in
+    behaviour to :func:`load_merged_registries`; the distinct name records the *intent* (invalidate,
+    not first-load).
+    """
+    return load_merged_registries(overlay_dir)

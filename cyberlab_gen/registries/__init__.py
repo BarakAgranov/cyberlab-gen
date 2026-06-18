@@ -29,6 +29,7 @@ from cyberlab_gen.registries.merge import (
     MergedRegistries,
     load_merged_registries,
     merge_layers,
+    reload_merged_registries,
 )
 from cyberlab_gen.registries.overlay_writer import write_overlay_entry
 
@@ -48,5 +49,6 @@ __all__ = [
     "load_overlay_file",
     "load_static_catalogs",
     "merge_layers",
+    "reload_merged_registries",
     "write_overlay_entry",
 ]

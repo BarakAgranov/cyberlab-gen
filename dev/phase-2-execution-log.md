@@ -602,6 +602,141 @@ warnings), 878 passed / 1 skipped (+17 since Task 5).
 
 ---
 
+## Item 1: Persist the full per-round agent trajectory to the run dir  (2026-06-17)
+
+A pre-Task-7 enhancement (land it first so Task 7's richer agent activity is captured from the
+start). Plan-first: the maintainer ruled four forks before any code.
+
+**Built.** A per-round agent trajectory persisted to the run dir, **both pipelines**, always-on:
+- `cyberlab_gen/state/trajectory.py` — `AgentCallRecord` / `RoutingEventRecord` (ArtifactModels;
+  the two `trajectory.jsonl` line kinds), `MessageRef` (inline-or-blob-hash input message), and
+  `RunTrajectoryRecorder` (per-run, like the cost ledger; `enter_stage` / `record_call` /
+  `record_failed_call` / `routing_event`).
+- Run store (`state/run_store.py`): `RunHandle.write_blob` (content-addressed, dedup, registers
+  `blobs/` once) + `append_jsonl` (append-only, registers the file once) + `_append_text`; constants
+  `TRAJECTORY_FILENAME`, `BLOBS_DIRNAME`. Both best-effort.
+- Provider chokepoint (`providers/base.py` + `cost_recording_provider.py`): a `TrajectorySink`
+  protocol (beside `ToolExecutor`) + `set_trajectory_sink`; `_record` / `_record_billed_failure`
+  notify the sink **before** `_enforce_ceiling` (a ceiling-crossing call still records its round).
+- Orchestrators: `build_pipeline` / `build_plan_pipeline` (+ `run_plan_pipeline`) take an optional
+  `recorder`; the producer/jury/cross-check nodes call `enter_stage` (round/stage) + `routing_event`
+  (the verdict / plan outcome / cross-check pass). TYPE_CHECKING-only import → no framework→state cycle.
+- Runners + verbs: `PipelineExtractRunner` / `PipelinePlanRunner` hold the shared provider and gain
+  `enable_trajectory(handle)` (mirrors `enable_checkpointing`), wired in `run_extract` / `run_plan` at
+  run start; `cli/main` passes the provider to both runners.
+- Tests (18 new, all green): run-store blob+jsonl primitives (4), trajectory models (6), the recorder
+  (5: round-context stamping, blob dedup, routing events, FAILED metadata-only, full-story stream),
+  the provider sink (3), and end-to-end orchestrator wiring for both pipelines + the runner→provider
+  glue (3 in `tests/unit/framework/test_pipeline_trajectory.py`).
+
+**Decisions.** ADR 0098 (the design + the four pre-ruled forks: spine + **input deduped by hash**,
+**structured-"why" only** with a typed `reasoning` hook, **always-on best-effort**, **append-only
+`trajectory.jsonl`**). The one contract posture ruled there: writing through `RunHandle` **extends**
+the single persistence authority (ADR 0053/0068), it is not a second writer.
+
+**Surprises / drift.** Append-only forces the routing outcome to be its **own** ordered event
+(`RoutingEventRecord`), not a field back-annotated onto the call's already-written line — correlated to
+its call by round + stage. The provider is built *before* the run handle exists, so the recorder is
+attached at run start via `enable_trajectory` (the `enable_checkpointing` precedent), not at
+construction. Raw model thinking is currently a no-op (extended thinking off + dropped in the adapter);
+the structured output is the "why" and the typed hook awaits a future ADR.
+
+**Adversarial review (17-agent review→refute over the diff, Opus): 1 substantive finding fixed.**
+The sink notification at the provider chokepoint was **unguarded** — a non-`OSError` raised while
+building/serializing a record (a future Task-7 output shape) would propagate out of `_record`,
+crash an already-billed run, and worse **skip `_enforce_ceiling`** (the §1.6 catastrophe ceiling) on
+success / **mask the `ProviderError`** on failure. The ADR's "best-effort ⇒ never raises" only held
+for `OSError` inside `RunHandle`. Fixed: guarded the sink invocation at the provider (the ceiling
+must fire regardless of any sink) **and** the recorder's own emit path (`_emit`, covering
+construction + serialization + write — protects the orchestrator-side `routing_event` calls too);
+4 new RED→GREEN tests pin it. The remaining confirmed findings were test-coverage gaps, closed with
+4 more tests (FAILED-path capture-before-ceiling order; recorder swallows a non-`OSError`; monotonic
+sequence across a repeated round index; the extract-runner glue + the no-provider no-op).
+
+**Deferred.** Capturing raw extended-thinking blocks (request-shape + cost change + cassette
+re-record → its own ADR). FAILED rounds stay metadata-only (no content on a raised `ProviderError`).
+
+**Verify.** `just verify` green — ruff + format clean, pyright strict 0 errors, **907 passed / 1
+skipped** (+29 since Task 6).
+
+---
+
+## Task 7: Generalize the proposal path + the proposing Planner  (2026-06-18)
+
+**Built (Item 2 of the two-item brief; ADR 0099).** Made proposals **agent-agnostic** and turned on
+the Planner's scoped `propose_facet`, in three units.
+
+- *Unit 1 (foundation, landed earlier).* `ProposedFacet.category` admits `runtime`; every `to_entry`
+  takes a **framework-supplied** `proposed_by`; added `PLANNER_FACET_CATEGORIES` + the `ProposerAgent`
+  alias. (`agents/proposals.py`, `framework/proposal_acceptance.py`, `tests/unit/agents/test_proposals.py`.)
+- *Unit 2 (generic accept path).* A minimal `Proposal` protocol (`reasoning` + `to_entry`) — no
+  overlay/registry knowledge on the agent-facing model; the per-type metadata (filename, label,
+  dedup accessor) is one `_ENTRY_REGISTRY` table on the framework side. One `accept_proposal` (pure
+  write) + `accept_proposals` (batch with mechanical dedup + cap) **replace** the three `accept_*`;
+  `auto_accept_to_overlay` is now a thin order-preserving wrapper. `AcceptanceContext` carries
+  framework-stamped `proposed_by` / `proposal_origin` / `source_lab` (was hardcoded in `_audit`).
+  Dedup = merged-registry collision **or** intra-batch duplicate → `skipped` (distinct from over-cap
+  `deferred`); `registries=None` ⇒ dedup off (the Extractor's fake-runner path stays byte-clean).
+  `registries/merge.reload_merged_registries` is the named post-write snapshot-invalidation seam.
+  The Extractor migrated onto the generic path (CLI threads its `MergedRegistries` for dedup).
+- *Unit 3 (the proposing Planner).* `ExtractorToolExecutor` parameterized — `facet_categories`,
+  `facet_authority_hint`, `refused_propose_tools` (authority is now a per-agent **input**, not a
+  literal). `PlannerToolExecutor` allows `runtime:*`/`lab_class_signal:*` facets, **mechanically
+  refuses** `propose_value_type`/`propose_thesis_type` at `execute` (defense-in-depth), and serves a
+  new read tool `query_value_types_registry`. `PlanResult.facet_proposals` threads → `PlanPipelineOutcome`
+  → `PlanRunResult`, **captured + reported, never promoted** (overlay write is Task 8).
+
+**Decisions.** ADR 0099 (the design + the six rulings: minimal protocol + framework-side table;
+framework-stamped origin; merged + intra-batch dedup; `reload_merged_registries` as the invalidation
+seam; per-agent authority as executor inputs; **no plan-side provisional resolution this task**).
+Scope rulings from the user: facet-only (no execution-context proposals), promotion deferred to Task
+8, generalization built now, route-back auto-loop still deferred (its home is `generate`, a Phase-3 stub).
+
+**Surprises / drift (the unit-4 investigation).** The plan reserved a unit for "plan-side provisional
+resolution so a Planner-proposed `runtime:*` facet survives the manifest's mechanical validation."
+Investigation found **there is no such gate to survive**: the `plan` pipeline runs only the semantic
+cross-check on the manifest, and that validator **explicitly skips unknown facets** ("a Layer-1
+concern", `semantic_cross_check_validator._check_facet_implies`); `StaticSchemaValidator` (the Layer-1
+facet-membership check that honours `PendingProposals`) runs only on the **AttackSpec**, never on the
+manifest. So a manifest declaring a proposed-but-unpromoted facet already clears the ship gate —
+threading provisional resolution would guard a path nothing rejects. Skipped, recorded in ADR 0099
+(no-silent-ambiguity). If a future task adds a manifest Layer-1 registry-membership check, provisional
+resolution for proposed facets must land with it.
+
+A follow-up **multi-surface audit** (5 independent Opus sweeps + an end-to-end hallucinated-facet
+trace, high confidence) confirmed the gap and sharpened it: **nothing mechanically rejects an
+unregistered manifest facet** (typo *or* proposed-but-unpromoted) before `lab.yaml` is written; a
+legitimately-new proposed facet is **not** false-positived (same `None → continue` skip); and the gap
+**pre-existed Task 7** (structural — the manifest Layer-1 path was specced in `validation.md §6.4` but
+never built), Task 7 only *widened* the consequence. The check's owner is the **Phase-3 `generate`
+Validator stage** (no Phase-2 task owns it; **not** Task 8). ADR 0099 §6 now records this as an owned
+deferral. **Doc fix:** `CLAUDE.md`'s "Layer-1+Layer-2-valid `lab.yaml`" was an overstatement (true only
+in the weak Pydantic-structural sense) — corrected to "Pydantic-structural + Layer-2-cross-check-valid".
+
+**Deferred.** Promotion of Planner facet proposals + the post-Planner interrupt's per-proposal
+Accept/Edit (Task 8); execution-context proposals; the live two-proposer snapshot-reload wiring
+(`generate`, Phase 3); dropping the `ExtractorToolExecutor` subclassing when the lookup engine moves
+to a neutral ports module (Task 9, ADR 0089). **Owned deferral (ADR 0099 §6): manifest Layer-1
+facet-membership validation** — owner the Phase-3 `generate` Validator stage; provisional
+`PendingProposals` resolution must land with it; interim, an unregistered manifest facet can ship in a
+`plan`-produced `lab.yaml` (bounded — vocabulary correctness on a dev/eval skeleton, not a §1.6 guard).
+
+**Adversarial review (independent Opus review→refute over the diff): all six claims CONFIRMED, no
+defects.** The reviewer could not refute any of: Extractor byte-clean (definitions, audit blocks, and
+the out-of-authority message — still contains "not recorded" + "Planner"); dedup correctness (cap on
+*written* only, per-keyspace, no idempotent regression); Planner authority enforced at `execute`
+(defense-in-depth) with authority as a per-agent input; the unit-4 finding (no manifest gate rejects a
+proposed facet — searched the cross-check, `StaticSchemaValidator`, `FacetName`, the load gate, the
+persist path, and any `LabManifest` validator); `facet_proposals` captured-not-promoted (no overlay
+write in the plan path); no import cycle, no live KeyError, non-tautological tests. Two notes surfaced
+(not defects): the cross-run re-accept-skip consequence (now made explicit in ADR 0099 §3); and
+`facet_proposals` being last-Planner-run-only (intended, per the docstring).
+
+**Verify.** `just verify` green — ruff + format clean, pyright strict 0 errors, **923 passed / 1
+skipped** (+16 since Item 1).
+
+---
+
 ## Execution-log entry template
 
 ```

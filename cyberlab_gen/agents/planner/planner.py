@@ -155,14 +155,20 @@ class Planner(ToolUsingAgent):
         attempt = response.output
         if attempt.outcome is not PlanOutcome.PLANNED:
             # The Planner refused; carry the structured detail through for the framework to route on.
+            # Facet proposals (if any) are still captured — the Planner may have proposed before
+            # detecting it could not plan (captured, never promoted; Task 7 / ADR 0099).
             return PlanResult(
-                outcome=attempt.outcome, refusal=attempt.refusal, lookups=executor.lookups
+                outcome=attempt.outcome,
+                refusal=attempt.refusal,
+                lookups=executor.lookups,
+                facet_proposals=executor.facet_proposals,
             )
         assert attempt.manifest is not None  # the PlanAttempt validator guarantees it for PLANNED
         return PlanResult(
             outcome=PlanOutcome.PLANNED,
             manifest=self._finalize_manifest(attempt.manifest, attack_spec),
             lookups=executor.lookups,
+            facet_proposals=executor.facet_proposals,
         )
 
     async def refine(
@@ -227,6 +233,7 @@ class Planner(ToolUsingAgent):
                 manifest=self._finalize_manifest(patched, attack_spec),
                 lookups=executor.lookups,
                 reprompts=attempt - 1,
+                facet_proposals=executor.facet_proposals,
             )
 
         raise PlanningError(

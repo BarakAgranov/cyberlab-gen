@@ -21,10 +21,13 @@ from cyberlab_gen.agents import (
     PlannerToolExecutor,
     PlanOutcome,
     PlanResult,
+    ProposedFacet,
     planner_tool_definitions,
 )
 from cyberlab_gen.agents.extractor.tools import (
     TOOL_EXTERNAL_LOOKUP,
+    TOOL_PROPOSE_FACET,
+    TOOL_PROPOSE_THESIS_TYPE,
     TOOL_PROPOSE_VALUE_TYPE,
     extractor_tool_definitions,
 )
@@ -32,6 +35,7 @@ from cyberlab_gen.agents.planner.planner import (
     DEFAULT_PATCH_RETRY_ATTEMPTS,
     DEFAULT_PLANNER_MAX_TOKENS,
 )
+from cyberlab_gen.agents.planner.tools import TOOL_QUERY_VALUE_TYPES
 from cyberlab_gen.errors import PlanningError
 from cyberlab_gen.framework.refinement import FieldPatch, RefinementPatch
 from cyberlab_gen.providers.base import AgentLabel, CapabilityHint, ToolCall
@@ -353,26 +357,38 @@ def test_output_schema_rejects_untyped_input() -> None:
         LabManifest.model_validate(data)
 
 
-# --- the producer tool set (ADR 0089) --------------------------------------
+# --- the producer tool set (Task 7 / ADR 0099) -----------------------------
 
 
-def test_planner_tool_set_is_external_lookup_only() -> None:
+def test_planner_tool_set_is_producer_read_plus_scoped_propose_facet() -> None:
+    # Task 7: the producer set is the read tools (external_lookup, query_value_types_registry) plus
+    # the Planner's OWN scoped propose_facet — but never propose_value_type / propose_thesis_type
+    # (Extractor authority, schema.md §4.16).
     names = {t.name for t in planner_tool_definitions(["nvd"])}
-    assert names == {TOOL_EXTERNAL_LOOKUP}  # producer read set; no propose_* this slice
+    assert names == {TOOL_EXTERNAL_LOOKUP, TOOL_PROPOSE_FACET, TOOL_QUERY_VALUE_TYPES}
 
 
-def test_planner_tool_set_excludes_value_type_proposals_the_extractor_keeps() -> None:
-    # Regression pinning the two inventories: the Extractor (unchanged) advertises value-type
-    # proposals; the Planner never does (Extractor authority, schema.md §4.16).
+def test_planner_propose_facet_advertises_only_planner_categories() -> None:
+    propose = next(t for t in planner_tool_definitions(["nvd"]) if t.name == TOOL_PROPOSE_FACET)
+    enum = propose.input_schema["properties"]["category"]["enum"]
+    assert set(enum) == {
+        "runtime",
+        "lab_class_signal",
+    }  # the Planner's authority, not the Extractor's
+
+
+def test_planner_tool_set_excludes_the_proposals_the_extractor_keeps() -> None:
+    # Regression pinning the two inventories: the Extractor (unchanged) advertises value-type /
+    # thesis-type proposals; the Planner never does (Extractor authority, schema.md §4.16).
     extractor_names = {t.name for t in extractor_tool_definitions(["nvd"])}
     planner_names = {t.name for t in planner_tool_definitions(["nvd"])}
-    assert TOOL_PROPOSE_VALUE_TYPE in extractor_names
+    assert {TOOL_PROPOSE_VALUE_TYPE, TOOL_PROPOSE_THESIS_TYPE} <= extractor_names
     assert TOOL_PROPOSE_VALUE_TYPE not in planner_names
+    assert TOOL_PROPOSE_THESIS_TYPE not in planner_names
 
 
-async def test_planner_executor_serves_lookup_and_refuses_proposals() -> None:
+async def test_planner_executor_serves_external_lookup() -> None:
     executor = PlannerToolExecutor(registries=load_merged_registries(), nvd_client=None)
-
     lookup = await executor.execute(
         ToolCall(
             call_id="1",
@@ -383,11 +399,112 @@ async def test_planner_executor_serves_lookup_and_refuses_proposals() -> None:
     assert lookup.is_error is False  # read-only lookup served (no client -> recorded not-found)
     assert len(executor.lookups) == 1
 
-    refused = await executor.execute(
+
+async def test_planner_executor_records_runtime_facet_proposal() -> None:
+    # Task 7: the Planner proposes runtime:* facets (its authority). The executor collects them on
+    # the inherited facet_proposals side-channel — captured for the framework, not promoted here.
+    executor = PlannerToolExecutor(registries=load_merged_registries(), nvd_client=None)
+    result = await executor.execute(
         ToolCall(
-            call_id="2",
-            tool_name=TOOL_PROPOSE_VALUE_TYPE,
-            arguments={"name": "x", "description": "y", "reasoning": "z"},
+            call_id="1",
+            tool_name=TOOL_PROPOSE_FACET,
+            arguments={
+                "name": "runtime:codebuild_project",
+                "category": "runtime",
+                "description": "A CodeBuild project provisioned for the lab runtime.",
+                "applies_at_levels": ["lab"],
+                "reasoning": "the planned lab needs a runtime facet not in the bundled registry",
+            },
         )
     )
-    assert refused.is_error is True  # value-type proposals are refused mechanically (read-only)
+    assert result.is_error is False
+    assert len(executor.facet_proposals) == 1
+    assert executor.facet_proposals[0].category == "runtime"
+
+
+async def test_planner_executor_refuses_value_type_and_thesis_type_proposals() -> None:
+    # The Planner is a producer, but value_types / thesis_types are the Extractor's authority alone
+    # (schema.md §4.16): those write tools are refused mechanically (defense-in-depth behind the
+    # withheld advertisements).
+    executor = PlannerToolExecutor(registries=load_merged_registries(), nvd_client=None)
+    for tool in (TOOL_PROPOSE_VALUE_TYPE, TOOL_PROPOSE_THESIS_TYPE):
+        refused = await executor.execute(
+            ToolCall(
+                call_id="x",
+                tool_name=tool,
+                arguments={"name": "x", "description": "y", "reasoning": "z"},
+            )
+        )
+        assert refused.is_error is True
+    assert executor.value_type_proposals == []
+    assert executor.thesis_type_proposals == []
+
+
+async def test_planner_executor_rejects_facet_outside_its_authority() -> None:
+    # A target:* facet is the Extractor's authority; the Planner's category gate rejects it (dropped,
+    # not recorded) — but never as a fatal error result (ADR 0043).
+    executor = PlannerToolExecutor(registries=load_merged_registries(), nvd_client=None)
+    result = await executor.execute(
+        ToolCall(
+            call_id="1",
+            tool_name=TOOL_PROPOSE_FACET,
+            arguments={
+                "name": "target:eks",
+                "category": "target",
+                "description": "targets an EKS cluster",
+                "applies_at_levels": ["lab"],
+                "reasoning": "blog attacks an EKS control plane",
+            },
+        )
+    )
+    assert result.is_error is False
+    assert "not recorded" in result.content
+    assert executor.facet_proposals == []
+
+
+async def test_planner_executor_query_value_types_returns_registry_shapes() -> None:
+    # query_value_types_registry is a read tool (deferred from Task 3): it returns value_types shapes
+    # on demand so the Planner can pick/shape-search. Read-only, never fatal.
+    registries = load_merged_registries()
+    executor = PlannerToolExecutor(registries=registries, nvd_client=None)
+    listing = await executor.execute(
+        ToolCall(call_id="1", tool_name=TOOL_QUERY_VALUE_TYPES, arguments={})
+    )
+    assert listing.is_error is False
+    # A named lookup of a registered value type returns that entry's detail.
+    known = next(iter(registries.value_types.entries), None)
+    if known is not None:
+        named = await executor.execute(
+            ToolCall(call_id="2", tool_name=TOOL_QUERY_VALUE_TYPES, arguments={"name": known.name})
+        )
+        assert named.is_error is False
+        assert known.name in named.content
+
+
+def test_plan_result_carries_facet_proposals_captured_not_promoted() -> None:
+    # Task 7: PlanResult gains a facet_proposals side-channel (captured, not promoted — Task 8).
+    result = PlanResult(
+        outcome=PlanOutcome.PLANNED,
+        manifest=make_manifest(),
+        lookups=[],
+        facet_proposals=[
+            ProposedFacet(
+                name="runtime:codebuild_project",
+                category="runtime",
+                description="A CodeBuild project.",
+                applies_at_levels=["lab"],
+                reasoning="needed at runtime",
+            )
+        ],
+    )
+    assert [f.name for f in result.facet_proposals] == ["runtime:codebuild_project"]
+
+
+async def test_plan_surfaces_executor_facet_proposals_field() -> None:
+    # The plan path threads executor.facet_proposals onto PlanResult (same wiring as lookups). The
+    # MockProvider does not drive the tool loop, so the captured list is empty here — pinning that the
+    # field is populated from the executor (not omitted), with capture covered by the executor tests.
+    provider = MockProvider()
+    _register(provider, make_plan_attempt())
+    result = await _planner(provider).plan(_spec([FULL, DEMO]))
+    assert result.facet_proposals == []

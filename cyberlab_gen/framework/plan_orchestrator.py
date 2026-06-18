@@ -62,6 +62,7 @@ from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVer
 # models whose fields reference these, and LangGraph calls ``typing.get_type_hints`` on the state
 # schema at graph-build time — so the names must resolve at runtime (the same reasoning as the
 # extract orchestrator's field-type imports).
+from cyberlab_gen.agents.proposals import ProposedFacet
 from cyberlab_gen.agents.results import PlannerRefusal, PlanOutcome, PlanResult
 from cyberlab_gen.framework.graph_support import traced_async, traced_sync
 from cyberlab_gen.framework.orchestrator import (
@@ -180,6 +181,9 @@ class PlanPipelineOutcome(InternalModel):
     unresolved_feedback: list[str] = Field(default_factory=list[str])
     refinement_iterations: int = 0
     verdict_history: list[Verdict] = Field(default_factory=list[Verdict])
+    #: The Planner's in-flight facet proposals from the final Planner run (Task 7 / ADR 0099):
+    #: captured and surfaced in the run report, never promoted in the ``plan`` verb (Task 8).
+    facet_proposals: list[ProposedFacet] = Field(default_factory=list[ProposedFacet])
 
 
 # --- the agent surfaces the graph needs (narrow protocols) -----------------
@@ -563,6 +567,10 @@ def finalize_plan_outcome(state: PlanPipelineState) -> PlanPipelineOutcome:
         unresolved_feedback=state.unresolved_feedback,
         refinement_iterations=state.refinement_iterations,
         verdict_history=state.verdict_history,
+        # The final Planner run's facet proposals (captured, not promoted — Task 7 / ADR 0099).
+        facet_proposals=(
+            list(state.plan_result.facet_proposals) if state.plan_result is not None else []
+        ),
     )
 
 

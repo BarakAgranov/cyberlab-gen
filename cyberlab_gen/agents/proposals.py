@@ -20,16 +20,43 @@ facets only — is enforced at the tool boundary (``extractor.tools``), not here
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import Field
 
-from cyberlab_gen.schemas.base import InternalModel
+from cyberlab_gen.schemas.base import ArtifactModel, InternalModel
 from cyberlab_gen.schemas.registries import FacetEntry, ThesisTypeEntry, ValueTypeEntry
 
-#: Facet categories the Extractor is allowed to propose (``schema.md §4.16``).
-#: ``runtime`` and lab-derived ``lab_class_signal`` belong to the Planner.
+#: Facet categories the Extractor is allowed to propose (``schema.md §4.16``): ``target:*`` and
+#: blog-derived ``lab_class_signal:*``.
 EXTRACTOR_FACET_CATEGORIES: frozenset[str] = frozenset({"target", "lab_class_signal"})
+#: Facet categories the Planner is allowed to propose (``schema.md §4.13``/``§4.16``, ``agents.md
+#: §5.7``): ``runtime:*`` and lab-derived ``lab_class_signal:*``. ``lab_class_signal`` is split by
+#: ORIGIN (the Extractor proposes it blog-derived, the Planner lab-derived), so both authorities
+#: include it. The per-agent authority is a tool-boundary INPUT (Task 7), never a hardcoded literal.
+PLANNER_FACET_CATEGORIES: frozenset[str] = frozenset({"runtime", "lab_class_signal"})
+
+#: ``proposed_by`` is stamped by the framework at the accept boundary (Task 7; ``schema.md §4.16`` —
+#: framework-recorded, not agent-authored). The agent never authors it.
+type ProposerAgent = Literal["extractor", "planner", "maintainer"]
+
+
+@runtime_checkable
+class Proposal(Protocol):
+    """The agent-agnostic surface the generic accept path needs (ADR 0099).
+
+    Deliberately **behavioral only** — a proposal carries no overlay/registry-internal knowledge
+    (which file, which dedup accessor). That per-type metadata lives in one table on the framework
+    side (``framework/proposal_acceptance.py``), keyed by the concrete entry type ``to_entry``
+    returns; the registry key is read off the entry's ``ENTRY_KEY_FIELD``. ``proposed_by`` /
+    ``proposed_in_run`` are framework-stamped at the accept boundary, never agent-authored.
+    """
+
+    reasoning: str
+
+    def to_entry(
+        self, *, proposed_by: ProposerAgent, proposed_in_run: str | None = None
+    ) -> ArtifactModel: ...
 
 
 class ProposedValueType(InternalModel):
@@ -50,11 +77,14 @@ class ProposedValueType(InternalModel):
     # The agent's justification — becomes the audit block's ``reasoning`` at accept.
     reasoning: str
 
-    def to_entry(self, *, proposed_in_run: str | None = None) -> ValueTypeEntry:
+    def to_entry(
+        self, *, proposed_by: ProposerAgent, proposed_in_run: str | None = None
+    ) -> ValueTypeEntry:
         """Convert this in-flight proposal to a ``value_types`` overlay entry (ADR 0044).
 
-        The framework stamps ``proposed_by='extractor'`` (the only value-type
-        proposer) and the run id; the agent never authors those.
+        ``proposed_by`` and the run id are stamped by the framework at the accept boundary (Task 7),
+        never authored by the agent. Value types are the Extractor's authority alone, so callers
+        pass ``'extractor'`` — but the stamp is a parameter, not a hardcoded literal.
         """
         return ValueTypeEntry(
             name=self.name,
@@ -63,36 +93,42 @@ class ProposedValueType(InternalModel):
             sensitive=self.sensitive,
             notes_for_generator=self.notes_for_generator,
             platforms=self.platforms,
-            proposed_by="extractor",
+            proposed_by=proposed_by,
             proposed_in_run=proposed_in_run,
         )
 
 
 class ProposedFacet(InternalModel):
-    """An Extractor-proposed ``facets`` registry entry (in flight).
+    """An agent-proposed ``facets`` registry entry (in flight).
 
-    ``category`` is constrained to the Extractor's authority
-    (``target`` | ``lab_class_signal``); a ``runtime`` proposal is rejected at the
-    tool boundary before a ``ProposedFacet`` is ever constructed (ADR 0021).
+    ``category`` spans both agents' authorities (``target`` | ``runtime`` | ``lab_class_signal``);
+    WHICH categories a given agent may propose is gated at the tool boundary by a per-agent
+    authority set (``EXTRACTOR_FACET_CATEGORIES`` / ``PLANNER_FACET_CATEGORIES``) before a
+    ``ProposedFacet`` is constructed (ADR 0021; Task 7 made the gate a per-agent input).
     """
 
     name: str
-    category: Literal["target", "lab_class_signal"]
+    category: Literal["target", "runtime", "lab_class_signal"]
     description: str
     applies_at_levels: list[Literal["lab", "phase", "step"]] = Field(min_length=1)
     reasoning: str
 
-    def to_entry(self) -> FacetEntry:
+    def to_entry(
+        self, *, proposed_by: ProposerAgent, proposed_in_run: str | None = None
+    ) -> FacetEntry:
         """Convert this in-flight proposal to a ``facets`` overlay entry (ADR 0044).
 
-        The framework stamps ``proposed_by='extractor'``; the agent never authors it.
-        The category was already gated to the Extractor's authority at the tool
-        boundary (``extractor.tools``), so it is carried through unchanged.
+        ``proposed_by`` is stamped by the framework at the accept boundary (Task 7), never authored
+        by the agent. The category was already gated to the proposing agent's authority at the tool
+        boundary, so it is carried through unchanged. ``proposed_in_run`` is accepted (and ignored —
+        ``FacetEntry`` has no run field) only so all three proposals share one ``Proposal`` signature
+        (ADR 0099); facet provenance is the audit block's job.
         """
+        del proposed_in_run
         return FacetEntry(
             name=self.name,
             category=self.category,
-            proposed_by="extractor",
+            proposed_by=proposed_by,
             description=self.description,
             applies_at_levels=self.applies_at_levels,
         )
@@ -110,19 +146,28 @@ class ProposedThesisType(InternalModel):
     description: str
     reasoning: str
 
-    def to_entry(self, *, proposed_in_run: str | None = None) -> ThesisTypeEntry:
-        """Convert this in-flight proposal to a ``thesis_types`` overlay entry (ADR 0045)."""
+    def to_entry(
+        self, *, proposed_by: ProposerAgent, proposed_in_run: str | None = None
+    ) -> ThesisTypeEntry:
+        """Convert this in-flight proposal to a ``thesis_types`` overlay entry (ADR 0045).
+
+        ``proposed_by`` is framework-stamped at the accept boundary (Task 7); thesis types are the
+        Extractor's authority, so callers pass ``'extractor'``.
+        """
         return ThesisTypeEntry(
             name=self.name,
             description=self.description,
-            proposed_by="extractor",
+            proposed_by=proposed_by,
             proposed_in_run=proposed_in_run,
         )
 
 
 __all__ = [
     "EXTRACTOR_FACET_CATEGORIES",
+    "PLANNER_FACET_CATEGORIES",
+    "Proposal",
     "ProposedFacet",
     "ProposedThesisType",
     "ProposedValueType",
+    "ProposerAgent",
 ]

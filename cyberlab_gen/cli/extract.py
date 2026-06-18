@@ -43,9 +43,7 @@ from cyberlab_gen.framework.orchestrator import (
 )
 from cyberlab_gen.framework.proposal_acceptance import (
     AcceptanceContext,
-    accept_facet,
-    accept_thesis_type,
-    accept_value_type,
+    accept_proposals,
     auto_accept_to_overlay,
 )
 from cyberlab_gen.schemas.attack_spec import (
@@ -73,6 +71,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.framework.orchestrator import PipelineState
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
+    from cyberlab_gen.registries.merge import MergedRegistries
     from cyberlab_gen.schemas.ingestion import IngestionResult
     from cyberlab_gen.state.local_state import LocalState
     from cyberlab_gen.state.run_store import RunHandle, RunStore
@@ -177,11 +176,16 @@ class PipelineExtractRunner:
         jury: ExtractorJury,
         state: LocalState | None = None,
         provider: CostRecordingProvider | None = None,
+        registries: MergedRegistries | None = None,
     ) -> None:
         self._extractor = extractor
         self._validator = validator
         self._jury = jury
         self._state = state
+        # The merged registry snapshot, held so accept-time proposal dedup can check "already
+        # registered?" against the bundled+overlay vocabularies (ADR 0099). ``None`` (a fake test
+        # runner) leaves dedup off — the pre-ADR-0099 behaviour.
+        self.registries = registries
         # The shared CostRecordingProvider the agents bill through; held so the trajectory recorder
         # can be attached to it at run start (the provider is built before the run handle exists).
         self._provider = provider
@@ -589,18 +593,22 @@ def _promote_proposals_interactive(
     collected: tuple[list[ProposedValueType], list[ProposedFacet], list[ProposedThesisType]],
     *,
     ctx: AcceptanceContext,
+    registries: MergedRegistries | None = None,
 ) -> None:
-    """Write the reviewed proposals to the overlay (human-approved) **after the spec ships**."""
+    """Write the reviewed proposals to the overlay (human-approved) **after the spec ships**.
+
+    One generic accept path (ADR 0099) with accept-time dedup against the merged registry: a proposal
+    colliding with a bundled/already-accepted entry is ``skipped`` (reported, not written) rather than
+    silently shadowing it. No cap in interactive mode — the user acted on each proposal individually.
+    """
     value_types, facets, thesis_types = collected
-    for vt in value_types:
-        accept_value_type(vt, ctx, approval="human")
-        output.print_info(f"  + promoted value_type {vt.name!r} to the overlay")
-    for facet in facets:
-        accept_facet(facet, ctx, approval="human")
-        output.print_info(f"  + promoted facet {facet.name!r} to the overlay")
-    for thesis in thesis_types:
-        accept_thesis_type(thesis, ctx, approval="human")
-        output.print_info(f"  + promoted thesis_type {thesis.name!r} to the overlay")
+    accepted = accept_proposals(
+        [*value_types, *facets, *thesis_types], ctx, approval="human", registries=registries
+    )
+    for label in accepted.accepted:
+        output.print_info(f"  + promoted {label} to the overlay")
+    for label in accepted.skipped:
+        output.print_info(f"  - {label} already registered; not promoted (would shadow an entry)")
 
 
 def _default_proposal_choice_reader() -> str:
@@ -833,6 +841,9 @@ def _drive_result(
     overlay_dir: Path,
 ) -> Path | None:
     """Dispatch to the interactive or auto post-Extractor flow."""
+    # The production runner carries the merged registry snapshot, used for accept-time proposal dedup
+    # (ADR 0099); a fake test runner does not — dedup is then off (the pre-ADR-0099 behaviour).
+    registries = runner.registries if isinstance(runner, PipelineExtractRunner) else None
     if mode_interactive:
         return _drive_interactive(
             result=result,
@@ -842,9 +853,15 @@ def _drive_result(
             target_dir=target_dir,
             handle=handle,
             overlay_dir=overlay_dir,
+            registries=registries,
         )
     return _drive_auto(
-        result=result, ledger=ledger, target_dir=target_dir, handle=handle, overlay_dir=overlay_dir
+        result=result,
+        ledger=ledger,
+        target_dir=target_dir,
+        handle=handle,
+        overlay_dir=overlay_dir,
+        registries=registries,
     )
 
 
@@ -868,6 +885,8 @@ def _acceptance_context(
         proposed_by_model=billed_model(ledger) or str(result.spec.extraction_metadata.model),
         proposed_at=datetime.now(UTC),
         run_id=handle.record.run_id if handle is not None else None,
+        proposed_by="extractor",
+        proposal_origin="llm_during_extraction",
     )
 
 
@@ -878,6 +897,7 @@ def _drive_auto(
     target_dir: Path,
     handle: RunHandle | None,
     overlay_dir: Path,
+    registries: MergedRegistries | None = None,
 ) -> Path | None:
     """``--auto``: no interrupts except budget-overrun; out-of-scope halts (§3.1.1).
 
@@ -899,13 +919,20 @@ def _drive_auto(
     _emit_run_report(result)
     path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
     _mirror_spec(handle, result.spec)
-    _promote_proposals_auto(result, overlay_dir=overlay_dir, handle=handle, ledger=ledger)
+    _promote_proposals_auto(
+        result, overlay_dir=overlay_dir, handle=handle, ledger=ledger, registries=registries
+    )
     output.print_info(f"\nwrote {path}")
     return path
 
 
 def _promote_proposals_auto(
-    result: RunResult, *, overlay_dir: Path, handle: RunHandle | None, ledger: CostLedger
+    result: RunResult,
+    *,
+    overlay_dir: Path,
+    handle: RunHandle | None,
+    ledger: CostLedger,
+    registries: MergedRegistries | None = None,
 ) -> None:
     """Promote this run's proposals to the overlay **after the spec ships** (ADR 0050/0062).
 
@@ -933,6 +960,7 @@ def _promote_proposals_auto(
         thesis_type_proposals=result.thesis_type_proposals,
         ctx=ctx,
         cap=DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP,
+        registries=registries,
     )
     if accepted.accepted:
         output.print_info(
@@ -941,6 +969,13 @@ def _promote_proposals_auto(
         )
         for label in accepted.accepted:
             output.print_info(f"  + {label}")
+    if accepted.skipped:
+        output.print_info(
+            f"\n{len(accepted.skipped)} proposal(s) already registered (not promoted — a mechanical "
+            "dedup, ADR 0099; promoting would silently shadow a bundled/accepted entry):"
+        )
+        for label in accepted.skipped:
+            output.print_info(f"  - {label}")
     if accepted.deferred:
         output.print_info(
             f"\n{len(accepted.deferred)} proposal(s) over the per-run cap of "
@@ -960,6 +995,7 @@ def _drive_interactive(
     target_dir: Path,
     handle: RunHandle | None,
     overlay_dir: Path,
+    registries: MergedRegistries | None = None,
 ) -> Path | None:
     """``--interactive``: the four-option menu + per-proposal review + budget check."""
     while True:
@@ -997,7 +1033,7 @@ def _drive_interactive(
         path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
         _mirror_spec(handle, result.spec)
         ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle, ledger=ledger)
-        _promote_proposals_interactive(collected, ctx=ctx)
+        _promote_proposals_interactive(collected, ctx=ctx, registries=registries)
         output.print_info(f"\nwrote {path}")
         return path
 

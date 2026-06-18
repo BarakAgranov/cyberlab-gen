@@ -274,6 +274,7 @@ def _build_extract_runner(
         jury=ExtractorJury(provider=provider, registry=registry, registries=registries),
         state=state,
         provider=provider,  # held so the trajectory recorder attaches to it at run start (ADR 0098)
+        registries=registries,  # held for accept-time proposal dedup (ADR 0099)
     )
 
 
