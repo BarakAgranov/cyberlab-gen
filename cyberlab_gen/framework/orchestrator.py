@@ -82,6 +82,7 @@ if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor.extractor import Extractor
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
     from cyberlab_gen.schemas.ingestion import IngestionResult
+    from cyberlab_gen.state.trajectory import RunTrajectoryRecorder
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 logger = logging.getLogger(__name__)
@@ -417,6 +418,7 @@ def build_pipeline(
     # ``BaseCheckpointSaver`` is generic over its version type; we hold any concrete
     # saver opaquely (we only pass it to ``graph.compile``), hence ``Any``.
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    recorder: RunTrajectoryRecorder | None = None,
 ) -> PipelineRun:
     """Assemble the Phase-1 LangGraph pipeline and return its async ``run`` callable.
 
@@ -491,6 +493,12 @@ def build_pipeline(
             and pending.kind is FeedbackKind.REFINEMENT
             and state.spec is not None
         )
+        # Stamp the round the upcoming billed call(s) belong to, so the provider-side trajectory
+        # capture (which sees the content but not the round) is grouped correctly (ADR 0098).
+        if recorder is not None:
+            recorder.enter_stage(
+                round_index=state.total_iterations, stage="refine" if is_refinement else "extract"
+            )
         if is_refinement:
             assert pending is not None and state.spec is not None  # narrowed by is_refinement
             result = await extractor.refine(
@@ -677,12 +685,18 @@ def build_pipeline(
         the orchestrator-owned grounding findings (``agents.md §5.5``, ADR 0051/0060).
         """
         assert state.spec is not None
+        if recorder is not None:
+            recorder.enter_stage(round_index=state.total_iterations, stage="jury_review")
         findings = state.grounding.findings if state.grounding is not None else None
         verdict = await jury.review(
             spec=state.spec, blog_content=state.blog_content, grounding_findings=findings
         )
         state.verdict = verdict
         state.verdict_history = [*state.verdict_history, verdict.verdict]
+        # The jury's verdict is the agent-decision outcome of this round (the framework's downstream
+        # action — refine vs ship-low-confidence — is recoverable from the following records).
+        if recorder is not None:
+            recorder.routing_event(verdict.verdict.value)
 
         if verdict.verdict is Verdict.APPROVE:
             # Mechanical rubric-floor backstop (ADR 0067): an ``approve`` whose dimension

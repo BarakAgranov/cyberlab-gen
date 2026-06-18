@@ -698,6 +698,225 @@ async def test_cost_recording_provider_logs_each_call_with_cumulative(
     assert "cumulative=$0.50" in line
 
 
+# --- CostRecordingProvider: trajectory sink (Item 1, ADR 0098) --------------
+
+
+class _SpySink:
+    """Records what the provider notified it of, to assert the chokepoint wiring."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object, object]] = []
+        self.failures: list[tuple[object, object, object, object]] = []
+
+    def record_call(self, response: object, *, agent_label: object, capability: object) -> None:
+        self.calls.append((response, agent_label, capability))
+
+    def record_failed_call(
+        self, *, model: object, usage: object, agent_label: object, capability: object
+    ) -> None:
+        self.failures.append((model, usage, agent_label, capability))
+
+
+async def test_cost_recording_provider_notifies_trajectory_sink_on_success() -> None:
+    # The chokepoint hands the full ProviderResponse (with structured output) + agent identity
+    # to the trajectory sink on every successful billed call — the content the run dir keeps.
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    sink = _SpySink()
+    provider = CostRecordingProvider(
+        _FakeInnerProvider(cost="0.50"),  # type: ignore[arg-type]
+        ledger,
+        trajectory_sink=sink,  # type: ignore[arg-type]
+    )
+    await provider.complete(
+        [],
+        output_schema=_Out,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        model="claude-test",
+        agent_label=AgentLabel.EXTRACTOR,
+    )
+    assert len(sink.calls) == 1
+    response, agent_label, capability = sink.calls[0]
+    assert agent_label is AgentLabel.EXTRACTOR
+    assert capability is CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT
+    # the structured output reached the sink (response is typed `object` on the spy)
+    assert response.output == _Out()  # pyright: ignore[reportAttributeAccessIssue]
+
+
+async def test_cost_recording_provider_notifies_trajectory_sink_on_billed_failure() -> None:
+    # A billed-but-raised call has no response, only usage+model. The sink is told via the
+    # failure path so the trajectory still records the FAILED round (metadata-only).
+    from cyberlab_gen.errors import EmitTruncated
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    sink = _SpySink()
+    provider = CostRecordingProvider(
+        _RaisingInnerProvider(billed_cost="2.50"),  # type: ignore[arg-type]
+        ledger,
+        trajectory_sink=sink,  # type: ignore[arg-type]
+    )
+    with pytest.raises(EmitTruncated):
+        await provider.complete_with_tools(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            model="claude-test",
+            tools=[],
+            tool_executor=_unused_executor(),
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=3,
+        )
+    assert sink.calls == []
+    assert len(sink.failures) == 1
+    model, _usage, agent_label, capability = sink.failures[0]
+    assert model == "claude-opus-4-8"
+    assert agent_label is AgentLabel.EXTRACTOR
+    assert capability is CapabilityHint.LONG_CONTEXT_EXTRACTION
+
+
+async def test_cost_recording_provider_captures_trajectory_before_ceiling_abort() -> None:
+    # The catastrophe-ceiling abort must not swallow the very call that crossed it: capture
+    # happens before _enforce_ceiling raises, so the run dir records the round that blew the cap.
+    from cyberlab_gen.errors import BudgetExceeded
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("1.00"))
+    sink = _SpySink()
+    provider = CostRecordingProvider(
+        _FakeInnerProvider(cost="1.50"),  # type: ignore[arg-type]
+        ledger,
+        trajectory_sink=sink,  # type: ignore[arg-type]
+    )
+    with pytest.raises(BudgetExceeded):
+        await provider.complete(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            model="claude-test",
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+    assert len(sink.calls) == 1  # the crossing call was captured before the abort raised
+
+
+class _RaisingSink:
+    """A trajectory sink that always raises — models a capture bug (serialization / a future record
+    field). It must never crash the run, mask the propagating error, or skip the catastrophe ceiling.
+    """
+
+    def record_call(self, response: object, *, agent_label: object, capability: object) -> None:
+        raise RuntimeError("boom in trajectory capture")
+
+    def record_failed_call(
+        self, *, model: object, usage: object, agent_label: object, capability: object
+    ) -> None:
+        raise RuntimeError("boom in trajectory capture")
+
+
+async def test_trajectory_sink_exception_does_not_perturb_a_successful_call() -> None:
+    # ADR 0039 best-effort: a capture failure on the success path must be swallowed — the (already
+    # billed) call returns normally, never crashing the run.
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    provider = CostRecordingProvider(
+        _FakeInnerProvider(cost="0.50"),  # type: ignore[arg-type]
+        ledger,
+        trajectory_sink=_RaisingSink(),  # type: ignore[arg-type]
+    )
+    await provider.complete(  # must NOT raise
+        [],
+        output_schema=_Out,
+        capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+        model="claude-test",
+        agent_label=AgentLabel.EXTRACTOR,
+    )
+    assert ledger.total_usd == Decimal("0.50")  # the call was still billed/recorded
+
+
+async def test_trajectory_sink_exception_does_not_skip_the_ceiling_on_success() -> None:
+    # §1.6 mechanical safety: a sink that raises must NOT bypass the catastrophe ceiling. The ceiling
+    # fires for the cap-crossing call even though capture (which runs just before it) raised.
+    from cyberlab_gen.errors import BudgetExceeded
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("1.00"))
+    provider = CostRecordingProvider(
+        _FakeInnerProvider(cost="1.50"),  # type: ignore[arg-type]
+        ledger,
+        trajectory_sink=_RaisingSink(),  # type: ignore[arg-type]
+    )
+    with pytest.raises(BudgetExceeded):
+        await provider.complete(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.FAST_CHEAP_STRUCTURED_OUTPUT,
+            model="claude-test",
+            agent_label=AgentLabel.EXTRACTOR,
+        )
+
+
+async def test_trajectory_sink_exception_does_not_mask_the_provider_error() -> None:
+    # ADR 0039 "never mask the propagating error": on a billed failure, a sink that raises must not
+    # replace the original ProviderError — the caller still sees the real failure.
+    from cyberlab_gen.errors import EmitTruncated
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=None)
+    provider = CostRecordingProvider(
+        _RaisingInnerProvider(billed_cost="0.48"),  # type: ignore[arg-type]
+        ledger,
+        trajectory_sink=_RaisingSink(),  # type: ignore[arg-type]
+    )
+    with pytest.raises(EmitTruncated):  # the ORIGINAL error, not the sink's RuntimeError
+        await provider.complete_with_tools(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            model="claude-test",
+            tools=[],
+            tool_executor=_unused_executor(),
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=3,
+        )
+
+
+async def test_trajectory_sink_records_failed_round_before_ceiling_abort() -> None:
+    # The FAILED-path twin of capture-before-ceiling: a billed failure that crosses the ceiling still
+    # reaches the sink (record_failed_call) before BudgetExceeded raises (regression guard for the
+    # _record_billed_failure ordering — ADR 0047 failure-dominated runs).
+    from cyberlab_gen.errors import BudgetExceeded
+    from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
+    from cyberlab_gen.providers.cost_ledger import CostLedger
+
+    ledger = CostLedger(run_id="t", cap_usd=Decimal("1.00"))
+    sink = _SpySink()
+    provider = CostRecordingProvider(
+        _RaisingInnerProvider(billed_cost="1.20"),  # type: ignore[arg-type]
+        ledger,
+        trajectory_sink=sink,  # type: ignore[arg-type]
+    )
+    with pytest.raises(BudgetExceeded):
+        await provider.complete_with_tools(
+            [],
+            output_schema=_Out,
+            capability=CapabilityHint.LONG_CONTEXT_EXTRACTION,
+            model="claude-test",
+            tools=[],
+            tool_executor=_unused_executor(),
+            agent_label=AgentLabel.EXTRACTOR,
+            max_iterations=3,
+        )
+    assert len(sink.failures) == 1  # the cap-blowing FAILED round was captured before the abort
+
+
 def _unused_executor() -> ToolExecutor:
     from cyberlab_gen.providers.base import ToolCall, ToolResult
 

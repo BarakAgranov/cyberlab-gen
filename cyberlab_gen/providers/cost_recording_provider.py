@@ -52,6 +52,7 @@ if TYPE_CHECKING:
         TokenUsage,
         ToolDefinition,
         ToolExecutor,
+        TrajectorySink,
     )
     from cyberlab_gen.providers.cost_ledger import CostLedger
 
@@ -72,6 +73,7 @@ class CostRecordingProvider(Provider):
         *,
         purpose: str = "eval",
         on_call: Callable[[str], None] | None = None,
+        trajectory_sink: TrajectorySink | None = None,
     ) -> None:
         self._inner = inner
         self._ledger = ledger
@@ -81,10 +83,24 @@ class CostRecordingProvider(Provider):
         # concise line live (e.g. the CLI's ``--show-cost`` → stderr), since the console
         # is WARNING-only by default (ADR 0037). ``None`` ⇒ log only (unchanged).
         self._on_call = on_call
+        # Optional per-round trajectory capture (Item 1, ADR 0098). The single point that sees
+        # every billed call's content, so it is where the content half of the trajectory is
+        # captured. ``None`` ⇒ no capture (unchanged). The sink invocation in _record /
+        # _record_billed_failure is GUARDED (best-effort): capture must never crash a paid run,
+        # mask a propagating error, or skip the catastrophe ceiling (ADR 0039/0041; §1.6).
+        self._trajectory_sink = trajectory_sink
 
     @property
     def name(self) -> str:
         return self._inner.name
+
+    def set_trajectory_sink(self, sink: TrajectorySink) -> None:
+        """Attach (or replace) the per-round trajectory sink (Item 1, ADR 0098).
+
+        The provider is built before the run's :class:`RunHandle` exists, so the recorder — which
+        needs the handle — is wired here at run start, mirroring ``enable_checkpointing``.
+        """
+        self._trajectory_sink = sink
 
     async def complete[T_Output: BaseModel](
         self,
@@ -162,6 +178,20 @@ class CostRecordingProvider(Provider):
             )
         )
         self._log_call(agent_label, response.model, response.usage, CallOutcome.SUCCESS)
+        # Capture the per-round trajectory BEFORE the ceiling check: a call whose spend crosses
+        # the catastrophe ceiling raises out of _enforce_ceiling, and the run dir should still
+        # record the round that blew the cap. Guarded (best-effort, ADR 0039/0041): trajectory
+        # capture is a pure observer and must never crash a paid run or — critically — skip the
+        # mechanical catastrophe ceiling that runs next (architecture.md §1.6).
+        if self._trajectory_sink is not None:
+            try:
+                self._trajectory_sink.record_call(
+                    response, agent_label=agent_label, capability=capability
+                )
+            except Exception:
+                logger.warning(
+                    "trajectory capture failed on the success path; continuing", exc_info=True
+                )
         self._enforce_ceiling(agent_label, response.usage, response.model)
 
     def _record_billed_failure(
@@ -202,6 +232,18 @@ class CostRecordingProvider(Provider):
             )
         )
         self._log_call(agent_label, exc.model, exc.usage, CallOutcome.FAILED)
+        # Record the FAILED round (metadata-only — a raised call has no response content) before the
+        # ceiling check, for the same reason as the success path. Guarded (best-effort): a capture
+        # failure must never mask the propagating ``exc`` (ADR 0039) nor skip the ceiling (§1.6).
+        if self._trajectory_sink is not None:
+            try:
+                self._trajectory_sink.record_failed_call(
+                    model=exc.model, usage=exc.usage, agent_label=agent_label, capability=capability
+                )
+            except Exception:
+                logger.warning(
+                    "trajectory capture failed on the failure path; continuing", exc_info=True
+                )
         self._enforce_ceiling(agent_label, exc.usage, exc.model, cause=exc)
 
     def _log_call(

@@ -82,7 +82,20 @@ capture is deferred; the run-directory structure leaves room for it.
   cost.yaml         the full CostReportBlock (per-agent / per-model / per-provider
                     breakdown + per-call entries — the data the report discarded)
   run.log           the per-run DEBUG log (ADR 0037)
+  trajectory.jsonl  the per-round agent trajectory: an append-only ordered event log of
+                    every agent call's content + each routing decision (ADR 0098)
+  blobs/            content-addressed input blobs trajectory.jsonl references by hash, so
+                    a large constant input (system prompt, blog body) is stored once (ADR 0098)
 ```
+
+The list is illustrative, not exhaustive or closed: a verb may add its own files (the `plan`
+verb's `planner-refusal.yaml`; the extract checkpointer's `checkpoint.sqlite`). The contract is
+that every file on disk is registered in `RunRecord.artifacts` (so an inspector tells complete
+from partial), and that **only the run store writes the run dir** — `trajectory.jsonl` and
+`blobs/` are written through `RunHandle` (`append_jsonl` / `write_blob`), so adding them
+*extends* the single persistence authority (ADR 0053/0068), it does not open a second writer.
+The trajectory is written incrementally as each round completes, inheriting this ADR's
+best-effort / always-something-to-read discipline (a halt/crash keeps the rounds already done).
 
 ### Scope: both entry points, this ADR's wiring
 

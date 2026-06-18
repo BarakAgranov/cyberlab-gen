@@ -72,9 +72,11 @@ if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor_jury.jury import ExtractorJury
     from cyberlab_gen.framework.orchestrator import PipelineState
     from cyberlab_gen.providers.cost_ledger import CostLedger
+    from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
     from cyberlab_gen.schemas.ingestion import IngestionResult
     from cyberlab_gen.state.local_state import LocalState
     from cyberlab_gen.state.run_store import RunHandle, RunStore
+    from cyberlab_gen.state.trajectory import RunTrajectoryRecorder
     from cyberlab_gen.validators.static_schema_validator import StaticSchemaValidator
 
 logger = logging.getLogger(__name__)
@@ -174,16 +176,37 @@ class PipelineExtractRunner:
         validator: StaticSchemaValidator,
         jury: ExtractorJury,
         state: LocalState | None = None,
+        provider: CostRecordingProvider | None = None,
     ) -> None:
         self._extractor = extractor
         self._validator = validator
         self._jury = jury
         self._state = state
+        # The shared CostRecordingProvider the agents bill through; held so the trajectory recorder
+        # can be attached to it at run start (the provider is built before the run handle exists).
+        self._provider = provider
+        self._recorder: RunTrajectoryRecorder | None = None
         self._ingestion: IngestionResult | None = None
         self._blog_content: str | None = None
         self._checkpoint_db: Path | None = None
         self._checkpoint_thread_base: str | None = None
         self._checkpoint_seq = 0
+
+    def enable_trajectory(self, handle: RunHandle) -> None:
+        """Capture the per-round agent trajectory to ``handle``'s run dir (Item 1, ADR 0098).
+
+        Mirrors :meth:`enable_checkpointing`: called at run start once the run handle exists. Creates
+        the recorder, wires it to the shared provider (the content half — every billed call) and to
+        the orchestrator nodes (the round/outcome half, via :meth:`_drive`'s ``build_pipeline`` call).
+        A no-op when no provider was supplied (a fake test runner).
+        """
+        if self._provider is None:
+            return
+        from cyberlab_gen.state.trajectory import RunTrajectoryRecorder
+
+        recorder = RunTrajectoryRecorder(handle)
+        self._recorder = recorder
+        self._provider.set_trajectory_sink(recorder)
 
     def enable_checkpointing(self, db_path: Path, *, thread_id: str) -> None:
         """Persist completed-node state to ``db_path`` so a mid-node crash resumes (ADR 0040).
@@ -260,7 +283,10 @@ class PipelineExtractRunner:
         async def _go() -> PipelineState:
             if self._checkpoint_db is None:
                 run = build_pipeline(
-                    extractor=self._extractor, validator=self._validator, jury=self._jury
+                    extractor=self._extractor,
+                    validator=self._validator,
+                    jury=self._jury,
+                    recorder=self._recorder,
                 )
                 return await run(initial)
             # Checkpointed: a fresh thread per drive (so a feedback re-run never
@@ -276,6 +302,7 @@ class PipelineExtractRunner:
                     validator=self._validator,
                     jury=self._jury,
                     checkpointer=saver,
+                    recorder=self._recorder,
                 )
                 return await run(initial, thread_id=thread)
 
@@ -771,6 +798,8 @@ def run_extract(
         runner.enable_checkpointing(
             handle.directory / "checkpoint.sqlite", thread_id=handle.record.run_id
         )
+        # Capture the per-round agent trajectory to the run dir (ADR 0098), alongside the artifacts.
+        runner.enable_trajectory(handle)
     result: RunResult | None = None
     path: Path | None = None
     try:

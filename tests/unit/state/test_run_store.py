@@ -17,6 +17,7 @@ tests pin the guarantees the brief insists on:
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -32,9 +33,11 @@ from cyberlab_gen.providers import (
     TokenUsage,
 )
 from cyberlab_gen.state.run_store import (
+    BLOBS_DIRNAME,
     COST_FILENAME,
     RUN_RECORD_FILENAME,
     SPEC_FILENAME,
+    TRAJECTORY_FILENAME,
     RunKind,
     RunLineage,
     RunRecord,
@@ -228,3 +231,80 @@ def test_update_lineage_merges_known_fields(tmp_path: Path) -> None:
     assert record.lineage.model == "claude-opus-4-8"
     assert record.lineage.code_version == "abc123"  # preserved
     assert record.lineage.input_ref == "https://x"
+
+
+# --- Trajectory primitives: content-addressed blobs + JSONL append (Item 1) ---
+
+
+def test_write_blob_is_content_addressed_and_dedups(tmp_path: Path) -> None:
+    store = RunStore(tmp_path)
+    handle = store.start(kind=RunKind.EXTRACT, label="x", now=_NOW)
+
+    sha1 = handle.write_blob("the system prompt")
+    sha2 = handle.write_blob("the system prompt")  # identical -> same hash, stored once
+
+    assert sha1 == sha2
+    blob_path = handle.directory / BLOBS_DIRNAME / f"{sha1}.txt"
+    assert blob_path.is_file()
+    assert blob_path.read_text(encoding="utf-8") == "the system prompt"
+
+    sha3 = handle.write_blob("the blog body")  # distinct content -> distinct blob
+    assert sha3 != sha1
+    assert (handle.directory / BLOBS_DIRNAME / f"{sha3}.txt").is_file()
+
+    # the blobs directory is registered once in the record (complete-vs-partial visibility)
+    assert handle.record.artifacts.count(f"{BLOBS_DIRNAME}/") == 1
+
+
+def test_append_jsonl_appends_one_line_per_record(tmp_path: Path) -> None:
+    store = RunStore(tmp_path)
+    handle = store.start(kind=RunKind.EXTRACT, label="x", now=_NOW)
+
+    handle.append_jsonl(TRAJECTORY_FILENAME, RunLineage(model="a"))
+    handle.append_jsonl(TRAJECTORY_FILENAME, RunLineage(model="b"))
+
+    lines = (handle.directory / TRAJECTORY_FILENAME).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["model"] == "a"
+    assert json.loads(lines[1])["model"] == "b"
+    # the file is registered exactly once no matter how many lines are appended
+    assert handle.record.artifacts.count(TRAJECTORY_FILENAME) == 1
+
+
+def test_write_blob_is_best_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = RunStore(tmp_path)
+    handle = store.start(kind=RunKind.EXTRACT, label="x", now=_NOW)
+
+    def _boom(self: Path, *args: object, **kwargs: object) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+
+    with caplog.at_level(logging.WARNING):
+        sha = handle.write_blob("x")  # must not raise even though the write fails
+
+    assert sha  # the hash is still returned so the trajectory line can reference it
+    assert any("run-store" in r.message for r in caplog.records)
+
+
+def test_append_jsonl_is_best_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = RunStore(tmp_path)
+    handle = store.start(kind=RunKind.EXTRACT, label="x", now=_NOW)
+
+    def _boom(self: Path, *args: object, **kwargs: object) -> object:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "open", _boom)
+
+    with caplog.at_level(logging.WARNING):
+        handle.append_jsonl(TRAJECTORY_FILENAME, RunLineage(model="a"))  # must not raise
+
+    assert any("run-store" in r.message for r in caplog.records)

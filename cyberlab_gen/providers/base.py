@@ -192,6 +192,38 @@ class ToolExecutor(Protocol):
     async def execute(self, call: ToolCall) -> ToolResult: ...
 
 
+class TrajectorySink(Protocol):
+    """Notified by the cost-recording provider after each billed call (Item 1, ADR 0098).
+
+    Implemented by the framework's run-trajectory recorder
+    (``cyberlab_gen.state.trajectory.RunTrajectoryRecorder``). Pure observation: the
+    implementation persists the call's content to the run directory and must not alter the
+    call or its routing. Defined here — like :class:`ToolExecutor` — so the provider layer
+    depends only on this protocol, never on the ``state`` layer that implements it (no cycle).
+    """
+
+    def record_call[T_Output: BaseModel](
+        self,
+        response: ProviderResponse[T_Output],
+        *,
+        agent_label: AgentLabel,
+        capability: CapabilityHint,
+    ) -> None:
+        """Record a successful billed call: its structured output and the input it received."""
+        ...
+
+    def record_failed_call(
+        self,
+        *,
+        model: str,
+        usage: TokenUsage,
+        agent_label: AgentLabel,
+        capability: CapabilityHint,
+    ) -> None:
+        """Record a billed-but-raised call (only usage+model are available — no content)."""
+        ...
+
+
 class Provider(ABC):
     """The single LLM-access interface for the entire system.
 

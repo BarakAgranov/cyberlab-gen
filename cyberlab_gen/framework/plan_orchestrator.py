@@ -84,6 +84,8 @@ if TYPE_CHECKING:
 
     from langchain_core.runnables import RunnableConfig
 
+    from cyberlab_gen.state.trajectory import RunTrajectoryRecorder
+
 logger = logging.getLogger(__name__)
 
 
@@ -241,6 +243,7 @@ def build_plan_pipeline(
     validator: _CrossCheckValidatorLike,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
     global_iteration_cap: int = GLOBAL_ITERATION_CAP,
+    recorder: RunTrajectoryRecorder | None = None,
 ) -> PlanPipelineRun:
     """Assemble the Phase-2 plan LangGraph and return its async ``run`` callable.
 
@@ -278,7 +281,15 @@ def build_plan_pipeline(
         """
         # Every Planner run — first plan or a refine — is one global iteration (L3, ADR 0056).
         state.total_iterations += 1
-        if state.pending_feedback is not None and state.manifest is not None:
+        is_refine = state.pending_feedback is not None and state.manifest is not None
+        # Stamp the round the upcoming billed call(s) belong to (ADR 0098); the provider-side
+        # capture sees the content but not which round/stage it belongs to.
+        if recorder is not None:
+            recorder.enter_stage(
+                round_index=state.total_iterations, stage="refine" if is_refine else "plan"
+            )
+        if is_refine:
+            assert state.pending_feedback is not None and state.manifest is not None
             result = await planner.refine(
                 prior_manifest=state.manifest,
                 attack_spec=state.attack_spec,
@@ -289,6 +300,9 @@ def build_plan_pipeline(
         else:
             result = await planner.plan(state.attack_spec, preferences=state.preferences)
         state.plan_result = result
+        # The Planner's outcome is its decision dimension (planned / route-back / cannot-plan).
+        if recorder is not None:
+            recorder.routing_event(result.outcome.value)
 
         if result.outcome is PlanOutcome.PLANNED:
             state.manifest = result.manifest
@@ -323,9 +337,13 @@ def build_plan_pipeline(
         to control flow (``architecture.md §1.5``).
         """
         assert state.manifest is not None  # plan_node set it before routing here
+        if recorder is not None:
+            recorder.enter_stage(round_index=state.total_iterations, stage="jury_review")
         verdict = await jury.review(manifest=state.manifest, attack_spec=state.attack_spec)
         state.verdict = verdict
         state.verdict_history = [*state.verdict_history, verdict.verdict]
+        if recorder is not None:
+            recorder.routing_event(verdict.verdict.value)
 
         if verdict.verdict is Verdict.APPROVE:
             # Mechanical rubric-floor backstop (mirrors ADR 0067): an ``approve`` whose dimension
@@ -391,6 +409,10 @@ def build_plan_pipeline(
         """
         assert state.manifest is not None  # reached only on a ship path (jury approve / low-conf)
         result = validator.validate(state.manifest)
+        # The cross-check is mechanical (no agent_call), but its pass/fail is part of the story.
+        if recorder is not None:
+            recorder.enter_stage(round_index=state.total_iterations, stage="semantic_cross_check")
+            recorder.routing_event("cross_check_pass" if result.passed else "cross_check_findings")
         if result.passed:
             state.status = (
                 PlanPipelineStatus.PLANNED_LOW_CONFIDENCE
@@ -502,6 +524,7 @@ async def run_plan_pipeline(
     validator: _CrossCheckValidatorLike,
     preferences: str | None = None,
     refinement_cap: int = DEFAULT_REFINEMENT_CAP,
+    recorder: RunTrajectoryRecorder | None = None,
 ) -> PlanPipelineOutcome:
     """Run the Phase-2 plan pipeline and return a ``PlanPipelineOutcome``.
 
@@ -510,9 +533,16 @@ async def run_plan_pipeline(
     halts — is **returned** (never raised), so the Task-6 ``plan`` verb owns the halt-vs-route-back
     -vs-ship policy. (``Planner.refine`` may still raise ``PlanningError`` on patch-budget
     exhaustion; that propagates as a hard internal failure, mirroring ``Extractor.refine``.)
+
+    When ``recorder`` is supplied, the per-round agent trajectory is captured to the run dir
+    (ADR 0098); ``None`` (eval/tests not exercising persistence) leaves behaviour unchanged.
     """
     run = build_plan_pipeline(
-        planner=planner, jury=jury, validator=validator, refinement_cap=refinement_cap
+        planner=planner,
+        jury=jury,
+        validator=validator,
+        refinement_cap=refinement_cap,
+        recorder=recorder,
     )
     final = await run(PlanPipelineState(attack_spec=attack_spec, preferences=preferences))
     return finalize_plan_outcome(final)

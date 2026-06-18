@@ -20,14 +20,26 @@ from cyberlab_gen.state.run_store import (
     RunStatus,
     RunStore,
 )
+from cyberlab_gen.state.trajectory import (
+    AgentCallRecord,
+    MessageRef,
+    RoutingEventRecord,
+    RunTrajectoryRecorder,
+    TrajectoryRecordKind,
+)
 
 __all__ = [
+    "AgentCallRecord",
     "LocalState",
+    "MessageRef",
+    "RoutingEventRecord",
     "RunHandle",
     "RunKind",
     "RunLineage",
     "RunRecord",
     "RunStatus",
     "RunStore",
+    "RunTrajectoryRecorder",
+    "TrajectoryRecordKind",
     "UserConfig",
 ]

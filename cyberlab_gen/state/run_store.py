@@ -34,6 +34,7 @@ swallowed so persistence can never mask the original error that is propagating.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import UTC, datetime
@@ -66,6 +67,14 @@ MANIFEST_FILENAME = (
 JURY_VERDICT_FILENAME = "jury-verdict.yaml"
 ENRICHMENT_FILENAME = "enrichment.yaml"
 RUN_LOG_FILENAME = "run.log"
+#: Append-only, ordered event log of the per-round agent trajectory (Item 1; ADR 0098).
+#: One JSON object per line; reading the lines in order reconstructs what every agent did
+#: and why, round by round. Distinct from the final artifacts, which keep only the last state.
+TRAJECTORY_FILENAME = "trajectory.jsonl"
+#: Subdirectory holding content-addressed input blobs the trajectory references by hash, so a
+#: large, constant input (the system prompt, the blog body) is stored once and not duplicated
+#: across rounds. Registered in :attr:`RunRecord.artifacts` as ``"blobs/"`` once it is used.
+BLOBS_DIRNAME = "blobs"
 
 _MAX_SLUG_LEN = 48
 
@@ -183,9 +192,46 @@ class RunHandle:
         """
         payload = content if isinstance(content, str) else _serialize(content, name)
         if self._write_text(name, payload):
-            if name not in self._record.artifacts:
-                self._record.artifacts.append(name)
-            self._flush()
+            self._register_artifact(name)
+
+    def write_blob(self, content: str) -> str:
+        """Store ``content`` once under ``blobs/`` keyed by its SHA-256; return the hex digest.
+
+        Content-addressed: identical content is written exactly once, so a large constant
+        input (the system prompt, the blog body) referenced from many trajectory rounds costs
+        one file, not one per round. The returned digest is the reference the caller records in
+        the trajectory line. Best-effort: the digest is always returned even if the write fails
+        (the trajectory still records the reference; the blob is simply absent in a partial run).
+        """
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        name = f"{BLOBS_DIRNAME}/{digest}.txt"
+        target = self._directory / name
+        if target.exists():
+            return digest  # already stored — dedup
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("run-store: failed to create %s in %s", BLOBS_DIRNAME, self._directory)
+            return digest
+        if self._write_text(name, content):
+            self._register_artifact(f"{BLOBS_DIRNAME}/")
+        return digest
+
+    def append_jsonl(self, name: str, record: BaseModel) -> None:
+        """Append ``record`` as one JSON line to ``<dir>/<name>`` and register the file once.
+
+        The append-only event log (``trajectory.jsonl``): each call adds exactly one line and
+        never rewrites the file, so a halt/crash/Ctrl-C keeps every round already written. The
+        filename is recorded in :attr:`RunRecord.artifacts` on first use. Best-effort.
+        """
+        if self._append_text(name, record.model_dump_json() + "\n"):
+            self._register_artifact(name)
+
+    def _register_artifact(self, name: str) -> None:
+        """Record ``name`` in :attr:`RunRecord.artifacts` (deduplicated) and re-flush."""
+        if name not in self._record.artifacts:
+            self._record.artifacts.append(name)
+        self._flush()
 
     def write_cost(self, ledger: CostLedger) -> None:
         """Persist the per-agent/per-model cost breakdown (``cost.yaml``).
@@ -240,6 +286,16 @@ class RunHandle:
             (self._directory / name).write_text(text, encoding="utf-8")
         except OSError:
             logger.warning("run-store: failed to write %s in %s", name, self._directory)
+            return False
+        return True
+
+    def _append_text(self, name: str, text: str) -> bool:
+        """Append ``text`` to ``<dir>/<name>``; return whether it succeeded. Best-effort."""
+        try:
+            with (self._directory / name).open("a", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError:
+            logger.warning("run-store: failed to append %s in %s", name, self._directory)
             return False
         return True
 
@@ -332,12 +388,14 @@ def _serialize(model: BaseModel, name: str) -> str:
 
 
 __all__ = [
+    "BLOBS_DIRNAME",
     "COST_FILENAME",
     "ENRICHMENT_FILENAME",
     "JURY_VERDICT_FILENAME",
     "RUN_LOG_FILENAME",
     "RUN_RECORD_FILENAME",
     "SPEC_FILENAME",
+    "TRAJECTORY_FILENAME",
     "RunHandle",
     "RunKind",
     "RunLineage",

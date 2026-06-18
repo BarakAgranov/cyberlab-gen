@@ -273,6 +273,7 @@ def _build_extract_runner(
         validator=StaticSchemaValidator(registries=registries),
         jury=ExtractorJury(provider=provider, registry=registry, registries=registries),
         state=state,
+        provider=provider,  # held so the trajectory recorder attaches to it at run start (ADR 0098)
     )
 
 
@@ -382,6 +383,7 @@ def _build_plan_runner(
         planner=Planner(provider=provider, registry=registry, registries=registries),
         jury=PlannerJury(provider=provider, registry=registry, registries=registries),
         validator=SemanticCrossCheckValidator(registries=registries),
+        provider=provider,  # held so the trajectory recorder attaches to it at run start (ADR 0098)
     )
 
 

@@ -25,6 +25,7 @@ from cyberlab_gen.providers.base import (
     ToolDefinition,
     ToolExecutor,
     ToolResult,
+    TrajectorySink,
 )
 from cyberlab_gen.providers.cost_ledger import (
     DEFAULT_CATASTROPHE_CEILING_USD,
@@ -81,6 +82,7 @@ __all__ = [
     "ToolDefinition",
     "ToolExecutor",
     "ToolResult",
+    "TrajectorySink",
     "UnmatchedMockCall",
     "build_provider_registry",
     "compute_cost",

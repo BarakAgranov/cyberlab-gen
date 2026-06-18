@@ -58,8 +58,10 @@ if TYPE_CHECKING:
     from cyberlab_gen.agents.planner.planner import Planner
     from cyberlab_gen.agents.planner_jury.jury import PlannerJury
     from cyberlab_gen.providers.cost_ledger import CostLedger
+    from cyberlab_gen.providers.cost_recording_provider import CostRecordingProvider
     from cyberlab_gen.schemas.attack_spec import AttackSpec
     from cyberlab_gen.state.run_store import RunHandle, RunStore
+    from cyberlab_gen.state.trajectory import RunTrajectoryRecorder
     from cyberlab_gen.validators.semantic_cross_check_validator import SemanticCrossCheckValidator
 
 logger = logging.getLogger(__name__)
@@ -143,10 +145,30 @@ class PipelinePlanRunner:
         planner: Planner,
         jury: PlannerJury,
         validator: SemanticCrossCheckValidator,
+        provider: CostRecordingProvider | None = None,
     ) -> None:
         self._planner = planner
         self._jury = jury
         self._validator = validator
+        # The shared CostRecordingProvider the agents bill through; held so the trajectory recorder
+        # can be attached at run start (the provider is built before the run handle exists).
+        self._provider = provider
+        self._recorder: RunTrajectoryRecorder | None = None
+
+    def enable_trajectory(self, handle: RunHandle) -> None:
+        """Capture the per-round agent trajectory to ``handle``'s run dir (Item 1, ADR 0098).
+
+        Mirrors the extract runner: called at run start once the handle exists. Wires the recorder
+        to the shared provider (every billed call's content) and to the plan orchestrator nodes (the
+        round/outcome half, via :meth:`run`'s ``run_plan_pipeline`` call). No-op without a provider.
+        """
+        if self._provider is None:
+            return
+        from cyberlab_gen.state.trajectory import RunTrajectoryRecorder
+
+        recorder = RunTrajectoryRecorder(handle)
+        self._recorder = recorder
+        self._provider.set_trajectory_sink(recorder)
 
     def run(self, attack_spec: AttackSpec, *, ledger: CostLedger) -> PlanRunResult:
         # The agents bill via their CostRecordingProvider; the runner needs no direct ledger access
@@ -158,6 +180,7 @@ class PipelinePlanRunner:
                 planner=self._planner,
                 jury=self._jury,
                 validator=self._validator,
+                recorder=self._recorder,
             )
         )
         return _outcome_to_run_result(outcome)
@@ -279,6 +302,9 @@ def run_plan(
             code_version=_code_version(),
         ),
     )
+    # Capture the per-round agent trajectory to the run dir (ADR 0098), alongside the artifacts.
+    if isinstance(runner, PipelinePlanRunner):
+        runner.enable_trajectory(handle)
     result: PlanRunResult | None = None
     path: Path | None = None
     try:
