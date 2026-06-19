@@ -109,11 +109,13 @@ def test_record_from_shipped_run_reads_manifest_metrics() -> None:
     rec = record_from_plan_run(
         blog_id="b",
         run_index=0,
-        status=PlanPipelineStatus.PLANNED,
+        status=PlanPipelineStatus.PLANNED_LOW_CONFIDENCE,
         cost_usd=Decimal("0.05"),
         manifest=manifest,
         facet_proposals=2,
-        verdict=Verdict.APPROVE,
+        verdict=Verdict.REVISE,
+        low_jury_confidence=True,
+        halt_reason="shipped with unresolved jury feedback",
     )
     assert rec.shipped is True
     assert rec.layer2_passed is True
@@ -123,6 +125,10 @@ def test_record_from_shipped_run_reads_manifest_metrics() -> None:
     assert rec.repro_distribution.demonstration_only == 1
     assert rec.manifest_field_coverage == 1.0
     assert rec.facet_proposals == 2
+    # the passthrough fields are threaded onto the record (not dropped).
+    assert rec.verdict is Verdict.REVISE
+    assert rec.low_jury_confidence is True
+    assert rec.halt_reason == "shipped with unresolved jury feedback"
 
 
 def test_record_from_route_back_has_no_manifest_metrics() -> None:

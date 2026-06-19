@@ -218,8 +218,9 @@ runtime the lab provisions against (§6.2).
 
 `runtime:netlify` — **a non-first-class, proposed facet the registry lacks.**
 
-First-class v1 runtimes are `{aws, azure, gcp, github, local}`
-(`registry-details.md §3.3`). Netlify is none of these, so the Planner must
+The runtimes the registry **seeds** are `{aws, azure, gcp, github, local}`
+(`registry-details.md §3.3` — `aws`/`azure`/`gcp`/`github` are `first_class: true`, `local` is a
+seeded `first_class: false` best-effort runtime). Netlify is seeded by none of these, so the Planner must
 **propose** `runtime:netlify` (a `first_class: false` facet that resolves in no
 registry today). This is the load-bearing coverage role of this blog: it is the
 `runtime:*` Planner-proposal trigger. The proposal flows to the post-Planner
@@ -352,7 +353,7 @@ Per `schema.md §4.8` lines 339–356.
   `supply_chain` lab-class signals point at a single-CVE-in-a-platform-library
   chain reproduced by **provisioning a Netlify Next.js site**. That provisioning
   target forces a **`runtime:netlify` Planner proposal that the registry lacks** —
-  Netlify is outside the first-class set `{aws, azure, gcp, github, local}`, so
+  Netlify is outside the seeded set `{aws, azure, gcp, github, local}`, so
   this is the required **non-first-class runtime trigger**. The blast radius is a
   property of the dependency/supply chain (one library bug → every consuming
   Next.js-on-Netlify site), which is why `supply_chain` is the headline shape over
@@ -425,7 +426,7 @@ Extractor on the same source might miss.
   reproducing the attack requires deploying a Next.js site with the
   `@netlify/ipx` plugin onto Netlify (or running the handler standalone), and the
   bug lives in Netlify's platform-shipped library and edge cache. So
-  `runtime:netlify` is correct, and it is **outside** the first-class set
+  `runtime:netlify` is correct, and it is **outside** the seeded set
   `{aws, azure, gcp, github, local}` → a true non-first-class runtime trigger the
   registry lacks. An LLM could be fooled into emitting `runtime:nextjs` (Next.js
   is the *framework* — `target:nextjs` is fine, `runtime:nextjs` is wrong) or

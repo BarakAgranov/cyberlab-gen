@@ -283,7 +283,7 @@ class ProviderBackedEvalRunner:
                 # blog (blog-fatal: truncation, malformed, jury/static-schema reject, bad
                 # URL), abort the whole run (global: no served model, auth/quota/
                 # config), or treat it as a transient blip. See
-                # _classify_pipeline_failure.
+                # classify_pipeline_failure.
                 self._persist_run_dir(
                     handle,
                     runner=runner,

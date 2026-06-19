@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from cyberlab_gen.cli.plan import PlanRunner
+    from cyberlab_gen.framework.plan_orchestrator import PlanPipelineStatus
     from cyberlab_gen.providers.cost_ledger import CostLedger
     from cyberlab_gen.schemas.attack_spec import AttackSpec
     from cyberlab_gen.state.run_store import RunHandle, RunStore
@@ -131,7 +132,14 @@ class ProviderBackedPlanEvalRunner:
                 # DIRECT drive of the runner seam — never the verb's run_plan (no promotion, ADR 0102).
                 result = runner.run(attack_spec, ledger=ledger)
             except CyberlabGenError as exc:
-                self._persist(handle, manifest=None, verdict=None, ledger=ledger, shipped=False)
+                self._persist(
+                    handle,
+                    manifest=None,
+                    verdict=None,
+                    ledger=ledger,
+                    shipped=False,
+                    halt_reason=str(exc),  # an infra failure -> FAILED, but keep the reason on disk
+                )
                 return self._failure_record(
                     blog_id,
                     run_index,
@@ -159,6 +167,10 @@ class ProviderBackedPlanEvalRunner:
                 ledger=ledger,
                 shipped=record.shipped,
                 low_confidence=result.low_jury_confidence,
+                # A RETURNED non-ship terminal (route-back / halt) records its true status + reason in
+                # the run dir, exactly as the `plan` verb does — not a reasonless FAILED (ADR 0102).
+                plan_status=result.status,
+                halt_reason=result.halt_reason,
             )
             return record
         except BaseException as exc:  # persist the partial, then re-raise (KeyboardInterrupt/crash)
@@ -208,13 +220,22 @@ class ProviderBackedPlanEvalRunner:
         ledger: CostLedger,
         shipped: bool,
         low_confidence: bool = False,
+        plan_status: PlanPipelineStatus | None = None,
+        halt_reason: str | None = None,
         interrupted: bool = False,
         crash_reason: str | None = None,
     ) -> None:
-        """Best-effort run-dir persistence using the shared service (no overlay write, ADR 0102)."""
+        """Best-effort run-dir persistence using the shared service (no overlay write, ADR 0102).
+
+        Resolves the run-store status with the **same** map the ``plan`` verb uses
+        (``PLAN_STATUS_TO_RUN_STATUS``) for a returned non-ship terminal, so the eval run dir records
+        the true status + halt_reason a route-back / halt carries — not a reasonless ``FAILED`` (the
+        adversarial-review finding; one shared mapping per ADR 0102 / ``seams §2``).
+        """
         if handle is None:
             return
         from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict
+        from cyberlab_gen.cli.plan import PLAN_STATUS_TO_RUN_STATUS
         from cyberlab_gen.schemas.manifest import LabManifest
         from cyberlab_gen.state.run_persistence import persist_plan_artifacts
         from cyberlab_gen.state.run_store import RunStatus
@@ -228,14 +249,22 @@ class ProviderBackedPlanEvalRunner:
         )
         handle.write_cost(ledger)
         if interrupted:
-            status = RunStatus.INTERRUPTED
+            run_status, reason = RunStatus.INTERRUPTED, "interrupted"
         elif crash_reason is not None:
-            status = RunStatus.CRASHED
+            run_status, reason = RunStatus.CRASHED, crash_reason
         elif shipped:
-            status = RunStatus.SHIPPED_LOW_CONFIDENCE if low_confidence else RunStatus.SHIPPED
+            run_status = RunStatus.SHIPPED_LOW_CONFIDENCE if low_confidence else RunStatus.SHIPPED
+            reason = None
+        elif plan_status is not None:
+            # a RETURNED non-ship terminal (route-back / halt) — map it the way the verb does.
+            run_status, reason = (
+                PLAN_STATUS_TO_RUN_STATUS.get(plan_status, RunStatus.FAILED),
+                halt_reason,
+            )
         else:
-            status = RunStatus.FAILED
-        handle.finalize(status, halt_reason=crash_reason)
+            # an infra failure (raised CyberlabGenError) carried no terminal status.
+            run_status, reason = RunStatus.FAILED, halt_reason
+        handle.finalize(run_status, halt_reason=reason)
 
     def _failure_record(
         self,

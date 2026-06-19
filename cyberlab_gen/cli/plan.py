@@ -102,8 +102,9 @@ OVERLAY_DIRNAME = "registry-overlay"
 #: Lossy bridge from the plan pipeline's terminal taxonomy to the run-store taxonomy. The two
 #: taxonomies diverging is tracked debt (``dev/phase-2-seams.md §2`` — one shared mapping is the
 #: deferred consolidation); this is its third consumer, mapped pragmatically with the halt_reason
-#: carrying the precise plan-pipeline status.
-_PLAN_STATUS_TO_RUN_STATUS: dict[PlanPipelineStatus, RunStatus] = {
+#: carrying the precise plan-pipeline status. Public so the plan **eval** runner records the same
+#: status fidelity as the verb (ADR 0102 — one shared mapping, a step toward the seams §2 convergence).
+PLAN_STATUS_TO_RUN_STATUS: dict[PlanPipelineStatus, RunStatus] = {
     PlanPipelineStatus.PLANNED: RunStatus.SHIPPED,
     PlanPipelineStatus.PLANNED_LOW_CONFIDENCE: RunStatus.SHIPPED_LOW_CONFIDENCE,
     PlanPipelineStatus.HALTED_REJECT: RunStatus.HALTED_REJECT,
@@ -831,7 +832,7 @@ def _plan_run_status(
     # the manifest was plan-ready but not accepted, so the run is ABORTED, not SHIPPED.
     if result.shipped() and path is None:
         return RunStatus.ABORTED, None
-    return _PLAN_STATUS_TO_RUN_STATUS.get(result.status, RunStatus.FAILED), result.halt_reason
+    return PLAN_STATUS_TO_RUN_STATUS.get(result.status, RunStatus.FAILED), result.halt_reason
 
 
 def _exception_status(exc: BaseException) -> tuple[RunStatus, str | None]:
@@ -869,6 +870,7 @@ def _code_version() -> str | None:
 __all__ = [
     "LAB_MANIFEST_FILENAME",
     "PLANNER_REFUSAL_FILENAME",
+    "PLAN_STATUS_TO_RUN_STATUS",
     "PipelinePlanRunner",
     "PlanRunResult",
     "PlanRunner",

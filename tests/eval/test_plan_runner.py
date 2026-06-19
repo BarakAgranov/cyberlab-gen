@@ -151,6 +151,33 @@ def test_provider_runner_maps_shipped_result() -> None:
     assert rec.lab_level is not None
 
 
+def test_provider_runner_records_returned_halt_status_and_reason(tmp_path: Path) -> None:
+    # A RETURNED non-ship terminal (e.g. HALTED_REJECT) must land in the run dir with its TRUE status
+    # + halt_reason — the same fidelity the `plan` verb records — not a reasonless FAILED (ADR 0102).
+    import json
+
+    from cyberlab_gen.framework.plan_orchestrator import PlanPipelineStatus
+
+    result = make_plan_result(
+        status=PlanPipelineStatus.HALTED_REJECT,
+        manifest=None,
+        verdict=None,
+        halt_reason="jury rejected the manifest",
+    )
+    runner = ProviderBackedPlanEvalRunner(
+        plan_runner_factory=lambda _ledger: FakePlanRunner(result=result),
+        attack_spec_for=lambda _blog_id: make_spec(),
+        run_store=RunStore(tmp_path / "runs"),
+    )
+    rec = runner.plan_once("a", run_index=0)
+    assert rec.shipped is False
+    run_jsons = list((tmp_path / "runs").rglob("run.json"))
+    assert len(run_jsons) == 1
+    record = json.loads(run_jsons[0].read_text(encoding="utf-8"))
+    assert record["status"] == "halted_reject"  # distinct status, not a flattened "failed"
+    assert record["halt_reason"] == "jury rejected the manifest"
+
+
 def test_provider_runner_classifies_infra_failure() -> None:
     from cyberlab_gen.errors import HardFailure
 

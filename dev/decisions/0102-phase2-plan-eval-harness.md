@@ -70,10 +70,13 @@ resolve architectural ambiguities silently).
 5. **The curated set grows with REAL published blogs, not synthetic fixtures.** Synthetic blogs
    reverse-engineered to hit a coverage type test nothing (you assert an output you authored the
    input to produce); real blogs measure real-world behaviour (`§7.2`). The required **`runtime:*`
-   trigger** blog must *genuinely* warrant a facet outside the first-class set
-   {`runtime:aws`, `runtime:azure`, `runtime:gcp`, `runtime:github`, `runtime:local`}
-   (`registry-details.md §3.3`) — a real emergent Planner proposal (e.g. `runtime:cloudflare`),
-   verified adversarially, not a blog picked because we know which proposal it forces. Walks are the
+   trigger** blog must *genuinely* warrant a facet the registry **seeds nowhere** — outside the
+   seeded runtime set {`runtime:aws`, `runtime:azure`, `runtime:gcp`, `runtime:github`,
+   `runtime:local`} (`registry-details.md §3.3`; `aws`/`azure`/`gcp`/`github` are `first_class: true`,
+   `local` is a *seeded* `first_class: false` best-effort runtime — none of the five needs proposing).
+   The chosen blog targets **Netlify**, which is seeded nowhere, so the Planner must propose
+   `runtime:netlify` — a real emergent proposal, verified adversarially, not a blog picked because we
+   know which proposal it forces. Walks are the
    walker's **independent** expected-behaviour, not the system's own output frozen and asserted back.
    Copyright: store URLs + walks + minimal-necessary verbatim excerpts, never wholesale article text.
 
