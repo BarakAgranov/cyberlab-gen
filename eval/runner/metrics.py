@@ -96,16 +96,22 @@ class BlogRunRecord(InternalModel):
     failure_kind: str | None = None
 
 
-def _mean(values: list[float]) -> float:
+def mean_of(values: list[float]) -> float:
+    """Arithmetic mean; ``0.0`` for an empty list. Shared with the plan-stage metrics (ADR 0102)."""
     return statistics.fmean(values) if values else 0.0
 
 
-def _median(values: list[float]) -> float:
+def median_of(values: list[float]) -> float:
+    """Median; ``0.0`` for an empty list. Shared with the plan-stage metrics (ADR 0102)."""
     return statistics.median(values) if values else 0.0
 
 
-def _cv(values: list[float]) -> float:
-    """Coefficient of variation (stddev / mean); 0 for <2 samples or zero mean."""
+def coefficient_of_variation(values: list[float]) -> float:
+    """Coefficient of variation (stddev / mean); 0 for <2 samples or zero mean.
+
+    Shared with :mod:`eval.runner.plan_metrics` so the high-variance signal (``eval.md §7.6``) has
+    one definition across the Extractor- and plan-stage aggregates (ADR 0102).
+    """
     if len(values) < 2:
         return 0.0
     m = statistics.fmean(values)
@@ -151,7 +157,7 @@ class BlogAggregate(ArtifactModel):
         struct = [r.structural_completeness for r in runs]
         costs = [r.cost_usd for r in runs]
         mean_cost = sum(costs, start=Decimal("0")) / n if n else Decimal("0")
-        cv = _cv(struct)
+        cv = coefficient_of_variation(struct)
         return cls(
             blog_id=blog_id,
             runs=n,
@@ -160,14 +166,14 @@ class BlogAggregate(ArtifactModel):
             if n
             else 0.0,
             mean_cost_usd=mean_cost,
-            mean_completeness_score=_mean([r.completeness_score for r in runs]),
-            mean_structural_completeness=_mean(struct),
-            median_structural_completeness=_median(struct),
+            mean_completeness_score=mean_of([r.completeness_score for r in runs]),
+            mean_structural_completeness=mean_of(struct),
+            median_structural_completeness=median_of(struct),
             structural_completeness_cv=cv,
             high_variance=cv > HIGH_VARIANCE_CV,
             total_value_type_proposals=sum(r.value_type_proposals for r in runs),
             total_facet_proposals=sum(r.facet_proposals for r in runs),
-            mean_extras_count=_mean([float(r.extras_count) for r in runs]),
+            mean_extras_count=mean_of([float(r.extras_count) for r in runs]),
         )
 
 
@@ -175,5 +181,8 @@ __all__ = [
     "HIGH_VARIANCE_CV",
     "BlogAggregate",
     "BlogRunRecord",
+    "coefficient_of_variation",
+    "mean_of",
+    "median_of",
     "structural_completeness",
 ]
