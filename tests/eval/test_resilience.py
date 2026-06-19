@@ -53,7 +53,9 @@ def test_provider_backed_run_skips_unresolved_url_blog() -> None:
     assert set(skipped) == {_TBD_BLOG}
     assert skipped[_TBD_BLOG]  # non-empty reason
     assert _TBD_BLOG not in report.blog_ids
-    assert len(report.blog_ids) == 2
+    # every blog with a resolved (non-TBD) URL ran; only the TBD fixture was skipped.
+    expected_ran = sum(1 for e in manifest.curated if e.url_is_resolved())
+    assert len(report.blog_ids) == expected_ran
 
 
 def test_offline_run_does_not_skip_the_tbd_blog() -> None:

@@ -51,7 +51,8 @@ def test_archive_filename_carries_rotation_generation(tmp_path: Path) -> None:
 
 def test_overall_static_schema_pass_rate_and_valid_spec_count() -> None:
     manifest = load_manifest()
-    # 3 curated blogs: make the first blog fail static schema validation on one of its 3 runs.
+    # Make the first blog fail static schema validation on one of its 3 runs (size-agnostic over the
+    # curated set, which grows across phases).
     first = manifest.curated[0].id
     scripted = {
         first: [
@@ -63,9 +64,10 @@ def test_overall_static_schema_pass_rate_and_valid_spec_count() -> None:
     report = run_blog_set(
         manifest=manifest, runner=FakeEvalRunner(scripted), n=3, provider_backed=False
     )
-    # 9 runs total, 1 failed static schema validation → 8/9.
-    assert abs(report.overall_static_schema_pass_rate() - 8 / 9) < 1e-9
-    # the first blog had a failing run → not a clean valid-spec blog; the other 2 are.
+    # N=3 over every curated blog → one failed run out of (3 * curated) total.
+    total_runs = 3 * len(manifest.curated)
+    assert abs(report.overall_static_schema_pass_rate() - (total_runs - 1) / total_runs) < 1e-9
+    # the first blog had a failing run → not a clean valid-spec blog; all the others are.
     assert report.blogs_with_valid_spec() == len(manifest.curated) - 1
 
 

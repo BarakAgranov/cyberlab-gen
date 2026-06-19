@@ -79,3 +79,41 @@ These six rows are the Phase-1 calibration record for the `v0.2` tag
 evidence that drove it). When the first provider-backed `just eval` run lands,
 append a new section with the real numbers — do not rewrite this one (the
 architecture-default baseline is part of the audit trail).
+
+## Asymmetric jury calibration applies to the Planner-Jury too (Phase 2)
+
+Source: `agents.md §5.8` (Planner-Jury), `eval.md §7.5`, ADR 0102.
+
+The asymmetric discipline above is **per-jury and identical in direction** for the Planner-Jury:
+tune its floor *upward* on observed Planner-Jury false-approval, never downward on false-rejection.
+The Phase-2 review tooling (`eval/runner/review.py`) now tags each reviewed verdict with a
+`JuryKind` (`extractor` | `planner`) and reports per-jury false-approval / false-rejection rates, so
+the two juries are calibrated **independently** under the same rule.
+
+## Phase 2 calibration items (Task 10) — UNLOCKED placeholders, pending the architect's plan-eval run
+
+Source: `implementation-plan.md §5.4` (the six items Phase 2 locks), `eval.md §7.4`/§7.5. **The
+plan-stage eval harness that produces the driving evidence shipped in Task 10** (`eval/runner/plan_*`,
+invoked via `just eval --stage plan`). **No provider-backed plan run has been performed** (eval is
+user-run, real money — `eval.md §7.2`); the values below are the architecture defaults and remain
+**placeholders**. The architect's first provider-backed `just eval --stage plan` over the curated set
+re-derives and locks them at the `v0.3` tag.
+
+| Item (`implementation-plan.md §5.4`) | Placeholder value | Where | What the first plan-eval run re-derives |
+|---|---|---|---|
+| **Planner token budget** | Provider/agent default (no fixed cap; tracked per call via the cost ledger) | (Planner agent) | `PlanRunRecord.cost_usd` / `PlanBlogAggregate.mean_cost_usd` over the curated specs set the cap from observed per-blog token usage. |
+| **Planner per-stage retry count** | Architecture default (`architecture.md §8.4`) | (plan refinement coordinator) | The Layer-2 cross-check pass rate (`PlanEvalReport.overall_layer2_pass_rate`; exit criterion ≥90%) validates the retry count against the observed structural-failure rate. |
+| **Planner-Jury threshold (asymmetric)** | 0.7 — Planner-Jury rubric floor (`agents.md §5.8`) | `planner_jury` | The per-jury review tooling (`review.py`, `JuryKind.PLANNER`) produces Planner-Jury false-approval / false-rejection rates; tightened *upward* on false-approval per the discipline above (never loosened). |
+| **`on_dependency_failure` default = `warn`** | `warn` — `PhaseBlock.on_dependency_failure` default | `schemas/manifest.py` | Confirmed `warn` post-evidence once real manifests show how often phases declare a non-default value. |
+| **Per-run auto-accept proposal cap (`--auto`)** | 5 — `interrupt.DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP` | `cli/interrupt.py` | The Planner now contributes **facet** proposals too (`PlanRunRecord.facet_proposals` / `PlanBlogAggregate.total_facet_proposals`); the run checks whether the curated set routinely exceeds 5 facet proposals/run. |
+| **Pre-Planner external-API budget per run** | 100 / run — `framework.enrichment._DEFAULT_BUDGET` | `framework/enrichment.py` | Calibrated against observed enrichment usage on the curated set. |
+
+**Walk-review gate (ADR 0102).** The five Phase-2 curated additions ship with **agent-drafted,
+provisional** ground-truth walks (sourced from the real blogs but not independently human-verified —
+an LLM reading the source is the same model class being evaluated, so it is not independent ground
+truth). **No calibration value above may be locked against an unreviewed walk.** The architect's paid
+pass **reviews the walks first** (promoting them from provisional to verified), *then* calibrates.
+
+These rows are the Phase-2 calibration record for the upcoming `v0.3` tag. When the first
+provider-backed `just eval --stage plan` run lands, append a new section with the real numbers — do
+not rewrite this one (the placeholder baseline is part of the audit trail).

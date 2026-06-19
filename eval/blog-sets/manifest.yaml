@@ -39,6 +39,12 @@ curated:
     publisher: Wiz
     accessed_date: 2026-05-20
     walk: dev/curated-blog-walks/aws-codebuild-actor-id-regex-bypass.md
+    # Committed AttackSpec fixture (ADR 0102): the one runnable `plan`-eval input shipped today, so
+    # `just eval --stage plan` is provably runnable without a live extract. Verified schema-current
+    # (spec_version == CURRENT_ATTACK_SPEC_VERSION; loads via schemas.loading.load_spec) by
+    # tests/eval/test_manifest.py::test_codebuild_attack_spec_fixture_is_schema_current.
+    # Regeneration path: `cyberlab-gen extract <url> --auto` then copy the run-dir attack-spec.yaml here.
+    attack_spec: tests/integration/fixtures/codebuild-attack-spec.yaml
     coverage_tags:
       - cloud:aws
       - platform:github
@@ -65,4 +71,101 @@ curated:
       - long_blog:chunking
       - thesis:ttp_chain
 
-held_out: []                             # empty in Phase 1; populated Phase 4 per eval.md §7.3 / implementation-plan.md §1.6
+  # --- Phase-2 additions (Task 10, ADR 0102): five REAL published blogs grown to 8 total, covering
+  # the four required dimensions (multi-cloud, substantive vulnerability_story, mixed reproducibility,
+  # a runtime:* Planner-proposal trigger) and diversifying cloud coverage off the all-AWS Phase-1 set.
+  # `shape:` is open-set (ADR 0014); the documented v1 trio (aws_ttp/supply_chain/incident_analysis)
+  # does not cleanly fit a cloud_provider_flaw / non-AWS disclosure, so accurate open-set shapes are
+  # used and the real signal lives in coverage_tags + the walk (the shape-vocabulary gap is flagged in
+  # each walk's §15). The walks are AGENT-DRAFTED + PROVISIONAL pending a human ground-truth pass
+  # (ADR 0102 / CALIBRATION.md); no attack_spec fixtures are committed for these (the architect
+  # extracts them for the paid plan-eval run), so a provider-backed `--stage plan` run skips them.
+
+  - id: entra-id-actor-token-cross-tenant-global-admin
+    shape: vulnerability_disclosure       # cloud_provider_flaw; open-set (ADR 0014)
+    url: https://dirkjanm.io/obtaining-global-admin-in-every-entra-id-tenant-with-actor-tokens/
+    title: "One Token to rule them all — Global Admin in every Entra ID tenant via Actor tokens (CVE-2025-55241)"
+    publisher: Dirk-Jan Mollema (Outsider Security)
+    accessed_date: 2026-06-19
+    walk: dev/curated-blog-walks/entra-id-actor-token-cross-tenant-global-admin.md
+    coverage_tags:
+      - cloud:azure                   # first non-AWS surface in the set
+      - target:entra_id
+      - shape:vulnerability_disclosure
+      - complexity:complex            # 7 chain steps
+      - vulnerability_disclosure:present   # substantive vulnerability_story (REQUIRED dimension)
+      - thesis:cloud_provider_flaw
+      - cross_tenant
+      - mixed_reproducibility
+
+  - id: confusedfunction-gcp-cloud-functions-privesc
+    shape: vulnerability_disclosure       # GCP privilege-escalation; open-set
+    url: https://www.tenable.com/blog/confusedfunction-a-privilege-escalation-vulnerability-impacting-gcp-cloud-functions
+    title: "ConfusedFunction: A Privilege Escalation Vulnerability Impacting GCP Cloud Functions"
+    publisher: Tenable
+    accessed_date: 2026-06-19
+    walk: dev/curated-blog-walks/confusedfunction-gcp-cloud-functions-privesc.md
+    coverage_tags:
+      - cloud:gcp                     # GCP coverage
+      - target:gcp_cloud_functions
+      - shape:vulnerability_disclosure
+      - complexity:medium             # 6 chain steps
+      - thesis:privilege_escalation
+      - serverless
+
+  - id: netlify-ipx-cache-poisoning-xss-ssrf
+    shape: vulnerability_disclosure       # web/edge platform vuln; open-set
+    url: https://www.netlify.com/blog/netlify-ipx-vulnerability/
+    title: "Netlify IPX image-handler vulnerability (cache poisoning / XSS / SSRF)"
+    publisher: Netlify (with GHSA + researcher corroboration)
+    accessed_date: 2026-06-19
+    walk: dev/curated-blog-walks/netlify-ipx-cache-poisoning-xss-ssrf.md
+    coverage_tags:
+      - runtime:netlify               # NON-first-class runtime → REQUIRED Planner runtime:* proposal trigger
+      - non_first_class_runtime
+      - platform:netlify
+      - target:nextjs
+      - shape:vulnerability_disclosure
+      - complexity:medium             # 5 chain steps
+      - thesis:vulnerability_chain
+      - mixed_reproducibility
+
+  - id: gke-fluentbit-anthos-dual-privesc
+    shape: vulnerability_disclosure       # GCP/Kubernetes privesc research; open-set
+    url: https://unit42.paloaltonetworks.com/google-kubernetes-engine-privilege-escalation-fluentbit-anthos/
+    title: "Google Kubernetes Engine privilege escalation via FluentBit + Anthos"
+    publisher: Unit 42 (Palo Alto Networks)
+    accessed_date: 2026-06-19
+    walk: dev/curated-blog-walks/gke-fluentbit-anthos-dual-privesc.md
+    coverage_tags:
+      - cloud:gcp
+      - platform:kubernetes
+      - target:gke
+      - shape:vulnerability_disclosure
+      - complexity:medium             # 6 chain steps
+      - thesis:privilege_escalation
+      - mixed_reproducibility          # the dedicated mixed example (REQUIRED dimension)
+
+  - id: lucr-3-scattered-spider-multicloud-identity
+    shape: incident_analysis              # threat-actor TTP profile
+    url: https://permiso.io/blog/lucr-3-scattered-spider-getting-saas-y-in-the-cloud
+    title: "LUCR-3: Scattered Spider Getting SaaS-y in the Cloud"
+    publisher: Permiso (p0 Labs)
+    accessed_date: 2026-06-19
+    walk: dev/curated-blog-walks/lucr-3-scattered-spider-multicloud-identity.md
+    coverage_tags:
+      - cloud:aws                     # multi-cloud: the IDP fans out to AWS + Azure + GCP
+      - cloud:azure
+      - cloud:gcp
+      - multi_cloud                   # REQUIRED multi-cloud dimension
+      - multi_platform
+      - platform:okta
+      - platform:github
+      - shape:incident_analysis
+      - complexity:complex            # 10 chain steps
+      - thesis:ttp_chain
+      - incident_analysis:present
+      - defender_techniques:present
+      - mixed_reproducibility
+
+held_out: []                             # empty in Phases 1-2; populated Phase 4 per eval.md §7.3 / implementation-plan.md §1.6
