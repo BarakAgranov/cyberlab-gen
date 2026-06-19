@@ -154,10 +154,10 @@ curated:
     accessed_date: 2026-06-19
     walk: dev/curated-blog-walks/lucr-3-scattered-spider-multicloud-identity.md
     coverage_tags:
-      - cloud:aws                     # multi-cloud: the IDP fans out to AWS + Azure + GCP
-      - cloud:azure
-      - cloud:gcp
-      - multi_cloud                   # REQUIRED multi-cloud dimension
+      - cloud:aws                     # multi-cloud: the IDP fans out to AWS + Azure/M365
+      - cloud:azure                   # (Google Workspace is only minimally touched + is SaaS, not
+                                      #  GCP, so cloud:gcp is NOT tagged here — see the walk §15)
+      - multi_cloud                   # REQUIRED multi-cloud dimension (AWS + Azure = >=2 clouds)
       - multi_platform
       - platform:okta
       - platform:github

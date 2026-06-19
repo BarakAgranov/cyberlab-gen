@@ -14,10 +14,12 @@ end-to-end and maps its narrative onto the AttackSpec structure
 (`docs/schema.md §4.8`). This walk is the curated set's **required multi-cloud
 example**: the compromised identity provider (Okta / Azure AD / Ping) is the
 cross-cloud hub, and the canonical chain deliberately fans out from that one
-identity into **AWS + Azure (M365 / Entra) + GCP (Google Workspace)** so the
-multi-cloud span is genuine, not incidental. It is also an `incident_analysis`
-blog with a substantive defender story (the 27 detection rules in §8) and
-**mixed** lab-level reproducibility.
+identity into **AWS + Azure (M365 / Entra)** so the multi-cloud span is genuine,
+not incidental. (The source also notes *minor* Google Workspace activity —
+mailbox cleanup — but Google Workspace is a SaaS suite, not GCP, so this walk
+does **not** claim a GCP arm; the genuine span is AWS + Azure. See §15.) It is
+also an `incident_analysis` blog with a substantive defender story (the 19
+detection rules in §8) and **mixed** lab-level reproducibility.
 
 ---
 
@@ -31,14 +33,15 @@ blog with a substantive defender story (the 27 detection rules in §8) and
 - **Publisher:** Permiso Security (p0 Labs)
 - **Publisher kind:** `vendor_lab`
 - **Authors:** Permiso p0 Labs (Ian Ahl / p0 Labs team, per byline)
-- **Publication date:** 2023-10
+- **Publication date:** 2023-09-20 (byline: Ian Ahl)
 - **Accessed date:** 2026-06-19 (agent draft)
 - **Content hash:** TBD (the Extractor produces this mechanically)
 
 ## 2. One-paragraph summary
 
-Permiso's p0 Labs profiles LUCR-3 — the cluster that overlaps Scattered Spider,
-Roasted 0ktapus, and Mandiant's UNC3944 — a financially-motivated actor whose
+Permiso's p0 Labs profiles LUCR-3 — the cluster the source overlaps with
+Scattered Spider, Oktapus (0ktapus), Mandiant's UNC3944, and STORM-0875 — a
+financially-motivated actor whose
 defining move is to compromise an **identity provider** (Okta, Azure AD / Entra,
 or Ping) and then pivot into whichever clouds the victim federates from that
 IDP. Because the IDP is the trust anchor for AWS, Azure / M365, and Google
@@ -60,7 +63,7 @@ Per `schema.md §4.8` lines 316–333.
   `privilege_escalation`, `cross_tenant_compromise`.
 - **Summary:** A multi-cloud, identity-centric campaign: compromise the IDP,
   bypass MFA, register an attacker-controlled MFA factor for persistence, then
-  fan out from the IDP into AWS + Azure / M365 + Google Workspace, escalate via
+  fan out from the IDP into AWS + Azure / M365, escalate via
   IAM policy manipulation, harvest secrets, disable cloud logging, and
   exfiltrate data for extortion.
 - **Attacker objective:** Steal IP, source code, customer data, and
@@ -70,8 +73,8 @@ Per `schema.md §4.8` lines 316–333.
 - **Vulnerability story:** **Architectural, not a CVE.** There is no single
   vulnerability disclosure here. The "vulnerability" is a design property: a
   **federated IDP that trusts SMS / push MFA and bridges multiple clouds**
-  means one social-engineered or SIM-swapped identity yields AWS + Azure +
-  Google Workspace simultaneously. Living-off-the-land via native consoles
+  means one social-engineered or SIM-swapped identity yields AWS + Azure / M365
+  simultaneously. Living-off-the-land via native consoles
   evades malware detection; residential VPNs defeat impossible-travel
   heuristics; mailbox-rule and notification cleanup defeats notification-based
   detection. This is flagged for the Extractor in §15 — there is no CVE to
@@ -140,23 +143,26 @@ is auditable per step.
   tenant — provision a test identity, modify its MFA configuration, register an
   external device. No real telco or human factor is needed.
 
-### Chain step 4: SaaS reconnaissance across M365 + Google Workspace
+### Chain step 4: SaaS reconnaissance across Azure / M365
 
 - **Blog excerpt:**
   > Searching through and viewing documents in the various SaaS applications like SharePoint, OneDrive, knowledge applications, ticketing solutions, and chat applications.
 - **Description:** Use the legitimate SaaS interfaces the IDP unlocks to search
   for credentials, deployment and code-signing procedures, and other sensitive
   data — mapping the environment across **Azure / M365** (SharePoint, OneDrive)
-  and **Google Workspace** before touching any cloud control plane.
+  before touching any cloud control plane. (The source also mentions *minor*
+  Google Workspace activity — mailbox cleanup in step 11 of the original — but no
+  substantive Workspace/GCP recon technique, so the cross-cloud fan-out here is
+  IDP → Microsoft cloud, not a third GCP arm; see §15.)
 - **MITRE techniques:** `T1526` (Cloud Service Discovery), `T1087` (Account Discovery)
-- **Clouds touched:** **Azure (M365)** + **GCP (Google Workspace)** — the first cross-cloud fan-out.
-- **Preconditions:** IDP session that federates M365 and Google Workspace (steps 2–3).
-- **Postconditions:** An inventory of secrets locations, runbooks, and target data across two clouds.
+- **Clouds touched:** **Azure (M365)** — the cross-cloud move off the IDP plane into the Microsoft cloud.
+- **Preconditions:** IDP session that federates M365 (steps 2–3).
+- **Postconditions:** An inventory of secrets locations, runbooks, and target data in the Microsoft cloud.
 - **Outputs:** discovered-credential leads (feed steps 5–6)
 - **Reproducibility:** `full`
-- **Why this tier (not a higher one):** Sandbox M365 and Google Workspace
-  tenants populated with mock documents reproduce this search-and-view behavior
-  exactly; nothing about it is unsafe or non-deterministic.
+- **Why this tier (not a higher one):** Sandbox M365 tenants populated with mock
+  documents reproduce this search-and-view behavior exactly; nothing about it is
+  unsafe or non-deterministic.
 
 ### Chain step 5: AWS console recon + privilege escalation (IAM policy manipulation)
 
@@ -272,8 +278,8 @@ surfaces is the **MFA-bypass branch in step 2**: SIM swap *when SMS OTP is
 enabled* versus push fatigue *when it is not* — two mutually-exclusive entry
 techniques selected by the victim's MFA modality, converging on the same
 authenticated session. Beyond that, the cloud-side body (steps 5–9) can be
-walked against any subset of {AWS, Azure, Google Workspace} a victim federates;
-this walk treats the **all-three fan-out as the canonical multi-cloud chain**
+walked against any subset of {AWS, Azure / M365} a victim federates;
+this walk treats the **AWS + Azure fan-out as the canonical multi-cloud chain**
 because that is this blog's required coverage role (§14), and records the
 single-cloud subsets as collapsible variants rather than distinct branches.
 
@@ -281,34 +287,37 @@ single-cloud subsets as collapsible variants rather than distinct branches.
 
 Per `schema.md §4.13`. Walker's best estimate; tagged with who is
 *architecturally* responsible. The multi-cloud span is made explicit here: the
-`target:*` and `runtime:*` sets each name **three clouds plus the IDP hub**.
+`target:*` and `runtime:*` sets each name **two clouds (AWS + Azure) plus the
+IDP hub**.
 
 ### 6.1 `target:*` (Extractor-derived)
 
-`target:aws`, `target:azure`, `target:entra_id`, `target:gcp`, `target:okta`,
+`target:aws`, `target:azure`, `target:entra_id`, `target:okta`,
 `target:github`, `target:aws_iam`.
 
 The **multi-cloud span is genuine here, not incidental**: `target:aws` +
-`target:azure` (with `target:entra_id`) + `target:gcp` are all first-class
-targets of the same chain, bridged by `target:okta` (the IDP hub). This is the
+`target:azure` (with `target:entra_id`) are both first-class targets of the same
+chain, bridged by `target:okta` (the IDP hub). This AWS + Azure span is the
 property that makes this the curated set's required multi-cloud example.
+(`target:gcp` was dropped — the source's only Google-cloud-adjacent activity is
+minor Google **Workspace** mailbox cleanup, which is SaaS, not GCP; see §15.)
 
 ### 6.2 `runtime:*` (Planner-derived; walker's guess)
 
-`runtime:aws`, `runtime:azure`, `runtime:gcp` (all first-class in v1),
-`runtime:github` (first-class). A faithful lab provisions **three cloud
+`runtime:aws`, `runtime:azure` (both first-class in v1),
+`runtime:github` (first-class). A faithful lab provisions **two cloud
 runtimes plus GitHub** so the fan-out is reproduced, not flattened to one cloud
 — this is the multi-runtime signal for §12.
 
 ### 6.3 `lab_class_signal:*` (mostly Extractor-derived; some split)
 
 `lab_class_signal:incident_analysis` (it is a defender-perspective profile with
-27 detection rules), `lab_class_signal:requires_infra` (multiple cloud tenants),
+19 detection rules), `lab_class_signal:requires_infra` (multiple cloud tenants),
 `lab_class_signal:expected_detections` (the detection rules in §8 are the
 deliverable), `lab_class_signal:produces_world_state` (disabled trails, created
 IAM users, registered MFA devices), `lab_class_signal:simulated_components`
 (the SIM-swap / stolen-cred front is simulated), `lab_class_signal:multi_language`
-(AWS CLI/CloudShell + Azure/M365 + GWS + Git tooling span several toolchains).
+(AWS CLI/CloudShell + Azure/M365 + Git tooling span several toolchains).
 
 ## 7. Value types referenced
 
@@ -330,10 +339,10 @@ into `plan`, so these would not be rejected at plan time).
 
 Per `schema.md §4.8` lines 403–414. **Substantive for this `incident_analysis`
 blog** — the detection content is arguably the source's primary deliverable:
-**27 detection rules** spanning AWS / Azure AD / Okta / SaaS (the
+**19 detection rules** spanning AWS / Azure AD / Okta / SaaS (the
 `P0_AWS_*`, `P0_AZUREAD_*`, `P0_OKTA_*`, `P0_SAAS_*` rule families).
 
-- **Name:** P0 detection-rule corpus (27 rules across AWS / Azure AD / Okta / SaaS)
+- **Name:** P0 detection-rule corpus (19 rules across AWS / Azure AD / Okta / SaaS)
   - **Technique kind:** `detection_engineering`
   - **Applies to chain steps:** 1–10 (the rules span the whole lifecycle)
   - **Description:** A published library of detections covering identity abuse,
@@ -428,16 +437,16 @@ Per `schema.md §4.8` lines 339–356.
 ## 12. Expected lab class
 
 - **Lab kind:** "Multi-cloud identity-driven incident-analysis lab — an IDP
-  foothold (Okta / Entra) fans out to AWS + Azure (M365 / Entra) + GCP (Google
-  Workspace), with detection engineering as the primary deliverable."
+  foothold (Okta / Entra) fans out to AWS + Azure (M365 / Entra), with detection
+  engineering as the primary deliverable."
 - **Why this class:** The facets in §6 point unambiguously here. The
-  `target:*` / `runtime:*` sets each name **three clouds plus the IDP hub and
+  `target:*` / `runtime:*` sets each name **two clouds plus the IDP hub and
   GitHub**, so the Planner must provision **multiple runtimes**
-  (`runtime:aws` + `runtime:azure` + `runtime:gcp` + `runtime:github`) rather
+  (`runtime:aws` + `runtime:azure` + `runtime:github`) rather
   than collapse to one cloud — that is what makes the multi-cloud span real in
   the lab. `lab_class_signal:incident_analysis` +
   `lab_class_signal:expected_detections` mean the lab's center of gravity is the
-  27-rule detection corpus (§8), not a single linear exploit;
+  19-rule detection corpus (§8), not a single linear exploit;
   `lab_class_signal:simulated_components` reflects the simulated identity-compromise
   front; `lab_class_signal:produces_world_state` reflects the disabled trails,
   created IAM users, and registered MFA devices the detections fire on.
@@ -470,16 +479,18 @@ if required steps span tiers, the lab is `mixed`.
 Drives `coverage_tags:` in `eval/blog-sets/manifest.yaml`. This blog's coverage
 role is **multi-cloud breadth + incident-analysis depth**.
 
-`cloud:aws`, `cloud:azure`, `cloud:gcp`, `multi_cloud`, `multi_platform`,
+`cloud:aws`, `cloud:azure`, `multi_cloud`, `multi_platform`,
 `incident_analysis`, `mixed_reproducibility`, `platform:okta`,
 `platform:github`, `complexity:complex`, `thesis:ttp_chain`,
 `lab_class_signal:expected_detections`, `identity_provider`.
 
-The first eight tags are the task-mandated set: `cloud:aws`, `cloud:azure`,
-`cloud:gcp` (the three-cloud span), `multi_cloud` + `multi_platform` (it crosses
-clouds *and* SaaS/CI platforms), `incident_analysis` (defender techniques
-present, §8), `mixed_reproducibility` (§13), and `platform:okta` (the IDP hub).
-`complexity:complex` reflects the 10-step chain (9+ ⇒ complex).
+The mandated dimensions are covered: `cloud:aws` + `cloud:azure` (the genuine
+two-cloud span — `cloud:gcp` was dropped, see §15), `multi_cloud` +
+`multi_platform` (it crosses clouds *and* SaaS/CI platforms), `incident_analysis`
+(defender techniques present, §8), `mixed_reproducibility` (§13), and
+`platform:okta` (the IDP hub). `complexity:complex` reflects the 10-step chain
+(9+ ⇒ complex). The set's `cloud:gcp` coverage comes from the ConfusedFunction
+and GKE blogs, not this one.
 
 ## 15. Manual ground-truth notes
 
@@ -492,24 +503,34 @@ LLM Extractor on the same blog is likely to miss.
   representative canonical chain** that exercises the full IDP-to-multi-cloud
   fan-out. An alternative reading — emitting several short disjoint chains, one
   per cloud — is defensible but loses the cross-cloud `depends_on` edges (the
-  IDP session in steps 1–3 is the shared precondition for the AWS, Azure, and
-  GWS arms). The Extractor should be prompted to recognize profile-shaped blogs
-  and synthesize a canonical chain rather than emit fragments.
+  IDP session in steps 1–3 is the shared precondition for the AWS and
+  Azure / M365 arms). The Extractor should be prompted to recognize
+  profile-shaped blogs and synthesize a canonical chain rather than emit fragments.
 
 - **Multi-cloud is the defining property, and it is easy to flatten.** The
-  IDP is the cross-cloud hub: steps 1–3 are IDP-plane, step 4 is Azure(M365) +
-  GCP(Google Workspace), steps 5–9 are AWS (+ GitHub/GitLab). A naive Extractor
+  IDP is the cross-cloud hub: steps 1–3 are IDP-plane, step 4 is Azure(M365),
+  steps 5–9 are AWS (+ GitHub/GitLab). A naive Extractor
   that fixates on the AWS CloudShell/IAM material (the most concrete, most
-  quotable section) will emit an **AWS-only** chain and silently drop the Azure
-  and Google Workspace arms — collapsing the one blog whose job is multi-cloud
+  quotable section) will emit an **AWS-only** chain and silently drop the Azure /
+  M365 arm — collapsing the one blog whose job is multi-cloud
   coverage into yet another AWS-only lab. The fan-out must survive into §6's
   facets and §12's multi-runtime lab class.
+
+- **The span is AWS + Azure, NOT three clouds (a corrected over-statement).** An
+  earlier draft framed this as a three-cloud AWS + Azure + **GCP** blog by
+  treating Google **Workspace** as GCP. Checking the source: it is AWS- and
+  Azure/M365-heavy, and Google Workspace appears only *minimally* (mailbox-cleanup
+  evasion). Google Workspace is a SaaS productivity suite, **not** Google Cloud
+  Platform — so there is no genuine GCP arm here. The honest multi-cloud span is
+  **AWS + Azure / M365** (still ≥2 clouds, so the `multi_cloud` role holds); the
+  walk drops `cloud:gcp` / `target:gcp` / `runtime:gcp`. The set's GCP coverage
+  is carried by the ConfusedFunction and GKE blogs instead.
 
 - **No CVE — the vulnerability story is architectural.** There is no CVE to
   anchor on. An Extractor keyed on CVE strings will leave `vulnerability_story`
   thin or empty. The correct reading is that the "vulnerability" is a design
   property: **a federated IDP trusting SMS/push MFA that bridges multiple
-  clouds**, so one compromised identity yields AWS + Azure + GWS at once. Flag
+  clouds**, so one compromised identity yields AWS + Azure / M365 at once. Flag
   for the Extractor: populate `vulnerability_story` from architectural prose,
   not from a CVE identifier.
 
@@ -523,8 +544,8 @@ LLM Extractor on the same blog is likely to miss.
   correctly if the front steps are tiered honestly.
 
 - **Most facets and value types are NOT in the AWS-only seed registry.**
-  `target:azure`, `target:entra_id`, `target:gcp`, `target:okta`,
-  `runtime:azure`, `runtime:gcp`, `okta_session_token`, `entra_refresh_token`,
+  `target:azure`, `target:entra_id`, `target:okta`,
+  `runtime:azure`, `okta_session_token`, `entra_refresh_token`,
   `aws_secretsmanager_secret`, `github_pat`, `code_signing_certificate` are
   genuine **proposals** against the v1 bundled vocabulary. Per **ADR 0099 §6**,
   manifest Layer-1 registry-membership validation is **not wired** into the
@@ -546,10 +567,10 @@ LLM Extractor on the same blog is likely to miss.
 
 - **Phase 1 prompt-engineering hints.** (1) Detect profile-shaped sources and
   synthesize a canonical chain. (2) Maintain a cross-cloud entity table — the
-  shared IDP session is the `depends_on` ancestor of the AWS, Azure, and GWS
+  shared IDP session is the `depends_on` ancestor of the AWS and Azure / M365
   arms; dropping it severs the multi-cloud structure. (3) Source
   `vulnerability_story` from architectural prose when no CVE is present.
   (4) Tier human-factor steps (SIM swap, stolen creds) conservatively as
   `partial_simulation`, never `full`. (5) For `incident_analysis` blogs, treat
-  the detection corpus (here, the 27 P0 rules) as first-class output, not
+  the detection corpus (here, the 19 P0 rules) as first-class output, not
   background color.
