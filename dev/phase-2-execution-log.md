@@ -912,7 +912,8 @@ runs the paid calibration).
   `entra-id-actor-token` (Azure/Entra, CVE-2025-55241; substantive `vulnerability_story`; mixed),
   `confusedfunction` (GCP; full), `netlify-ipx` (the **`runtime:netlify`** non-first-class trigger;
   mixed), `gke-fluentbit` (GCP/Kubernetes; the dedicated mixed example), `lucr-3` (the **multi-cloud**
-  example — IDP fans out to AWS+Azure+GCP). The schema-current `codebuild-attack-spec.yaml` fixture is
+  example — IDP fans out to AWS + Azure/M365; source-verified, see below). The schema-current
+  `codebuild-attack-spec.yaml` fixture is
   wired as the one runnable `--stage plan` input (hygiene gated by a load test).
 - *Calibration* (`CALIBRATION.md`): the six Phase-2 items recorded as **UNLOCKED placeholders**
   (architect's run locks them at `v0.3`) + the per-jury asymmetric discipline + the **walk-review
@@ -933,6 +934,14 @@ agent-drafted walks pending a human ground-truth pass; codebuild-fixture hygiene
   discover agent was **blocked by the Anthropic Usage-Policy cyber filter** — sourced manually
   (Permiso LUCR-3) via WebSearch/WebFetch with neutral framing. The `runtime:netlify` trigger was
   adversarially **confirmed** a genuine emergent proposal (Netlify is seeded by no registry runtime).
+- **LUCR-3 walk re-verified against the source post-hoc (user request) — 2 corrections.** All 10
+  verbatim excerpts + the AWS/IDP/Azure-M365 chain were faithful, but (a) the detection count was
+  `27`; the source has **19** P0_* rules (the authoring fetch miscounted), and (b) the multi-cloud
+  claim **overstated GCP** — the source is AWS/Azure-M365-heavy; Google **Workspace** is only
+  minimally mentioned and is SaaS, not GCP. Recast the genuine span as **AWS + Azure/M365** (still
+  ≥2 clouds → `multi_cloud` holds) and dropped `cloud:gcp`/`target:gcp`/`runtime:gcp` from the walk +
+  entry (set GCP coverage is carried by ConfusedFunction + GKE). Reinforces the provisional-walk gate:
+  agent-drafted walks need the source-check the human pass will repeat.
 - **Shape-enum gap.** The documented v1 blog shapes {aws_ttp, supply_chain, incident_analysis} don't
   fit a cloud_provider_flaw / non-AWS disclosure; `BlogEntry.shape` is open-set (ADR 0014) so accurate
   shapes are used and each walk's §15 flags the gap. Not a defect; surfaced for the architect.
