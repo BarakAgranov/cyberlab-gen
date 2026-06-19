@@ -385,6 +385,7 @@ def _build_plan_runner(
         jury=PlannerJury(provider=provider, registry=registry, registries=registries),
         validator=SemanticCrossCheckValidator(registries=registries),
         provider=provider,  # held so the trajectory recorder attaches to it at run start (ADR 0098)
+        registries=registries,  # held for accept-time facet-proposal dedup (ADR 0099/0100)
     )
 
 
@@ -395,29 +396,56 @@ def plan(
         Path,
         typer.Argument(help="Path to a validated attack-spec.yaml (the `extract` output)."),
     ],
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive",
+            help="Pause at the post-Planner interrupt for review. Default mode.",
+        ),
+    ] = False,
+    auto: Annotated[
+        bool,
+        typer.Option(
+            "--auto",
+            help="Run without the post-Planner interrupt; auto-accept facet proposals.",
+        ),
+    ] = False,
 ) -> None:
     """Plan a lab from a validated ``attack-spec.yaml``, writing ``lab.yaml`` (Phase 2).
 
-    Runs the linear pipeline Planner → Planner-Jury → semantic cross-check and persists the run.
-    A **developer / eval command** (ADR 0096), not part of the user surface — it runs one stage in
-    isolation; real users invoke `generate`. Non-interactive in Phase 2 (the post-Planner interrupt
-    is a later phase).
+    Runs the linear pipeline Planner → Planner-Jury → semantic cross-check, the post-Planner
+    interrupt (``--interactive``, the default), and persists the run. A **developer / eval command**
+    (ADR 0096), not part of the user surface — it runs one stage in isolation; real users invoke
+    `generate`. Accepted Planner facet proposals promote to a **run-scoped** overlay, never the
+    shared production vocabulary (ADR 0100).
     """
     from cyberlab_gen.cli.plan import run_plan
     from cyberlab_gen.errors import CyberlabGenError
 
+    if interactive and auto:
+        raise typer.BadParameter(
+            "--interactive and --auto are mutually exclusive",
+            param_hint="--interactive / --auto",
+        )
     cli_ctx = ctx.obj
     assert isinstance(cli_ctx, CliContext)
     runner = _build_plan_runner(cli_ctx.state, cli_ctx.cost_ledger, show_cost=cli_ctx.show_cost)
     # The run store persists every run's artifacts on every exit path (ADR 0039).
     cli_ctx.state.ensure_runs_dir()
     run_store = RunStore(cli_ctx.state.runs_dir)
+    # ``stdin_tty_override`` is a test seam: CliRunner swaps ``sys.stdin`` for a non-TTY stream during
+    # invoke, so the interactive menus can't be driven via the real isatty() check. Tests set this to
+    # True to exercise them; None → the real check (production).
+    stdin_is_tty = sys.stdin.isatty() if stdin_tty_override is None else stdin_tty_override
     try:
         with persisting_signal_guard():
             written = run_plan(
                 spec_path=attack_spec,
                 runner=runner,
                 ledger=cli_ctx.cost_ledger,
+                interactive=interactive,
+                auto=auto,
+                stdin_is_tty=stdin_is_tty,
                 run_store=run_store,
             )
     except KeyboardInterrupt as exc:  # Ctrl-C / SIGINT / (converted) SIGTERM
@@ -426,8 +454,11 @@ def plan(
     except CyberlabGenError as exc:
         output.print_error(f"planning failed: {exc}", exc=exc)
         raise typer.Exit(code=1) from exc
+    except ValueError as exc:  # headless --interactive rejection (pipeline.md §3.1)
+        output.print_error(str(exc), exc=exc)
+        raise typer.Exit(code=2) from exc
     if written is None:
-        raise typer.Exit(code=1)  # route-back / halt (actionable message already printed)
+        raise typer.Exit(code=1)  # aborted / route-back / halt (actionable message already printed)
 
 
 @app.command()

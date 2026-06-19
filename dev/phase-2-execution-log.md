@@ -737,6 +737,86 @@ skipped** (+16 since Item 1).
 
 ---
 
+## Task 8: Post-Planner interactive interrupt  (2026-06-18)
+
+**Built (ADR 0100).** The §3.2.8 post-Planner interrupt on the `plan` verb, mirroring the
+post-Extractor interrupt (ADR 0024); `plan` is now **interactive-by-default with `--auto` bypass**.
+- *Shared interrupt module.* `cli/interrupt.py` — the genuinely artifact-agnostic machinery extracted
+  at its **second use** (the menu enums `ArtifactChoice`/`ProposalChoice`, `EditorFn`, the four-option
+  prompt parameterized by `rerun_agent`, the configured YAML, `errors_as_comments`, the generic
+  `edit_with_revalidation`/`review_one_proposal` loops, `DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP`).
+  `cli/extract` **migrated** onto it, behavior-identical, **test-guarded** (54 extract/cli tests green
+  *before* touching plan); extract keeps its public/tested names as thin re-export wrappers (flagged
+  for cleanup when extract is next touched — not to ossify).
+- *The two §3.2.8 surfaces.* `cli/plan` gains the LabManifest four-option menu (Approve / NL-feedback →
+  Planner re-runs / `$EDITOR` edit / Abort) + per-**facet**-proposal Accept/Edit (the Planner proposes
+  facets only). Feedback re-runs the Planner with the text folded into the `preferences` prompt channel
+  (`PlanRunner.re_run_with_feedback`; the typed result is the contract, §1.5). Manifest + proposal edits
+  are **structurally** revalidated only (`_load_manifest_from_yaml`, `LabManifest.model_validate` +
+  version), reopening `$EDITOR` with error comments on invalid.
+- *Run-scoped facet promotion.* Accepted facet proposals promote to a **run-scoped** overlay
+  (`<run_dir>/registry-overlay`), never the shared `~/.cyberlab-gen/registry-overlay` — `plan` is
+  dev/eval (ADR 0096). Gated on ship (ADR 0050/0062); stamped `proposed_by=planner` /
+  `proposal_origin=llm_during_planning` / `source_lab=manifest.core.id` (ADR 0099/0044); dedup against
+  the merged snapshot; `--auto` caps at 5, interactive uncapped. `cli/main` plan verb: `--interactive`/
+  `--auto` (mutually exclusive), headless guard, `registries` threaded for dedup.
+- Tests: `tests/integration/test_cli_plan.py` rewired (+ ~15 net) — the four menu paths, per-proposal
+  Accept + Edit-revalidate, run-scoped-**not**-shared promotion (the ADR-0100 safety property), the
+  explicit-`overlay_dir` seam, abort-promotes-nothing, headless/both-flags guards, manifest + proposal
+  editor revalidation.
+
+**Decisions.** ADR 0100 (the interrupt seam + shared module; structural-revalidation reconciliation of
+the brief's "Layer 1/2" → §3.2.8/§3.1.1 authority; run-scoped promotion as the ADR-0096 ↔ promote-on-ship
+resolution; no budget interrupt — no Generator estimate yet; feedback via the preferences channel).
+
+**Surprises / drift.**
+- **Overlay-scope investigation (workflow: 4 sweeps + 2 adversarial verifiers, all confirmed).** The
+  production overlay default is the **shared** `~/.cyberlab-gen/registry-overlay` (silently chosen; only
+  `--state-dir` redirects it), and `extract --auto` already promotes there. **Eval is read-only** w.r.t.
+  the overlay — the eval harness bypasses the verb (builds the runner, calls `.run()` directly, only
+  *counts* proposals), so the residual risk was a manual `plan --auto`. Resolved by run-scoping (the
+  user's lean). The "is it already safe?" hypothesis did **not** dissolve — scoping was required.
+- **Adversarial review caught 1 real major defect (high confidence, empirically reproduced) — fixed.**
+  `run_plan` bound `result` to the *first* `runner.run()`; the interactive **Feedback** re-run rebound a
+  *local* result that never propagated back, so the `finally` persisted the **stale first-run**
+  status/refusal/verdict/manifest. Feedback→route-back recorded `ABORTED` (not `FAILED`) + dropped the
+  refusal (while telling the user it was saved); Feedback→low-confidence recorded `SHIPPED` not
+  `SHIPPED_LOW_CONFIDENCE`. Extract is immune only because its orchestrator **raises** halts (caught via
+  the exc-path) whereas the plan orchestrator **returns** them (ADR 0097) — so "mirror extract" didn't
+  carry the guarantee. Fixed: the drivers return `(path, final_result)` and `run_plan` rebinds `result`
+  before the `finally`. +2 RED→GREEN regression tests (proven failing on the pre-fix code).
+- **The architect's follow-up verification found the SAME class of bug latent in `extract`** (locked
+  Phase-1, pre-existing — the migration left these functions untouched, confirmed by a byte-empty diff
+  on the extract test files). Narrower exposure: extract's orchestrator *raises* halts (caught via the
+  exc-path), so only the confidence flag was stale — a Feedback re-run that flips `low_jury_confidence`
+  persisted `SHIPPED` ⇄ `SHIPPED_LOW_CONFIDENCE` off the first run (spec correct via `last_state`; only
+  the run-record status wrong). Fixed identically (`_drive_*` return `(path, result)`; `run_extract`
+  rebinds) + 1 RED→GREEN test. Recorded in ADR 0100. The "mirror extract" design copied the *latent
+  defect* along with the structure — caught only because the plan orchestrator's return-not-raise
+  posture made it fire louder.
+
+**Deferred.**
+- **Owned deferral (ADR 0100):** when Task 10 builds the Phase-2 plan eval, it **must** mirror the
+  extract-eval pattern (drive the plan runner directly, never `run_plan`'s promotion) so eval-plan stays
+  read-only w.r.t. any overlay.
+- **Tracked for the architect (not Task 8):** `extract` — also a dev/eval command — promotes to the
+  shared production overlay on `--auto` today; the broader "dev/eval commands shouldn't write production
+  vocabulary" reconciliation (and/or a `RunKind` write-guard) spans both verbs.
+- Re-running the semantic cross-check on a human manifest edit as a **warning** (needs the deferred
+  `Finding`-base severity, seams §2) — by design the human is the interrupt authority (§3.1.1); deferred.
+- No budget-overrun interrupt on `plan` until the Generators (and a next-stage estimate) exist (Phase 3).
+- The extract re-export wrappers in `cli/extract` (clean up when extract is next touched, ADR 0100).
+
+**Doc edits surfaced** (ADR 0084): none architecture-tier — `pipeline.md §3.2.8` already specifies the
+two surfaces correctly; ADR 0100 records the mechanisms. Code-comment/docstring updates only
+(`cli/plan` "non-interactive in Phase 2" → the interrupt; `cli/main` plan verb help).
+
+**Verify.** `just verify` green — ruff + format clean, pyright strict 0 errors (pre-existing
+ruamel/typer warnings only), **939 passed / 1 skipped** (+16 since Task 7; incl. the 2 plan + 1 extract
+RED→GREEN status-staleness regressions).
+
+---
+
 ## Execution-log entry template
 
 ```
