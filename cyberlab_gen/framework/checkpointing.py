@@ -52,7 +52,12 @@ _REGISTERED_CHECKPOINT_TYPES: tuple[tuple[str, str], ...] = (
     ("cyberlab_gen.validators.grounding_validator", "GroundingCode"),
     ("cyberlab_gen.agents.extractor_jury.schema", "Verdict"),
     ("cyberlab_gen.agents.extractor_jury.schema", "JuryVerdict"),
-    ("cyberlab_gen.framework.enrichment", "EnrichmentResult"),
+    # EnrichmentResult + its CveResolution enum live in the neutral external-data
+    # package (the data-driven seam, ADR 0101); they ride the ``state.enrichment``
+    # channel. The serializer keys on the type's real ``__module__``, so these list
+    # the new module path, not the ``framework.enrichment`` re-export.
+    ("cyberlab_gen.external_data_sources.types", "EnrichmentResult"),
+    ("cyberlab_gen.external_data_sources.types", "CveResolution"),
     ("cyberlab_gen.framework.orchestrator", "PipelineStatus"),
     ("cyberlab_gen.framework.orchestrator", "FeedbackKind"),
     ("cyberlab_gen.framework.orchestrator", "RefinementFeedback"),

@@ -1,5 +1,16 @@
-# Bundled `external_data_sources` registry — Phase 0 ships one seed entry
-# per registry to exercise the meta-schema. Source: docs/registry-details.md §4.2.
+# Bundled `external_data_sources` registry — the v1 source set
+# (docs/registry-details.md §4.2, schema.md §4.14). Wired into the data-driven
+# pre-Planner enrichment seam in Phase-2 Task 9 (ADR 0101): the framework iterates
+# these entries and resolves a per-source adapter
+# (`cyberlab_gen/external_data_sources/<id>/`).
+#
+# `enrichment_triggers[*].field` is corrected to the real AttackSpec schema
+# (ADR 0020 precedent): CVE-keyed sources fire on `external_references.cves[*]`
+# (not the doc's historical `cve_references[*]`); MSRC's Microsoft-only predicate
+# has no schema signal, so it fires on the CVE list and the server filters; OSV's
+# `targets.packages[*]` and GitHub's `targets.repos[*]` name fields the current
+# schema does not carry — those adapters honestly skip / stub-skip until the
+# package/repo-target schema lands (owned deferral, ADR 0101 §6).
 entries:
   - id: nvd
     name: "National Vulnerability Database"
@@ -21,11 +32,6 @@ entries:
             pattern: "^CVE-[0-9]{4}-[0-9]+$"
         response_schema_ref: nvd_cve_response_v2
         cache_ttl: P7D
-    # Field paths corrected to the real AttackSpec schema per ADR 0020. The former
-    # "chain.chain_steps[*].techniques.mitre[*].cve_ids[*]" path was dropped:
-    # ChainStepTechniques has no cve_ids field. Per-step CVE attribution would be a
-    # schema change (add cve_ids to ChainStepTechniques) — flagged for maintainer
-    # decision in ADR 0020, NOT made here.
     enrichment_triggers:
       - field: "external_references.cves[*]"
         action: lookup
@@ -46,3 +52,292 @@ entries:
     best_effort: false
     notes_for_extractor: |
       Authoritative for CVE metadata. For Microsoft-issued CVEs, cross-check with MSRC.
+
+  - id: msrc
+    name: "Microsoft Security Response Center"
+    description: "Authoritative for Microsoft-issued CVEs (Azure, Entra, Microsoft 365)."
+    base_url: "https://api.msrc.microsoft.com/cvrf/v2.0"
+    auth_type: none
+    rate_limit:
+      without_key: "unspecified; rate-limit at HTTP layer"
+    endpoints:
+      - id: lookup_cve
+        method: GET
+        path_template: "/cvrf/{cve_id}"
+        parameters:
+          cve_id:
+            type: string
+            required: true
+            pattern: "^CVE-[0-9]{4}-[0-9]+$"
+        response_schema_ref: msrc_cvrf_response_v2
+        cache_ttl: P7D
+    enrichment_triggers:
+      - field: "external_references.cves[*]"
+        action: lookup
+        endpoint: lookup_cve
+    discrepancy_materiality_rules:
+      - field_path: affected_products
+        classification: material
+        rule_description: "MSRC is authoritative for Microsoft products."
+      - field_path: fix_version
+        classification: material
+        rule_description: "Wrong fix version misleads remediation guidance."
+    cache:
+      ttl: P7D
+      scope: per-key
+    best_effort: false
+    notes_for_extractor: "Use in addition to NVD when the CVE is Microsoft-issued."
+
+  - id: mitre_attack
+    name: "MITRE ATT&CK"
+    description: "STIX/TAXII technique data (T-codes, tactics, descriptions)."
+    base_url: "https://attack.mitre.org/api"
+    auth_type: none
+    rate_limit:
+      without_key: "static data; rate-limit minimal"
+    endpoints:
+      - id: lookup_technique
+        method: GET
+        path_template: "/techniques/{technique_id}"
+        parameters:
+          technique_id:
+            type: string
+            required: true
+            pattern: "^T[0-9]{4}([.][0-9]{3})?$"
+        response_schema_ref: mitre_technique_response
+        cache_ttl: P30D
+    enrichment_triggers:
+      - field: "chain.chain_steps[*].techniques.mitre[*]"
+        action: lookup
+        endpoint: lookup_technique
+    discrepancy_materiality_rules:
+      - field_path: technique_id
+        classification: material
+        rule_description: "An authoritative contradiction of the technique mapping is material; a well-formed unverifiable id is left unverified, not failed (ADR 0055/0058)."
+      - field_path: tactic
+        classification: material
+        rule_description: "Wrong tactic mapping breaks the kill-chain narrative."
+    cache:
+      ttl: P30D
+      scope: global
+    best_effort: false
+    notes_for_extractor: |
+      The bundled MITRE seed (registry/mitre_attack_techniques.yaml) is consulted by
+      enrichment, not used as a validation gate (ADR 0055/0058); a live MITRE adapter
+      for runtime technique-detail lookup is later work.
+
+  - id: osv_dev
+    name: "OSV.dev"
+    description: "Cross-ecosystem vulnerability advisories (npm, PyPI, Cargo, Go, etc.)."
+    base_url: "https://api.osv.dev/v1"
+    auth_type: none
+    rate_limit:
+      without_key: "unspecified; rate-limit at HTTP layer"
+    endpoints:
+      - id: lookup_package
+        method: POST
+        path_template: "/query"
+        parameters:
+          package_name:
+            type: string
+            required: true
+          ecosystem:
+            type: string
+            required: true
+            enum_values: [npm, PyPI, crates.io, Go, Maven, RubyGems]
+          version:
+            type: string
+            required: false
+        response_schema_ref: osv_query_response
+        cache_ttl: P3D
+    enrichment_triggers:
+      - field: "chain.chain_steps[*].targets.packages[*]"
+        action: lookup
+        endpoint: lookup_package
+    discrepancy_materiality_rules:
+      - field_path: affected_versions
+        classification: material
+        rule_description: "Wrong affected versions changes lab applicability."
+      - field_path: severity
+        classification: material
+        rule_description: "Cross-ecosystem severity reframes the attack."
+    cache:
+      ttl: P3D
+      scope: per-key
+    best_effort: false
+    notes_for_extractor: "Authoritative for package-ecosystem advisories beyond what NVD covers."
+
+  - id: github_api
+    name: "GitHub REST API"
+    description: "Repository metadata, file content, issue/PR data for blog-cited repos."
+    base_url: "https://api.github.com"
+    auth_type: optional_api_key
+    auth_env_var: GITHUB_TOKEN
+    rate_limit:
+      without_key: "60 requests per hour"
+      with_key: "5000 requests per hour"
+    endpoints:
+      - id: lookup_repo
+        method: GET
+        path_template: "/repos/{owner}/{repo}"
+        parameters:
+          owner:
+            type: string
+            required: true
+          repo:
+            type: string
+            required: true
+        response_schema_ref: github_repo_response
+        cache_ttl: P1D
+    enrichment_triggers:
+      - field: "chain.chain_steps[*].targets.repos[*]"
+        action: lookup
+        endpoint: lookup_repo
+    discrepancy_materiality_rules:
+      - field_path: archived
+        classification: material
+        rule_description: "Archived repo affects whether the attack is still reproducible."
+      - field_path: visibility
+        classification: material
+        rule_description: "Public-vs-private changes the attack premise."
+    cache:
+      ttl: P1D
+      scope: per-key
+    best_effort: false
+    notes_for_extractor: |
+      Use for grounding claims about specific repos (existence, visibility, default branch).
+
+  - id: aws_security_bulletins
+    name: "AWS Security Bulletins"
+    description: "AWS-side security disclosures via RSS."
+    base_url: "https://aws.amazon.com/security/security-bulletins/rss/feed/"
+    auth_type: none
+    rate_limit:
+      without_key: "RSS feed; polling-friendly"
+    endpoints:
+      - id: list_recent
+        method: GET
+        path_template: ""
+        parameters: {}
+        response_schema_ref: rss_feed
+        cache_ttl: P1D
+    enrichment_triggers:
+      - field: "facets[?value='target:aws']"
+        action: lookup
+        endpoint: list_recent
+    discrepancy_materiality_rules:
+      - field_path: bulletin_status
+        classification: material
+        rule_description: "Active-vs-mitigated bulletin status changes lab framing."
+    cache:
+      ttl: P1D
+      scope: global
+    best_effort: true
+    notes_for_extractor: "RSS feeds can break format unexpectedly; best_effort tolerates unavailability."
+
+  - id: azure_security_advisories
+    name: "Azure Security Advisories (MSRC feed)"
+    description: "Azure-side security disclosures via MSRC feed."
+    base_url: "https://msrc.microsoft.com/update-guide/rss"
+    auth_type: none
+    rate_limit:
+      without_key: "RSS feed"
+    endpoints:
+      - id: list_recent
+        method: GET
+        path_template: ""
+        parameters: {}
+        response_schema_ref: rss_feed
+        cache_ttl: P1D
+    enrichment_triggers:
+      - field: "facets[?value='target:azure']"
+        action: lookup
+        endpoint: list_recent
+    cache:
+      ttl: P1D
+      scope: global
+    best_effort: false
+
+  - id: gcp_security_bulletins
+    name: "GCP Security Bulletins"
+    description: "GCP-side security disclosures via RSS / cloud.google.com."
+    base_url: "https://cloud.google.com/feeds/security-bulletins.xml"
+    auth_type: none
+    rate_limit:
+      without_key: "RSS feed"
+    endpoints:
+      - id: list_recent
+        method: GET
+        path_template: ""
+        parameters: {}
+        response_schema_ref: rss_feed
+        cache_ttl: P1D
+    enrichment_triggers:
+      - field: "facets[?value='target:gcp']"
+        action: lookup
+        endpoint: list_recent
+    cache:
+      ttl: P1D
+      scope: global
+    best_effort: true
+
+  - id: cisa_kev
+    name: "CISA Known Exploited Vulnerabilities"
+    description: "Vulnerabilities CISA tracks as actively exploited in the wild."
+    base_url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    auth_type: none
+    rate_limit:
+      without_key: "static JSON; polling-friendly"
+    endpoints:
+      - id: lookup_cve_in_kev
+        method: GET
+        path_template: ""
+        parameters: {}
+        response_schema_ref: kev_catalog
+        cache_ttl: P1D
+    enrichment_triggers:
+      - field: "external_references.cves[*]"
+        action: lookup
+        endpoint: lookup_cve_in_kev
+    discrepancy_materiality_rules:
+      - field_path: kev_inclusion
+        classification: material
+        rule_description: "KEV inclusion is a substantive 'this is actively exploited' signal."
+    cache:
+      ttl: P1D
+      scope: global
+    best_effort: false
+    notes_for_extractor: |
+      The catalog is downloaded once and queried locally. Each CVE in the AttackSpec
+      is checked; KEV inclusion is recorded in the enrichment record.
+
+  - id: epss
+    name: "Exploit Prediction Scoring System"
+    description: "EPSS scores for CVEs (probability of exploitation in next 30 days)."
+    base_url: "https://api.first.org/data/v1/epss"
+    auth_type: none
+    rate_limit:
+      without_key: "unspecified; rate-limit at HTTP layer"
+    endpoints:
+      - id: lookup_epss
+        method: GET
+        path_template: "?cve={cve_id}"
+        parameters:
+          cve_id:
+            type: string
+            required: true
+            pattern: "^CVE-[0-9]{4}-[0-9]+$"
+        response_schema_ref: epss_response
+        cache_ttl: P1D
+    enrichment_triggers:
+      - field: "external_references.cves[*]"
+        action: lookup
+        endpoint: lookup_epss
+    discrepancy_materiality_rules:
+      - field_path: epss_score
+        classification: non_material
+        rule_description: "EPSS is contextual signal, not a contradiction-trigger."
+    cache:
+      ttl: P1D
+      scope: per-key
+    best_effort: false

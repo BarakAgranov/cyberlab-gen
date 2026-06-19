@@ -469,3 +469,14 @@ class ExternalApiRateLimitError(EnrichmentError):
     the skipped lookup (``unknown_from_blog.reason: "external API rate-limited at
     enrichment time"``) rather than failing the run (``pipeline.md §3.2.4``).
     """
+
+
+class ExternalApiUnavailableError(EnrichmentError):
+    """An external data source was unreachable for a framework enrichment call.
+
+    The non-rate-limit unavailability case (DNS/connect/timeout, 5xx, a malformed
+    feed). Like ``ExternalApiRateLimitError`` it is **never fatal** (ADR 0042): the
+    enrichment pass catches it, records a skipped lookup, and the lab still
+    generates — the gap shows up in provenance and may surface in Critic concerns.
+    Carried by every adapter so a single flaky source cannot halt the run.
+    """

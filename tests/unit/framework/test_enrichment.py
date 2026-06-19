@@ -388,8 +388,7 @@ def test_known_mitre_enriched_uncatalogued_is_unverified_not_material() -> None:
     assert not result.material_discrepancies
     # It is recorded honestly as an unverified/skipped MITRE lookup instead.
     assert any(
-        s.field_path == "technique.T9999" and s.source_id == "mitre_attack_techniques"
-        for s in result.skipped
+        s.field_path == "technique.T9999" and s.source_id == "mitre_attack" for s in result.skipped
     )
 
 

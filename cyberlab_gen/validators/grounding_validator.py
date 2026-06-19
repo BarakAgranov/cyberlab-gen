@@ -58,7 +58,7 @@ from cyberlab_gen.validators.base import Finding, FindingResult
 
 if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
-    from cyberlab_gen.framework.enrichment import NvdClient
+    from cyberlab_gen.external_data_sources import NvdClient
     from cyberlab_gen.schemas.attack_spec import AttackSpec
 
 logger = logging.getLogger(__name__)

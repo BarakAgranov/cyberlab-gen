@@ -33,7 +33,7 @@ from cyberlab_gen.agents.tool_agent import ToolUsingAgent
 from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
 
 if TYPE_CHECKING:
-    from cyberlab_gen.framework.enrichment import NvdClient
+    from cyberlab_gen.external_data_sources import NvdClient
     from cyberlab_gen.providers.base import Provider
     from cyberlab_gen.providers.ranking import ProviderRegistry
     from cyberlab_gen.registries.merge import MergedRegistries

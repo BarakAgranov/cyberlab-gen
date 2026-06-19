@@ -33,7 +33,7 @@ from cyberlab_gen.agents.extractor.tools import (
 )
 
 if TYPE_CHECKING:
-    from cyberlab_gen.framework.enrichment import NvdClient
+    from cyberlab_gen.external_data_sources import NvdClient
     from cyberlab_gen.providers.base import (
         AgentLabel,
         CapabilityHint,
