@@ -884,6 +884,99 @@ warnings only), **960 passed / 1 skipped** (+21 since Task 8).
 
 ---
 
+## Task 10: Eval harness additions + curated-set growth  (2026-06-19)
+
+**Built (ADR 0102).** The Phase-2 plan-stage eval harness + the grown curated set. Eval stays
+**user-run, real money** — nothing provider-backed was run here (the harness is *built*; the architect
+runs the paid calibration).
+- *Plan metrics* (`eval/runner/plan_metrics.py`): `manifest_field_coverage` (coarse top-level proxy,
+  7 optional collections), `per_step_reproducibility_distribution` (`StepReproDistribution`),
+  `lab_level_classification` — **reads** the emitted `core.reproducibility.classification_lab_level`,
+  never re-running Task 2's derivation (§7.4 F1). `PlanRunRecord` / `PlanBlogAggregate` /
+  `record_from_plan_run` mirror the Extractor-stage spine (ADR 0025); the shared stats helpers
+  (`mean_of`/`median_of`/`coefficient_of_variation`, `HIGH_VARIANCE_CV`) were promoted to public in
+  `metrics.py` (one high-variance definition across both stages).
+- *Plan-eval driver* (`plan_runner.py`, `plan_report.py`): `ProviderBackedPlanEvalRunner` drives
+  `PlanRunner.run()` **directly** — never the verb's `run_plan` — so the eval is **overlay-read-only**
+  (counts facet proposals, promotes none; ADR 0100's owned deferral, now closed). `run_plan_set`
+  (N runs/blog, attack_spec skip, global-fatal + cost-cap abort, incremental archive),
+  `PlanEvalReport` (`gen<gen>-plan-<ts>.yaml`). CLI `--stage {extract,plan}` + `just eval-plan`;
+  `BlogEntry.attack_spec` input field + resolver; `classify_pipeline_failure` promoted public (shared
+  failure taxonomy); `StderrPlanEvalProgress`.
+- *Planner-Jury review tooling* (`review.py`): a `JuryKind` (`extractor` | `planner`) discriminator
+  (defaults to `extractor` for forward-load) + per-jury rate aggregation (`per_jury_rates`,
+  `JuryRates`) + a `jury` filter on the existing aggregations — one tool, both juries, same
+  asymmetric discipline.
+- *Curated set 3 → 8* (`eval/blog-sets/manifest.yaml` + 5 walks): five **real** published blogs
+  covering all four required dimensions and diversifying off the all-AWS Phase-1 set —
+  `entra-id-actor-token` (Azure/Entra, CVE-2025-55241; substantive `vulnerability_story`; mixed),
+  `confusedfunction` (GCP; full), `netlify-ipx` (the **`runtime:netlify`** non-first-class trigger;
+  mixed), `gke-fluentbit` (GCP/Kubernetes; the dedicated mixed example), `lucr-3` (the **multi-cloud**
+  example — IDP fans out to AWS+Azure+GCP). The schema-current `codebuild-attack-spec.yaml` fixture is
+  wired as the one runnable `--stage plan` input (hygiene gated by a load test).
+- *Calibration* (`CALIBRATION.md`): the six Phase-2 items recorded as **UNLOCKED placeholders**
+  (architect's run locks them at `v0.3`) + the per-jury asymmetric discipline + the **walk-review
+  gate** (no value lockable against an unreviewed walk).
+- Tests (`tests/eval/`): `test_plan_metrics.py`, `test_plan_runner.py` (incl. the **eval-overlay-
+  read-only** guard — behavioral *and* structural — and the run-dir status-fidelity test), per-jury
+  `test_review.py`, the 8–10 count + four-dimension + fixture-hygiene checks in `test_manifest.py`;
+  `test_report.py`/`test_resilience.py` made curated-size-agnostic. +~50 eval tests.
+
+**Decisions.** ADR 0102 — read-emitted-not-recompute across every metric (the brief's "using Task 2's
+rule" = reading the stamped value); a *parallel* plan-eval spine (not a refactor of the Phase-1 loop);
+the `PlanRunner.run()`-direct overlay-read-only rule; committed `attack_spec:` fixtures as the plan
+input (codebuild wired, the rest architect-extracted); **real** blogs over synthetic; **provisional**
+agent-drafted walks pending a human ground-truth pass; codebuild-fixture hygiene promoted to due-now.
+
+**Surprises / drift.**
+- **Curated-blog research workflow** (5 fan-out + adversarial verify): 4/5 landed; the **multi-cloud**
+  discover agent was **blocked by the Anthropic Usage-Policy cyber filter** — sourced manually
+  (Permiso LUCR-3) via WebSearch/WebFetch with neutral framing. The `runtime:netlify` trigger was
+  adversarially **confirmed** a genuine emergent proposal (Netlify is seeded by no registry runtime).
+- **Shape-enum gap.** The documented v1 blog shapes {aws_ttp, supply_chain, incident_analysis} don't
+  fit a cloud_provider_flaw / non-AWS disclosure; `BlogEntry.shape` is open-set (ADR 0014) so accurate
+  shapes are used and each walk's §15 flags the gap. Not a defect; surfaced for the architect.
+- **PowerShell `Set-Content -Encoding utf8` corrupted em-dashes** (BOM + mojibake) in a Phase-1 test
+  during the `classify_pipeline_failure` rename; restored from git and redid the rename with the Edit
+  tool. (Reinforces the shell-encoding trap.)
+- **Adversarial review (10-agent review→refute over the diff): 4 findings confirmed, all fixed; the
+  two load-bearing gates held.** No finding on overlay-read-only or F1. Confirmed: (1) minor — the
+  plan-eval run dir flattened returned non-ship terminals to a reasonless `FAILED`; fixed by threading
+  `plan_status`+`halt_reason` and reusing the verb's now-public `PLAN_STATUS_TO_RUN_STATUS` (+a test);
+  (2) minor — `record_from_plan_run` passthrough fields weren't asserted; strengthened; (3) nit —
+  stale `_classify_pipeline_failure` comment; (4) nit — `{…,local}` is the *seeded* set, not all
+  first-class (corrected ADR + walk wording).
+
+**Deferred (owned).**
+- Provider-backed plan calibration + locking the six items at `v0.3` + the **human walk-review pass**
+  — the architect's, real money (ADR 0102 / CALIBRATION.md).
+- Held-out set + paired rotation — Phase 4 (`eval.md §7.3`); `held_out` stays empty.
+- Finer per-phase manifest coverage (beyond the 7 top-level collections) — a future metric refinement.
+- The within-blog consecutive-failure fast-stop is intentionally omitted from `run_plan_set` (the plan
+  pipeline returns most terminals as records, so N informative terminal records ≠ a money-burning loop;
+  global-abort + cost-cap cover the systemic risk) — documented, not a silent coverage cap.
+
+**Phase-boundary deferral ledger (confirmed recorded with owners — ADR 0102 §"Phase-boundary").**
+Manifest Layer-1 facet-membership incl. human-edit-rename → Phase-3 Validator (ADR 0099 §6);
+`AttackSpec.reproducibility` derive-or-remove → ADR 0088; typed KEV/EPSS/MSRC/bulletin homes →
+Phase-3 Generator, OSV/GitHub targets → Phase-3 schema (ADR 0101); `extract --auto` shared-overlay
+reconciliation → architect (ADR 0100); live `httpx` clients not in the production CLI → later
+config/keys task (ADR 0101); `Finding`-base severity (cross-check warn-on-edit) → ADR 0100/seams §2;
+extended-thinking per-agent → eval-driven (ADR 0098 hook ready); codebuild-fixture hygiene → **done
+here** (decision 7).
+
+**Doc edits surfaced** (ADR 0084): none architecture-tier. `CALIBRATION.md` (Phase-2 placeholders +
+walk-review gate + per-jury discipline); `cli/plan.py` `_PLAN_STATUS_TO_RUN_STATUS` → public
+`PLAN_STATUS_TO_RUN_STATUS` (a docstring/visibility change, the seams §2 one-shared-mapping step); no
+contract change. `implementation-plan.md §5.5` exit criteria are met by the built harness (the *runs*
+are the architect's).
+
+**Verify.** `just verify` green — ruff + format clean, pyright strict 0 errors (pre-existing
+ruamel/typer/yaml-load warnings only), **999 passed / 1 skipped** (+~50 since Task 9). The provider-
+backed `just eval --stage plan` was **not** run (eval is user-run, real money).
+
+---
+
 ## Execution-log entry template
 
 ```
