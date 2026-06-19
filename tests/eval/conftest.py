@@ -14,6 +14,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from cyberlab_gen.agents.extractor_jury.schema import Verdict
+from cyberlab_gen.agents.proposals import ProposedFacet
+from cyberlab_gen.cli.plan import PlanRunner, PlanRunResult
+from cyberlab_gen.framework.plan_orchestrator import PlanPipelineStatus
 from cyberlab_gen.schemas.attack_spec import (
     AttackSpec,
     ChainBlock,
@@ -58,10 +61,11 @@ from cyberlab_gen.schemas.manifest import (
 )
 from cyberlab_gen.schemas.provenance import CitationBlock, Provenance, ProvenanceString
 from eval.runner.plan_metrics import PlanRunRecord, record_from_plan_run
+from eval.runner.plan_runner import PlanEvalPipelineRunner
 from eval.runner.runner import EvalPipelineRunner, record_from_run
 
 if TYPE_CHECKING:
-    from cyberlab_gen.framework.plan_orchestrator import PlanPipelineStatus
+    from cyberlab_gen.providers.cost_ledger import CostLedger
     from eval.runner.metrics import BlogRunRecord
 
 _HASH = "a" * 64
@@ -389,8 +393,6 @@ def make_plan_record(
     """
     from decimal import Decimal
 
-    from cyberlab_gen.framework.plan_orchestrator import PlanPipelineStatus
-
     resolved_status = status if status is not None else PlanPipelineStatus.PLANNED
     shipped = resolved_status in (
         PlanPipelineStatus.PLANNED,
@@ -411,3 +413,105 @@ def make_plan_record(
         halt_reason=halt_reason,
         failure_kind=failure_kind,
     )
+
+
+def make_proposed_facet(
+    name: str = "runtime:cloudflare", category: str = "runtime"
+) -> ProposedFacet:
+    """A representative in-flight Planner facet proposal (a non-first-class ``runtime:*``)."""
+    return ProposedFacet(
+        name=name,
+        category=category,  # type: ignore[arg-type]
+        description="The lab provisions against this runtime.",
+        applies_at_levels=["lab"],
+        reasoning="the attack targets this platform",
+    )
+
+
+def make_plan_result(
+    *,
+    status: PlanPipelineStatus | None = None,
+    manifest: LabManifest | None = None,
+    facet_proposals: list[ProposedFacet] | None = None,
+    verdict: Verdict | None = Verdict.APPROVE,
+    low_jury_confidence: bool = False,
+    halt_reason: str | None = None,
+) -> PlanRunResult:
+    """Build a scripted :class:`PlanRunResult` (the typed object the plan runner seam returns)."""
+    from cyberlab_gen.agents.extractor_jury.schema import JuryScores, JuryVerdict
+
+    resolved_status = status if status is not None else PlanPipelineStatus.PLANNED
+    shipped = resolved_status in (
+        PlanPipelineStatus.PLANNED,
+        PlanPipelineStatus.PLANNED_LOW_CONFIDENCE,
+    )
+    resolved_manifest = manifest
+    if resolved_manifest is None and shipped:
+        resolved_manifest = make_manifest()
+    jury_verdict = (
+        JuryVerdict(
+            verdict=verdict,
+            scores=JuryScores(
+                fidelity=0.9, completeness=0.9, provenance_correctness=0.9, structural_validity=0.9
+            ),
+            feedback=[],
+            retry_recommended=False,
+            rationale="the manifest faithfully realises the AttackSpec",
+        )
+        if verdict is not None
+        else None
+    )
+    return PlanRunResult(
+        status=resolved_status,
+        manifest=resolved_manifest,
+        verdict=jury_verdict,
+        low_jury_confidence=low_jury_confidence,
+        halt_reason=halt_reason,
+        facet_proposals=facet_proposals if facet_proposals is not None else [],
+    )
+
+
+class FakePlanRunner(PlanRunner):
+    """A scripted inner ``PlanRunner``: ``run`` returns a canned result (or raises a canned error).
+
+    The seam the production ``ProviderBackedPlanEvalRunner`` drives directly. ``re_run_with_feedback``
+    is never used by the eval path (no interrupt) but is implemented to satisfy the protocol.
+    """
+
+    def __init__(
+        self, *, result: PlanRunResult | None = None, raises: BaseException | None = None
+    ) -> None:
+        self._result = result if result is not None else make_plan_result()
+        self._raises = raises
+        self.run_calls = 0
+
+    def run(self, attack_spec: object, *, ledger: CostLedger) -> PlanRunResult:
+        del attack_spec, ledger
+        self.run_calls += 1
+        if self._raises is not None:
+            raise self._raises
+        return self._result
+
+    def re_run_with_feedback(self, feedback: str, *, ledger: CostLedger) -> PlanRunResult:
+        del feedback, ledger
+        return self._result
+
+
+class FakePlanEvalRunner(PlanEvalPipelineRunner):
+    """A scripted ``PlanEvalPipelineRunner``: returns canned records per (blog, run).
+
+    Mirrors :class:`FakeEvalRunner` for the plan loop: ``records_for`` maps a blog id to the records
+    its N runs yield (a default healthy ``PLANNED`` record is synthesized when absent); ``calls``
+    records every ``(blog_id, run_index)`` so tests can assert the N-runs-per-blog pattern.
+    """
+
+    def __init__(self, records_for: dict[str, list[PlanRunRecord]] | None = None) -> None:
+        self._records_for = records_for or {}
+        self.calls: list[tuple[str, int]] = []
+
+    def plan_once(self, blog_id: str, *, run_index: int) -> PlanRunRecord:
+        self.calls.append((blog_id, run_index))
+        scripted = self._records_for.get(blog_id)
+        if scripted is not None and run_index < len(scripted):
+            return scripted[run_index]
+        return make_plan_record(blog_id, run_index)

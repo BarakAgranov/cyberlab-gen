@@ -144,13 +144,6 @@ def lab_level_classification(manifest: LabManifest) -> ReproducibilityLabLevel:
     return manifest.core.reproducibility.classification_lab_level
 
 
-#: Failure-kind tags reused from the Extractor-stage runner (ADR 0030/0034); the plan run loop
-#: routes on them identically. Re-exported here so the plan record/runner have one import home.
-PLAN_FAILURE_RETRYABLE = "retryable"
-PLAN_FAILURE_BLOG_FATAL = "blog_fatal"
-PLAN_FAILURE_GLOBAL_FATAL = "global_fatal"
-
-
 class PlanRunRecord(InternalModel):
     """One plan-pipeline run's measured outcome for one blog's AttackSpec (ADR 0102, ``eval.md §7.4``).
 
@@ -164,7 +157,9 @@ class PlanRunRecord(InternalModel):
     blog_id: str
     run_index: int = Field(ge=0)
     #: The pipeline's emitted terminal status (the single source of the ship/route-back/halt facts).
-    status: PlanPipelineStatus
+    #: ``None`` only for an *infra* failure (a raised ``CyberlabGenError`` — provider auth/quota/
+    #: transient) that never produced a terminal status; ``failure_kind`` carries the scope then.
+    status: PlanPipelineStatus | None = None
     shipped: bool
     #: Emitted Layer-2 (semantic cross-check) result: a ship cleared the gate; the cross-check-halt
     #: status is the only Layer-2 failure. Read off ``status``, never by re-running the validator (F1).
@@ -292,9 +287,6 @@ class PlanBlogAggregate(ArtifactModel):
 
 
 __all__ = [
-    "PLAN_FAILURE_BLOG_FATAL",
-    "PLAN_FAILURE_GLOBAL_FATAL",
-    "PLAN_FAILURE_RETRYABLE",
     "PlanBlogAggregate",
     "PlanRunRecord",
     "StepReproDistribution",

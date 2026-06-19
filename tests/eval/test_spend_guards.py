@@ -24,8 +24,8 @@ from eval.runner.runner import (
     FAILURE_BLOG_FATAL,
     FAILURE_GLOBAL_FATAL,
     FAILURE_RETRYABLE,
-    _classify_pipeline_failure,  # pyright: ignore[reportPrivateUsage]
     _failure_signature,  # pyright: ignore[reportPrivateUsage]
+    classify_pipeline_failure,
     run_blog_set,
 )
 from tests.eval.conftest import make_failure_record, make_record
@@ -290,28 +290,28 @@ def test_classify_pipeline_failure_maps_each_error_to_its_scope() -> None:
     )
 
     # Retryable blip — never aborts/skips.
-    assert _classify_pipeline_failure(TransientFailure("timeout")) == FAILURE_RETRYABLE
+    assert classify_pipeline_failure(TransientFailure("timeout")) == FAILURE_RETRYABLE
     # Global — the next blog fails identically.
-    assert _classify_pipeline_failure(CapabilityUnreachable("no model")) == FAILURE_GLOBAL_FATAL
+    assert classify_pipeline_failure(CapabilityUnreachable("no model")) == FAILURE_GLOBAL_FATAL
     assert (
-        _classify_pipeline_failure(HardFailure("auth", cause=_status_error(401)))
+        classify_pipeline_failure(HardFailure("auth", cause=_status_error(401)))
         == FAILURE_GLOBAL_FATAL
     )
     assert (
-        _classify_pipeline_failure(HardFailure("model gone", cause=_status_error(404)))
+        classify_pipeline_failure(HardFailure("model gone", cause=_status_error(404)))
         == FAILURE_GLOBAL_FATAL
     )
     # No HTTP status (no API key / pricing / config) -> systemic -> global.
-    assert _classify_pipeline_failure(HardFailure("no API key")) == FAILURE_GLOBAL_FATAL
+    assert classify_pipeline_failure(HardFailure("no API key")) == FAILURE_GLOBAL_FATAL
     # Blog-specific — content/size of THIS blog.
     assert (
-        _classify_pipeline_failure(HardFailure("too large", cause=_status_error(400)))
+        classify_pipeline_failure(HardFailure("too large", cause=_status_error(400)))
         == FAILURE_BLOG_FATAL
     )
-    assert _classify_pipeline_failure(EmitTruncated("truncated")) == FAILURE_BLOG_FATAL
-    assert _classify_pipeline_failure(MalformedOutput("bad spec")) == FAILURE_BLOG_FATAL
+    assert classify_pipeline_failure(EmitTruncated("truncated")) == FAILURE_BLOG_FATAL
+    assert classify_pipeline_failure(MalformedOutput("bad spec")) == FAILURE_BLOG_FATAL
     assert (
-        _classify_pipeline_failure(ValidationError("static schema validation halt"))
+        classify_pipeline_failure(ValidationError("static schema validation halt"))
         == FAILURE_BLOG_FATAL
     )
 

@@ -89,12 +89,13 @@ FAILURE_GLOBAL_FATAL = "global_fatal"
 _GLOBAL_HTTP_STATUSES = frozenset({401, 402, 403, 404})
 
 
-def _classify_pipeline_failure(exc: BaseException) -> str:
+def classify_pipeline_failure(exc: BaseException) -> str:
     """Map a caught pipeline exception to its failure kind / scope (ADR 0034).
 
     Eval-runner-only triage: it decides whether the *next blog* should still get a
     turn. The underlying *halt* already happened in the provider/orchestrator; this
-    never re-decides a single blog's fate, only whether the run continues.
+    never re-decides a single blog's fate, only whether the run continues. Shared by the
+    Extractor- and plan-stage runners (ADR 0102) — the failure taxonomy is stage-agnostic.
     """
     from cyberlab_gen.errors import CapabilityUnreachable, HardFailure, TransientFailure
 
@@ -292,7 +293,7 @@ class ProviderBackedEvalRunner:
                     halt_reason=str(exc),
                 )
                 return self._halt_record(
-                    blog_id, run_index, ledger, exc, failure_kind=_classify_pipeline_failure(exc)
+                    blog_id, run_index, ledger, exc, failure_kind=classify_pipeline_failure(exc)
                 )
             # F1 (eval.md §7.4): read the pipeline's EMITTED static-schema verdict — the one
             # it computed WITH this run's provisional-proposals context — instead of
@@ -699,6 +700,7 @@ __all__ = [
     "EvalPipelineRunner",
     "EvalProgress",
     "ProviderBackedEvalRunner",
+    "classify_pipeline_failure",
     "record_from_run",
     "run_blog_set",
 ]

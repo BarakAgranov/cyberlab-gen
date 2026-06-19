@@ -56,6 +56,12 @@ class BlogEntry(ArtifactModel):
     accessed_date: str = Field(min_length=1)
     walk: str = Field(min_length=1)
     coverage_tags: list[str] = Field(default_factory=list[str])
+    #: Optional repo-root-relative path to a committed ``attack-spec.yaml`` fixture for this blog
+    #: (ADR 0102). The **plan** eval (``--stage plan``) consumes it as the Planner's input; a blog
+    #: with no resolved ``attack_spec`` is *skipped* in a provider-backed plan run (mirroring the
+    #: TBD-URL skip in the Extractor stage, ADR 0028). Absent for blogs whose spec the architect will
+    #: produce by extracting first; ``TBD`` is also accepted as the not-yet-resolved sentinel.
+    attack_spec: str | None = None
 
     @field_validator("accessed_date", mode="before")
     @classmethod
@@ -76,6 +82,13 @@ class BlogEntry(ArtifactModel):
     def url_is_resolved(self) -> bool:
         """True when this entry points at a live, fetchable URL (not the ``TBD`` sentinel)."""
         return self.url != TBD
+
+    def attack_spec_is_resolved(self) -> bool:
+        """True when this entry has a committed ``attack_spec`` fixture (not absent / ``TBD``).
+
+        Gates whether the **plan** eval can run this blog without re-extracting (ADR 0102).
+        """
+        return self.attack_spec is not None and self.attack_spec != TBD
 
 
 class BlogSetManifest(ArtifactModel):
@@ -139,11 +152,25 @@ def walk_path(entry: BlogEntry, *, root: Path | None = None) -> Path:
     return base / entry.walk
 
 
+def attack_spec_path(entry: BlogEntry, *, root: Path | None = None) -> Path | None:
+    """Resolve a blog entry's repo-root-relative ``attack_spec:`` path, or ``None`` if unresolved.
+
+    ``None`` when the entry has no committed attack-spec fixture (absent / ``TBD``) — the plan eval
+    then skips the blog (ADR 0102).
+    """
+    if not entry.attack_spec_is_resolved():
+        return None
+    base = root if root is not None else repo_root()
+    assert entry.attack_spec is not None  # narrowed by attack_spec_is_resolved
+    return base / entry.attack_spec
+
+
 __all__ = [
     "DEFAULT_MANIFEST_RELPATH",
     "TBD",
     "BlogEntry",
     "BlogSetManifest",
+    "attack_spec_path",
     "load_manifest",
     "repo_root",
     "walk_path",
