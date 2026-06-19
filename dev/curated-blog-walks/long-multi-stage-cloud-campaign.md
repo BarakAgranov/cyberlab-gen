@@ -5,9 +5,20 @@ included to exercise the Extractor's chunking on a large input
 (`implementation-plan.md §4.6` long-blog risk; Task-8 brief "include at least
 one long blog"). Unlike the two real walks, this entry has no live URL: it is a
 fixture whose purpose is to surface chunk-boundary handling, not to test
-fidelity to a published source. The narrative below is representative of a
-real long AWS TTP write-up (12 chain steps, ~6k words) so the chunking and
-cross-chunk reference-resolution paths are genuinely exercised.
+fidelity to a published source. The narrative below specifies the *intended*
+ground truth for a long AWS TTP write-up (12 chain steps) representative of one
+in the ~6k-word range — including the cross-chunk references (4→9, 6→7,8) the
+chunking path must resolve.
+
+> **Owned deferral — the long fixture body does not exist yet, so the chunking
+> path is NOT actually exercised today.** No ~6k-word input file is committed and
+> the manifest URL is `TBD`, so on a provider-backed run the harness **skips**
+> this entry (`EvalReport.skipped`, reason "synthetic fixture, no live URL";
+> ADR 0028). The entry is therefore a *paper fixture* pinning the intended
+> ground truth and cross-chunk edges; it becomes a live chunking test only once a
+> long body is authored and wired to a local fixture path (or a real long blog is
+> substituted). Until then, do not read "long_blog:chunking" coverage as
+> evidence the chunking path has been measured — it has not. See §15.
 
 ---
 
@@ -51,8 +62,10 @@ escalation step (chunk 1) and the persistence step (chunk 3).
 ## 4. Chain steps
 
 Twelve steps; abbreviated here to titles, tiers, and the cross-chunk
-references that make this a chunking test. Full per-step excerpts live in the
-fixture body the harness feeds the Extractor.
+references that *would* make this a chunking test. Full per-step excerpts would
+live in a long fixture body fed to the Extractor — **that body has not been
+authored yet** (see the deferral note in §1 and §15), so the titles + tiers
+below are the intended ground truth, not excerpts from an existing input.
 
 ### Chain step 1: leaked CI service-account key (initial access)
 - **MITRE techniques:** `T1078.004`
@@ -89,7 +102,9 @@ fixture body the harness feeds the Extractor.
 - **Reproducibility:** `full`
 
 ### Chain step 9: collect SSM parameters + Secrets Manager secrets
-- **MITRE techniques:** `T1552.005`
+- **MITRE techniques:** `T1555.006` (cloud secrets management stores — Secrets
+  Manager / SSM Parameter Store; **not** `T1552.005`, which is the cloud instance
+  metadata API specifically)
 - **Reproducibility:** `full` — re-uses the escalated role ARN from step 4
   (cross-chunk reference #1 resolves here).
 
@@ -178,7 +193,16 @@ no defender-investigation narrative.
 
 ## 15. Manual ground-truth notes
 
-- **Why this is a chunking test:** the escalated role ARN introduced in step 4
+- **Owned deferral — no body, so the chunking path is unmeasured (corrected):**
+  an earlier draft claimed a ~6k-word body existed and that "the chunking and
+  cross-chunk reference-resolution paths are genuinely exercised." Neither is
+  true: there is no committed long input, the manifest URL is `TBD`, and the
+  harness *skips* this entry on provider-backed runs (`EvalReport.skipped`,
+  ADR 0028). This walk is a paper fixture fixing the intended ground truth (12
+  steps; cross-chunk edges 4→9 and 6→7,8); the chunking test goes live only when
+  a long body is authored/wired or a real long blog replaces it. Tracked as an
+  owned deferral, not a silent gap.
+- **Why this *would be* a chunking test:** the escalated role ARN introduced in step 4
   is re-referenced in step 9, and the second-account ID from step 6 reappears in
   steps 7–8. If the Extractor reads the blog in independent chunks without
   carrying forward earlier entities, the `depends_on` edges between distant steps

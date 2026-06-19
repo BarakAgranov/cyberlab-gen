@@ -95,7 +95,7 @@ Five ordered steps. Step shape mirrors `schema.md §4.8` lines 358–383.
   proxies/optimizes the source image, and is the entry point for the chain. No
   authentication is required; the endpoint is reachable by any unauthenticated
   visitor.
-- **MITRE techniques:** `T1595.002` (active scanning — wordlist), `T1190`
+- **MITRE techniques:** `T1595.003` (active scanning — wordlist scanning), `T1190`
   (exploit public-facing application)
 - **Preconditions:** A target Next.js site deployed on Netlify with the
   `@netlify/ipx` plugin (or a self-hosted instance of the handler) exposing the

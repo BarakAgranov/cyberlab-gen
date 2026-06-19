@@ -152,8 +152,13 @@ blog).
   via any of three methods: (a) brute force, exploiting that netIds are
   sequential and that probing them through the flaw produced no victim-tenant
   logs; (b) reading the netId stored on the `alternativeSecurityIds` attribute of
-  a guest account; or (c) harvesting netIds (the `puid` claim) from leaked,
-  screenshotted, logged, or expired tokens.
+  a guest account — this is the source's standalone **"hopping over B2B trusts"**
+  technique (see §5 and §15): any tenant holding a B2B guest leaks that guest's
+  *home-tenant* netId, so a single attacker tenant with guests across many
+  organizations harvests netIds at scale, making the attack effectively
+  **wormable** (mass cross-tenant compromise "within minutes" per the source);
+  or (c) harvesting netIds (the `puid` claim) from leaked, screenshotted, logged,
+  or expired tokens.
 - **MITRE techniques:** `T1589.002`, `T1087.004`, `T1110`
 - **Preconditions:** Victim tenant ID (step 2); for (a), reachability of the
   vulnerable graph path.
@@ -263,10 +268,21 @@ blog).
 
 ## 5. Alternative paths (optional)
 
-Not applicable for this blog — the chain is canonical and unbranched. The three
-netId-discovery methods in step 3 are alternative *means to a single
-precondition* within one step, not alternative attack paths; the impersonation
-mechanism (steps 4–7) is single and unbranched.
+The impersonation mechanism (steps 4–7) is single and unbranched, and methods
+(a) and (c) of step 3 are alternative *means to a single precondition* within one
+step. But method (b) is genuinely more than that, and the source elevates it to
+its own section — so it is recorded here as a distinct path:
+
+- **Wormable mass-compromise via B2B guest-trust hopping** (source heading:
+  *"Compromising tenants by hopping over B2B trusts"*). Instead of targeting one
+  victim tenant, the attacker enumerates the `alternativeSecurityIds` of B2B
+  guest users present in tenant(s) they control; because a guest's stored netId
+  is its *home-tenant* netId, one attacker tenant with broad guest relationships
+  harvests valid netIds across many organizations at once. Combined with the
+  single 24-hour Actor token, this scales steps 4–7 from one tenant to "the
+  majority of all tenants worldwide … within minutes" (source). This is a
+  **self-propagating / wormable** variant of the canonical single-target chain,
+  not merely a netId-discovery sub-method — see §15.
 
 ## 6. Facets
 
@@ -373,8 +389,10 @@ a defender TTP chain).
 
 ## 10. External references
 
-- **CVEs cited:** `CVE-2025-55241` (CVSS 10.0 — sourced from MSRC/secondary
-  advisories, **not** stated in the blog body; see §15).
+- **CVEs cited:** `CVE-2025-55241` — **the blog body does print the CVE
+  identifier** ("Microsoft also issued CVE-2025-55241 for this vulnerability").
+  The **CVSS 10.0 score is the only externally-sourced fact** (MSRC / secondary
+  advisories); the blog body never prints a CVSS score. See §15.
 - **Related blogs:**
   https://msrc.microsoft.com/update-guide/vulnerability/CVE-2025-55241 ,
   https://practical365.com/death-by-token-understanding-cve-2025-55241/
@@ -470,13 +488,29 @@ Drives `coverage_tags:` in `eval/blog-sets/manifest.yaml`. Required by the brief
 Extractor on the same blog might miss.
 
 - **Source verification:** The chosen URL (dirkjanm.io) loaded fully; no
-  alternative was needed. **CVSS 10.0 and CVE-2025-55241 were confirmed via
-  external advisories (MSRC / secondary), because the blog body itself does
-  not state the CVSS score** — a verbatim search for the score on the page
-  returns NOT FOUND. This is itself a high-value Extractor trap: an LLM reading
-  only the blog would be correct to leave CVSS unstated and **wrong** to
-  hallucinate it. The score here is sourced externally and tagged as such,
-  keeping per-blog ground truth honest about blog-asserted vs. externally-true.
+  alternative was needed. **The blog body DOES state the CVE identifier**
+  (`CVE-2025-55241`, in the sentence "Microsoft also issued CVE-2025-55241 for
+  this vulnerability") — so the CVE is blog-asserted, not external. **Only the
+  CVSS 10.0 score is externally-sourced** (MSRC / secondary advisories): a
+  verbatim search for any CVSS score on the page returns NOT FOUND. This is the
+  precise Extractor trap — the CVE is fair to extract from the body, but an LLM
+  reading only the blog would be correct to leave the **CVSS score** unstated and
+  **wrong** to hallucinate it. Keep per-blog ground truth honest about which
+  facts are blog-asserted (the CVE) vs. externally-true (the CVSS score).
+
+- **B2B-trust-hopping is its own wormable technique (corrected):** the source
+  devotes a standalone section — *"Compromising tenants by hopping over B2B
+  trusts"* — to harvesting guest users' `alternativeSecurityIds` netIds, and
+  frames it as the property that makes the flaw effectively **wormable**: with
+  one Actor token, "the information needed to compromise the majority of all
+  tenants worldwide could have been gathered within minutes." An earlier draft of
+  this walk under-represented it as merely step-3 netId-discovery method (b). That
+  understates the source: it is a distinct *scaling/propagation* vector, now
+  elevated to §5 (alternative paths) and expanded in step 3(b). The
+  invite-direction subtlety remains the easy-to-reverse trap — a guest in **your**
+  tenant leaks **their** home tenant's netId (see item (g) below) — and it is
+  exactly what makes guest-trust hopping a cross-organization harvester rather
+  than a single-tenant lookup.
 
 - **Shape call (enum gap):** `shape` was set to `incident_analysis` as the
   least-bad fit from the closed enum `{aws_ttp, supply_chain,

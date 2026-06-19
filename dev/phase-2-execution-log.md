@@ -942,6 +942,22 @@ agent-drafted walks pending a human ground-truth pass; codebuild-fixture hygiene
   ≥2 clouds → `multi_cloud` holds) and dropped `cloud:gcp`/`target:gcp`/`runtime:gcp` from the walk +
   entry (set GCP coverage is carried by ConfusedFunction + GKE). Reinforces the provisional-walk gate:
   agent-drafted walks need the source-check the human pass will repeat.
+- **Second source-verification pass (user request) — 3 walks corrected, 4 fixes.** Re-checked
+  entra/netlify/long-blog against their sources: (a) **entra** — the blog body *does* print
+  `CVE-2025-55241` ("Microsoft also issued CVE-2025-55241…"); only the **CVSS 10.0** is external. The
+  walk had wrongly lumped both as external (§10/§15 corrected — CVE is blog-asserted, CVSS is the lone
+  externally-sourced fact). (b) **entra** — the source's standalone *"Compromising tenants by hopping
+  over B2B trusts"* section is a **wormable** mass-compromise technique; the walk had buried it as
+  step-3 netId-method (b). Elevated to §5 (alternative paths) + expanded step 3(b) + §15 note. (c)
+  **netlify** — step-1 `T1595.002` (Vulnerability Scanning) was labeled "wordlist"; corrected to
+  **`T1595.003`** (Wordlist Scanning). (d) **long-blog** — step-9 `T1552.005` (Cloud Instance Metadata
+  API) is wrong for SSM/Secrets-Manager collection → **`T1555.006`** (Cloud Secrets Management Stores).
+  Same pass confirmed the **long-blog chunking fixture is hollow**: no ~6k-word body exists, URL is
+  `TBD`, and the harness *skips* the entry (ADR 0028) — so the walk's "genuinely exercised" claim was
+  false. Rewrote it as an explicit **owned deferral** (paper fixture pinning intended ground truth +
+  the 4→9 / 6→7,8 cross-chunk edges; goes live only when a long body is authored/wired). ConfusedFunction's
+  `T1552.005` was checked and **left as-is** (there the metadata-API meaning is the intended, consistent
+  mapping). Eval suite green (113).
 - **Shape-enum gap.** The documented v1 blog shapes {aws_ttp, supply_chain, incident_analysis} don't
   fit a cloud_provider_flaw / non-AWS disclosure; `BlogEntry.shape` is open-set (ADR 0014) so accurate
   shapes are used and each walk's §15 flags the gap. Not a defect; surfaced for the architect.
