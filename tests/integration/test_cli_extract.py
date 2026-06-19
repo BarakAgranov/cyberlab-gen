@@ -885,6 +885,35 @@ def test_run_store_persists_complete_run_on_ship(tmp_path: Path) -> None:
     assert "aws-attack" in run_dir.name  # readable, identifiable run id
 
 
+def test_feedback_rerun_confidence_flip_persists_reruns_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Feedback re-run that flips ``low_jury_confidence`` persists the RE-RUN's ``RunStatus``.
+
+    The interactive loop rebinds ``result`` to the re-run, but persistence runs in ``run_extract``'s
+    ``finally`` — it must see the final result, not the stale first run (ADR 0100, the same class as
+    the plan stale-result fix). Here the first run is clean and the post-feedback re-run is
+    low-confidence: the record must be ``SHIPPED_LOW_CONFIDENCE``, not the pre-fix stale ``SHIPPED``.
+    """
+    clean = RunResult(spec=_in_scope_spec(facets=["target:aws"]))  # low_jury_confidence=False
+    low = RunResult(spec=_in_scope_spec(facets=["target:gcp"]), low_jury_confidence=True)
+    _install_runner(monkeypatch, _FakeRunner([clean, low]))
+    monkeypatch.chdir(tmp_path)
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(cli_main, "stdin_tty_override", True)
+    # feedback -> text -> approve the low-confidence re-run
+    result = runner.invoke(
+        app,
+        ["--state-dir", str(state_dir), "extract", "https://example.com/blog"],
+        input="f\nadd gcp\na\n",
+    )
+    assert result.exit_code == 0, result.output
+    record = _read_record(_only_run_dir(state_dir / "runs"))
+    assert (
+        record.status is RunStatus.SHIPPED_LOW_CONFIDENCE
+    )  # re-run's confidence, not stale SHIPPED
+
+
 def test_run_store_persists_partial_spec_on_jury_reject(tmp_path: Path) -> None:
     """A jury-reject halt still persists the produced (rejected) spec + a halt record."""
     from cyberlab_gen.framework.orchestrator import JuryRejectionError

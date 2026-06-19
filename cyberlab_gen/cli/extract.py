@@ -32,11 +32,16 @@ from typing import TYPE_CHECKING, Protocol
 import click
 import typer
 from pydantic import Field
-from ruamel.yaml import YAML
 from ruamel.yaml.compat import StringIO
 
 from cyberlab_gen.agents.proposals import ProposedFacet, ProposedThesisType, ProposedValueType
-from cyberlab_gen.cli import output
+from cyberlab_gen.cli import interrupt, output
+from cyberlab_gen.cli.interrupt import (
+    DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP,
+    ArtifactChoice,
+    EditorFn,
+    ProposalChoice,
+)
 from cyberlab_gen.framework.orchestrator import (
     PipelineStatus,
     reject_interactive_when_headless,
@@ -82,11 +87,6 @@ logger = logging.getLogger(__name__)
 
 #: The file the verb writes the approved/accepted AttackSpec to, in the cwd.
 ATTACK_SPEC_FILENAME = "attack-spec.yaml"
-
-#: Per-run cap on auto-accepted proposals in ``--auto`` mode (placeholder 5,
-#: ``implementation-plan.md §4.2``; revisited in Phase 4). ``--interactive`` has
-#: no cap — the user acts on every proposal individually.
-DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP = 5
 
 
 # --- the typed result the interrupt consumes (ADR 0024) --------------------
@@ -385,28 +385,10 @@ def _state_to_run_result(
 
 
 # --- menu option enums -----------------------------------------------------
-
-
-class ArtifactChoice(StrEnum):
-    """The four-option menu for the AttackSpec itself (``pipeline.md §3.1.1``)."""
-
-    APPROVE = "approve"
-    FEEDBACK = "feedback"
-    EDIT = "edit"
-    ABORT = "abort"
-
-
-class ProposalChoice(StrEnum):
-    """The per-proposal menu (``pipeline.md §3.2.5``): Accept or Edit only.
-
-    Rejecting a single proposal in isolation has no coherent semantics
-    (``pipeline.md §3.2.5`` note) — the value exists in the AttackSpec and the
-    system requires typed values. A user who disagrees Edits, gives Extractor
-    feedback at the artifact level, or Aborts.
-    """
-
-    ACCEPT = "accept"
-    EDIT = "edit"
+#
+# ``ArtifactChoice`` / ``ProposalChoice`` / ``EditorFn`` are imported from ``cli.interrupt`` (the
+# shared interrupt machinery, ADR 0100) and re-exported here for back-compat. ``BudgetChoice`` is
+# budget-overrun-specific and stays local.
 
 
 class BudgetChoice(StrEnum):
@@ -417,20 +399,10 @@ class BudgetChoice(StrEnum):
     ABORT = "abort"
 
 
-#: Type of the editor callable: takes the text to edit, returns the edited text
-#: (or ``None`` if the user made no change / aborted the editor). ``click.edit``
-#: matches this; tests inject a fake.
-type EditorFn = Callable[[str], str | None]
-
-
 # --- YAML (de)serialization for the artifact + editor round-trip -----------
 
-
-def _yaml() -> YAML:
-    y = YAML()
-    y.default_flow_style = False
-    y.width = 4096  # don't wrap long citation strings
-    return y
+#: The configured round-trip YAML, shared with ``cli.interrupt`` (ADR 0100).
+_yaml = interrupt.yaml
 
 
 def spec_to_yaml(spec: AttackSpec) -> str:
@@ -491,61 +463,17 @@ def _format_spec_summary(result: RunResult) -> str:
 
 def _prompt_artifact_choice() -> ArtifactChoice:
     """Render and read the four-option menu (``pipeline.md §3.1.1``)."""
-    output.print_info(
-        "\nChoose: [a]pprove  [f]eedback (re-run Extractor)  [e]dit in $EDITOR  a[b]ort"
-    )
-    raw = typer.prompt("action", default="a").strip().lower()
-    mapping = {
-        "a": ArtifactChoice.APPROVE,
-        "approve": ArtifactChoice.APPROVE,
-        "f": ArtifactChoice.FEEDBACK,
-        "feedback": ArtifactChoice.FEEDBACK,
-        "e": ArtifactChoice.EDIT,
-        "edit": ArtifactChoice.EDIT,
-        "b": ArtifactChoice.ABORT,
-        "abort": ArtifactChoice.ABORT,
-    }
-    choice = mapping.get(raw)
-    if choice is None:
-        output.print_error(f"unrecognized choice {raw!r}; treating as abort")
-        return ArtifactChoice.ABORT
-    return choice
+    return interrupt.prompt_artifact_choice(rerun_agent="Extractor")
 
 
 def _edit_spec_with_revalidation(spec: AttackSpec, *, editor: EditorFn) -> AttackSpec:
-    """Open the spec in ``$EDITOR``; reopen with error-comments on invalid edits.
+    """Open the spec in ``$EDITOR``; reopen with error-comments on invalid edits (``§3.1.1``).
 
-    ``pipeline.md §3.1.1`` / §3.2.5: user edits are *structurally* re-validated
-    only; a structurally invalid edit reopens the editor with the errors prepended
-    as comments. The user may abort the editor (return ``None``/unchanged) to keep
-    the original. Semantic correctness of edits is the user's responsibility.
+    Thin wrapper over the shared structural edit-revalidation loop (``cli.interrupt``, ADR 0100).
     """
-    text = spec_to_yaml(spec)
-    while True:
-        edited = editor(text)
-        if edited is None or edited == text:
-            return spec  # no change / editor aborted → keep the original
-        try:
-            return _load_spec_from_yaml(edited)
-        except Exception as exc:
-            # Broad by design: the user can paste arbitrary YAML into the editor, so
-            # any parse/validation failure re-prompts with the errors inlined below.
-            # Logged at WARNING with the traceback so a genuine bug surfaces in the
-            # run log rather than being silently mistaken for a user typo.
-            logger.warning(
-                "edited AttackSpec failed structural revalidation: %s", exc, exc_info=True
-            )
-            comment = _errors_as_comments(exc)
-            # Reopen with the errors as leading comments + the user's text below.
-            text = f"{comment}\n{edited}"
-
-
-def _errors_as_comments(exc: Exception) -> str:
-    """Render a validation/parse error as ``#``-prefixed editor comment lines."""
-    lines = ["# STRUCTURAL VALIDATION FAILED — fix these and re-save:"]
-    for raw_line in str(exc).splitlines():
-        lines.append(f"# {raw_line}")
-    return "\n".join(lines)
+    return interrupt.edit_with_revalidation(
+        spec, to_text=spec_to_yaml, parse=_load_spec_from_yaml, editor=editor
+    )
 
 
 def _collect_proposals_interactive(
@@ -611,42 +539,28 @@ def _promote_proposals_interactive(
         output.print_info(f"  - {label} already registered; not promoted (would shadow an entry)")
 
 
-def _default_proposal_choice_reader() -> str:
-    return typer.prompt("proposal action ([a]ccept / [e]dit)", default="a")
-
-
 def _review_one_proposal[T: (ProposedValueType, ProposedFacet, ProposedThesisType)](
     *,
     label: str,
     model: T,
     parse: Callable[[object], T],
     editor: EditorFn,
-    choice_reader: Callable[[], str] = _default_proposal_choice_reader,
+    choice_reader: Callable[[], str] = interrupt.default_proposal_choice_reader,
 ) -> T:
-    """Run the Accept/Edit menu for one proposal; return the (possibly edited) one.
+    """Run the Accept/Edit menu for one proposal (extract's back-compat wrapper, ADR 0100).
 
-    ``choice_reader`` is injectable so the per-proposal menu can be tested without
-    stdin; it defaults to a ``typer.prompt``. The CLI path drives the prompt via
-    ``CliRunner(input=...)``.
+    ``parse`` takes the YAML-loaded object (the Phase-1 test contract); the shared loop takes the
+    edited text, so we adapt. Thin re-export wrapper — flagged for cleanup when extract is next
+    touched (ADR 0100), not to ossify.
     """
-    output.print_info(f"\nProposal: {label}")
-    raw = choice_reader().strip().lower()
-    if raw in ("a", "accept"):
-        return model
-    # edit-with-revalidation, same loop as the artifact edit
-    text = _proposal_to_yaml(model)
-    while True:
-        edited = editor(text)
-        if edited is None or edited == text:
-            return model
-        try:
-            data = _yaml().load(StringIO(edited))
-            return parse(data)
-        except Exception as exc:
-            # Broad by design (see _edit_spec): arbitrary user edits re-prompt with
-            # the errors inlined; logged with the traceback so a real bug is visible.
-            logger.warning("edited proposal failed structural revalidation: %s", exc, exc_info=True)
-            text = f"{_errors_as_comments(exc)}\n{edited}"
+    return interrupt.review_one_proposal(
+        label=label,
+        model=model,
+        to_text=_proposal_to_yaml,
+        parse=lambda text: parse(_yaml().load(StringIO(text))),
+        editor=editor,
+        choice_reader=choice_reader,
+    )
 
 
 def _proposal_to_yaml(model: ProposedValueType | ProposedFacet | ProposedThesisType) -> str:
@@ -784,7 +698,7 @@ def run_extract(
 
     if run_store is None:
         result = runner.run(url, ledger=ledger)
-        return _drive_result(
+        path, _ = _drive_result(
             result=result,
             runner=runner,
             ledger=ledger,
@@ -794,6 +708,7 @@ def run_extract(
             handle=None,
             overlay_dir=overlay,
         )
+        return path
 
     handle = run_store.start(
         kind=RunKind.EXTRACT,
@@ -812,7 +727,13 @@ def run_extract(
     path: Path | None = None
     try:
         result = runner.run(url, ledger=ledger)
-        path = _drive_result(
+        # Rebind ``result`` to the driver's FINAL result (after any Feedback re-run / Edit) so the
+        # ``finally`` resolves the RunStatus from what the run actually ended on — not the stale first
+        # run. Artifacts already come fresh from the checkpoint (``last_state``); this closes the
+        # parallel gap for the status enum: a Feedback re-run that flips ``low_jury_confidence`` would
+        # otherwise persist SHIPPED vs SHIPPED_LOW_CONFIDENCE off the first run (same class as the plan
+        # stale-result fix, ADR 0100).
+        path, result = _drive_result(
             result=result,
             runner=runner,
             ledger=ledger,
@@ -839,8 +760,13 @@ def _drive_result(
     mode_interactive: bool,
     handle: RunHandle | None,
     overlay_dir: Path,
-) -> Path | None:
-    """Dispatch to the interactive or auto post-Extractor flow."""
+) -> tuple[Path | None, RunResult]:
+    """Dispatch to the interactive or auto post-Extractor flow.
+
+    Returns ``(path, final_result)``: the written path (``None`` if not shipped) and the result the
+    run *ended on* (the re-run/edited result on the interactive path), so the caller resolves the
+    persisted ``RunStatus`` from the true terminal state (ADR 0100).
+    """
     # The production runner carries the merged registry snapshot, used for accept-time proposal dedup
     # (ADR 0099); a fake test runner does not — dedup is then off (the pre-ADR-0099 behaviour).
     registries = runner.registries if isinstance(runner, PipelineExtractRunner) else None
@@ -898,12 +824,13 @@ def _drive_auto(
     handle: RunHandle | None,
     overlay_dir: Path,
     registries: MergedRegistries | None = None,
-) -> Path | None:
+) -> tuple[Path | None, RunResult]:
     """``--auto``: no interrupts except budget-overrun; out-of-scope halts (§3.1.1).
 
     Promotion to the shared overlay is **gated on the spec shipping** (ADR 0050/0062): the
     overlay write happens only *after* ``write_attack_spec`` confirms the spec is on disk, so a
-    run that aborts (out-of-scope, budget) promotes nothing.
+    run that aborts (out-of-scope, budget) promotes nothing. (``--auto`` has no re-run, so ``result``
+    here is always the first run; the tuple return mirrors the interactive driver for one caller seam.)
     """
     if result.is_out_of_scope():
         output.print_info(
@@ -911,11 +838,11 @@ def _drive_auto(
             f"(reason: {result.spec.extraction_outcome_reason}). "
             "Re-run with --interactive to proceed anyway."
         )
-        return None
+        return None, result
     if _would_overrun(result, ledger) and not _handle_budget_overrun(
         result, ledger, interactive=False
     ):
-        return None
+        return None, result
     _emit_run_report(result)
     path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
     _mirror_spec(handle, result.spec)
@@ -923,7 +850,7 @@ def _drive_auto(
         result, overlay_dir=overlay_dir, handle=handle, ledger=ledger, registries=registries
     )
     output.print_info(f"\nwrote {path}")
-    return path
+    return path, result
 
 
 def _promote_proposals_auto(
@@ -996,8 +923,12 @@ def _drive_interactive(
     handle: RunHandle | None,
     overlay_dir: Path,
     registries: MergedRegistries | None = None,
-) -> Path | None:
-    """``--interactive``: the four-option menu + per-proposal review + budget check."""
+) -> tuple[Path | None, RunResult]:
+    """``--interactive``: the four-option menu + per-proposal review + budget check.
+
+    Returns ``(path, result)`` where ``result`` is the latest (re-run/edited) result, so the caller
+    persists the true terminal ``RunStatus`` (ADR 0100).
+    """
     while True:
         # Out-of-scope surfaces as a normal interrupt in --interactive (§3.1.1):
         # the four-option menu still applies (the user may give feedback or abort).
@@ -1011,7 +942,7 @@ def _drive_interactive(
 
         if choice is ArtifactChoice.ABORT:
             output.print_info("aborted; no attack-spec.yaml written.")
-            return None
+            return None, result
         if choice is ArtifactChoice.FEEDBACK:
             feedback = typer.prompt("feedback for the Extractor")
             result = runner.re_run_with_feedback(feedback, ledger=ledger)
@@ -1028,14 +959,14 @@ def _drive_interactive(
         if _would_overrun(result, ledger) and not _handle_budget_overrun(
             result, ledger, interactive=True
         ):
-            return None
+            return None, result
         _emit_run_report(result)
         path = write_attack_spec(result.spec, directory=target_dir)  # the ship boundary
         _mirror_spec(handle, result.spec)
         ctx = _acceptance_context(result, overlay_dir=overlay_dir, handle=handle, ledger=ledger)
         _promote_proposals_interactive(collected, ctx=ctx, registries=registries)
         output.print_info(f"\nwrote {path}")
-        return path
+        return path, result
 
 
 # --- run-store persistence (ADR 0039) --------------------------------------
