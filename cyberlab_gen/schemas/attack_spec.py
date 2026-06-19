@@ -52,6 +52,7 @@ from cyberlab_gen.schemas.primitives import (
     MitreTacticId,
     MitreTechniqueId,
     NonEmptyString,
+    PublisherLabel,
     SemVer,
     Sha256Hex,
     ThesisType,
@@ -275,10 +276,17 @@ class RelatedBlogReference(ArtifactModel):
 
 
 class AdvisoryReference(ArtifactModel):
-    """A vendor/advisory reference. schema.md §4.8."""
+    """A vendor/advisory reference. schema.md §4.8.
+
+    ``source`` is a ``PublisherLabel`` (the publisher the advisory is attributed
+    to, e.g. ``aws``) — content provenance, **not** an ``external_data_sources``
+    tool-adapter id. Retyped off ``ExternalDataSourceId`` (ADR 0077 / 0101) so it
+    cannot be misread as a registry id that must resolve in the tool registry; the
+    static-schema validator deliberately does not resolve it (it never could).
+    """
 
     advisory_id: NonEmptyString
-    source: ExternalDataSourceId
+    source: PublisherLabel
     url: HttpUrl | None = None
     description: ProvenanceString
 

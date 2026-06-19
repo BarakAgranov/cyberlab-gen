@@ -52,13 +52,13 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel
 
+from cyberlab_gen.external_data_sources.types import CveResolution
 from cyberlab_gen.schemas.enums import CitationKind, ProvenanceSource
 from cyberlab_gen.schemas.provenance import Provenance
 from cyberlab_gen.validators.base import Finding, FindingResult
 
 if TYPE_CHECKING:
     from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
-    from cyberlab_gen.external_data_sources import NvdClient
     from cyberlab_gen.schemas.attack_spec import AttackSpec
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class GroundingCode(StrEnum):
     PROVENANCE_STRUCTURE = "provenance_structure"
     SEARCH_BEFORE_CLAIM = "search_before_claim"
     CVE_HALLUCINATION = "cve_hallucination"
+    SOURCE_OF_RECORD_UNKNOWN = "source_of_record_unknown"
 
 
 #: Finding codes that trigger an orchestrator-owned re-extract *retry* (a hallucination
@@ -110,27 +111,40 @@ class GroundingResult(FindingResult[GroundingFinding]):
 class GroundingValidator:
     """Runs the orchestrator-owned grounding stack over an ``AttackSpec`` (ADR 0051/0060).
 
-    Constructed with an optional ``NvdClient`` for the CVE-hallucination check; when
-    ``None`` (the Phase-1 default) that check is skipped, not failed — the honest
-    "couldn't check" posture (``architecture.md §1.6``). The validator is stateless
-    across calls and never mutates its inputs.
+    The validator is **no-network** (``architecture.md §1.6``): the CVE ship-gate
+    verifies grounded CVE ids against NVD by *consuming the per-CVE outcomes the
+    pre-Planner enrichment pass already produced* (``cve_resolution``, passed to
+    :meth:`validate`) — enrichment is the network pass, the validator never calls
+    out. No ``cve_resolution`` (the hermetic default, or no NVD client wired to
+    enrichment) → the gate is skipped, not failed — the honest "couldn't check"
+    posture (ADR 0101, refining ADR 0077). ``known_source_ids`` (the registered
+    ``external_data_sources`` ids) enables the post-enrichment ``source_of_record``
+    membership check; ``None`` skips it. Stateless across calls; never mutates inputs.
     """
 
-    def __init__(self, *, nvd_client: NvdClient | None = None) -> None:
-        self._nvd_client = nvd_client
+    def __init__(self, *, known_source_ids: frozenset[str] | None = None) -> None:
+        self._known_source_ids = known_source_ids
 
-    def validate(self, spec: AttackSpec, lookups: list[ExternalLookupRecord]) -> GroundingResult:
-        """Run the three sibling layers + MITRE pass-through; return one findings set.
+    def validate(
+        self,
+        spec: AttackSpec,
+        lookups: list[ExternalLookupRecord],
+        *,
+        cve_resolution: dict[str, CveResolution] | None = None,
+    ) -> GroundingResult:
+        """Run the sibling layers + MITRE pass-through; return one findings set.
 
         ``lookups`` is the Extractor's external-lookup trace (for the search-before-claim
-        cross-check). Never raises on a grounding problem — those are findings; the
+        cross-check). ``cve_resolution`` is enrichment's per-CVE NVD outcome (for the
+        ship-gate). Never raises on a grounding problem — those are findings; the
         orchestrator decides routing (``architecture.md §1.5``).
         """
         findings: list[GroundingFinding] = []
         findings.extend(self._check_provenance_structure(spec))
         findings.extend(self._check_search_before_claim(spec, lookups))
         self._log_mitre(spec)  # MITRE: pass-through, no findings (ADR 0055/0058)
-        findings.extend(self._check_cves(spec, lookups))
+        findings.extend(self._check_cves(spec, cve_resolution))
+        findings.extend(self._check_source_of_record(spec))
         if findings:
             logger.info("grounding stack produced %d finding(s)", len(findings))
         return GroundingResult(findings=findings)
@@ -227,29 +241,61 @@ class GroundingValidator:
     # --- layer 3: CVE-hallucination ----------------------------------------
 
     def _check_cves(
-        self, spec: AttackSpec, lookups: list[ExternalLookupRecord]
+        self, spec: AttackSpec, cve_resolution: dict[str, CveResolution] | None
     ) -> list[GroundingFinding]:
-        """Every grounded CVE id must resolve against NVD (skipped when no client)."""
-        if spec.external_references is None or self._nvd_client is None:
+        """Every grounded CVE id must resolve against NVD (ship-gate, un-inerted via ADR 0101).
+
+        Consumes ``cve_resolution`` — the per-CVE outcome the framework's enrichment NVD call
+        already produced — so the gate is real **without the validator doing its own network
+        I/O** (``architecture.md §1.6``). A grounded (non-``unknown_from_blog``) CVE that NVD
+        has no record of (``ABSENT``) is a hallucination → retry-triggering. ``CONFIRMED`` /
+        ``UNAVAILABLE`` (NVD down/rate-limited — never penalise the agent, ADR 0042) / a CVE
+        absent from the map (never NVD-checked) produce no finding — the honest "couldn't check".
+        """
+        if spec.external_references is None or cve_resolution is None:
             return []
         findings: list[GroundingFinding] = []
-        found_cves = {
-            str(rec.params.get("cve_id", "")).strip()
-            for rec in lookups
-            if rec.source_id == _NVD_SOURCE_ID and rec.found
-        }
         for i, cve in enumerate(spec.external_references.cves):
             if cve.description.source is ProvenanceSource.UNKNOWN_FROM_BLOG:
                 continue
-            if cve.cve_id not in found_cves:
+            if cve_resolution.get(cve.cve_id) is CveResolution.ABSENT:
                 findings.append(
                     GroundingFinding(
                         code=GroundingCode.CVE_HALLUCINATION,
                         # Integer list index (ADR 0074); the cve id is named in the detail.
                         location=f"external_references.cves[{i}]",
                         detail=(
-                            f"{cve.cve_id} did not resolve against NVD; a real CVE must be "
-                            "confirmed via external_lookup before it is claimed"
+                            f"{cve.cve_id} did not resolve against NVD during enrichment; a real "
+                            "CVE must be confirmed before it is claimed"
+                        ),
+                    )
+                )
+        return findings
+
+    # --- layer 4: source_of_record membership (post-enrichment) ------------
+
+    def _check_source_of_record(self, spec: AttackSpec) -> list[GroundingFinding]:
+        """Every framework-set ``cve.source_of_record`` must resolve to a registered source.
+
+        Post-enrichment, mechanical, no-network (ADR 0077 / 0101). ``source_of_record`` is
+        framework-authored by enrichment to a real registry id by construction, so this is a
+        **defensive guard** against a loaded/hand-edited spec carrying a source id that resolves
+        in no registry. Informational (never retry-triggering): a re-extract cannot fix a
+        framework-owned field. Skipped when no ``known_source_ids`` was supplied (couldn't check).
+        """
+        if self._known_source_ids is None or spec.external_references is None:
+            return []
+        findings: list[GroundingFinding] = []
+        for i, cve in enumerate(spec.external_references.cves):
+            sor = cve.source_of_record
+            if sor is not None and sor not in self._known_source_ids:
+                findings.append(
+                    GroundingFinding(
+                        code=GroundingCode.SOURCE_OF_RECORD_UNKNOWN,
+                        location=f"external_references.cves[{i}].source_of_record",
+                        detail=(
+                            f"source_of_record {sor!r} resolves to no registered "
+                            "external_data_sources id"
                         ),
                     )
                 )

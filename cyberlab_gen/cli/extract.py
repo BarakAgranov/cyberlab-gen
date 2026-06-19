@@ -284,12 +284,21 @@ class PipelineExtractRunner:
             summary = f"{summary}\n\nUSER FEEDBACK (re-extract addressing this):\n{extra_feedback}"
         initial = PipelineState(blog_content=self._blog_content, source_summary=summary)
 
+        # The registered external_data_sources ids enable the grounding stack's post-enrichment
+        # source_of_record membership check (ADR 0077 / 0101); ``None`` (a fake runner) skips it.
+        known_source_ids = (
+            frozenset(e.id for e in self.registries.external_data_sources.entries)
+            if self.registries is not None
+            else None
+        )
+
         async def _go() -> PipelineState:
             if self._checkpoint_db is None:
                 run = build_pipeline(
                     extractor=self._extractor,
                     validator=self._validator,
                     jury=self._jury,
+                    known_source_ids=known_source_ids,
                     recorder=self._recorder,
                 )
                 return await run(initial)
@@ -305,6 +314,7 @@ class PipelineExtractRunner:
                     extractor=self._extractor,
                     validator=self._validator,
                     jury=self._jury,
+                    known_source_ids=known_source_ids,
                     checkpointer=saver,
                     recorder=self._recorder,
                 )

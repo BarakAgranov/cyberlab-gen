@@ -70,7 +70,18 @@ ExternalDataSourceId = SnakeName
 """Open-set external-data-source id (snake_case). schema-details.md §2.3.
 
 Validated against the ``external_data_sources`` registry at static schema validation. Structurally
-just a ``SnakeName`` (e.g. ``nvd``, ``mitre_attack``).
+just a ``SnakeName`` (e.g. ``nvd``, ``mitre_attack``). This is a *tool-adapter* id — the thing the
+framework calls — not a content provenance label; see ``PublisherLabel`` for the latter.
+"""
+
+PublisherLabel = SnakeName
+"""A vendor/publisher provenance label (snake_case). schema-details.md §2.3; ADR 0077 / 0101.
+
+The publisher an advisory is attributed to (e.g. ``aws``, ``microsoft``) — content provenance, NOT
+a tool-adapter id. Distinct from ``ExternalDataSourceId`` so a naive consumer cannot misread
+``AdvisoryReference.source`` as something that must resolve in the ``external_data_sources`` tool
+registry (it never can — the lone unconvergeable ship-blocker, investigation 0001 §2). Structurally
+identical to ``SnakeName`` today; the separate alias carries the semantic distinction.
 """
 
 ValueTypeName = SnakeName
@@ -144,6 +155,7 @@ __all__ = [
     "MitreTacticId",
     "MitreTechniqueId",
     "NonEmptyString",
+    "PublisherLabel",
     "RegistryKey",
     "SemVer",
     "Sha256Hex",

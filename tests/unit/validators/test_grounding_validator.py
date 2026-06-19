@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from cyberlab_gen.agents.extractor.tools import ExternalLookupRecord
+from cyberlab_gen.external_data_sources import CveResolution
 from cyberlab_gen.schemas.attack_spec import (
     AttackSpec,
     ChainBlock,
@@ -234,35 +235,83 @@ def test_structure_only_findings_do_not_trigger_retry() -> None:
     assert result.needs_retry is False
 
 
-# --- CVE-hallucination layer (needs an NVD client) -------------------------
+# --- CVE-hallucination ship-gate (consumes enrichment's per-CVE outcome) ----
 
 
-def test_blog_explicit_cve_unresolved_against_nvd_is_a_cve_hallucination() -> None:
-    # A grounded (blog_explicit) CVE id NVD has no record of is a hallucination when an NVD
-    # client is wired. Retry-triggering. (Relocated from the Extractor's former _check_cves.)
-    class _NvdMiss:
-        def lookup_cve(self, cve_id: str) -> None:
-            del cve_id
-            return None
-
+def _cve_spec(cve_id: str = "CVE-2024-0002", *, source_of_record: str | None = None) -> AttackSpec:
     spec = _spec()
     spec.external_references = ExternalRefsBlock(
-        cves=[CveReference(cve_id="CVE-2024-0002", description=_pstr("claimed real CVE"))]  # type: ignore[arg-type]
+        cves=[
+            CveReference(
+                cve_id=cve_id,  # type: ignore[arg-type]
+                description=_pstr("claimed real CVE"),
+                source_of_record=source_of_record,  # type: ignore[arg-type]
+            )
+        ]
     )
-    result = GroundingValidator(nvd_client=_NvdMiss()).validate(spec, lookups=[])
+    return spec
+
+
+def test_cve_absent_in_nvd_resolution_is_a_cve_hallucination() -> None:
+    # A grounded CVE id enrichment's NVD call had no record of (ABSENT) is a hallucination.
+    # Retry-triggering. The gate consumes enrichment's outcome — the validator does no I/O.
+    spec = _cve_spec()
+    result = GroundingValidator().validate(
+        spec, lookups=[], cve_resolution={"CVE-2024-0002": CveResolution.ABSENT}
+    )
     assert any(f.code is GroundingCode.CVE_HALLUCINATION for f in result.findings)
     assert result.needs_retry is True
 
 
-def test_no_nvd_client_skips_cve_check() -> None:
-    # No NVD client wired (the Phase-1 default) → the CVE-hallucination check is skipped, not
-    # failed (the honest "couldn't check" posture, architecture.md §1.6).
-    spec = _spec()
-    spec.external_references = ExternalRefsBlock(
-        cves=[CveReference(cve_id="CVE-2024-0002", description=_pstr("claimed real CVE"))]  # type: ignore[arg-type]
+def test_cve_confirmed_in_nvd_resolution_is_clean() -> None:
+    spec = _cve_spec()
+    result = GroundingValidator().validate(
+        spec, lookups=[], cve_resolution={"CVE-2024-0002": CveResolution.CONFIRMED}
     )
-    result = GroundingValidator(nvd_client=None).validate(spec, lookups=[])
     assert not any(f.code is GroundingCode.CVE_HALLUCINATION for f in result.findings)
+
+
+def test_cve_unavailable_nvd_is_never_a_hallucination() -> None:
+    # NVD down/rate-limited during enrichment → UNAVAILABLE → the gate must NOT penalise the
+    # agent (ADR 0042): no CVE_HALLUCINATION finding.
+    spec = _cve_spec()
+    result = GroundingValidator().validate(
+        spec, lookups=[], cve_resolution={"CVE-2024-0002": CveResolution.UNAVAILABLE}
+    )
+    assert not any(f.code is GroundingCode.CVE_HALLUCINATION for f in result.findings)
+
+
+def test_no_cve_resolution_skips_the_gate() -> None:
+    # No enrichment NVD outcome (no client wired) → the gate is skipped, not failed — the
+    # honest "couldn't check" posture (architecture.md §1.6).
+    spec = _cve_spec()
+    result = GroundingValidator().validate(spec, lookups=[])
+    assert not any(f.code is GroundingCode.CVE_HALLUCINATION for f in result.findings)
+
+
+# --- source_of_record membership (post-enrichment, ADR 0077 / 0101) ---------
+
+
+def test_unknown_source_of_record_is_a_finding_but_not_retry() -> None:
+    # A framework-owned source_of_record resolving in no registry is a defensive finding —
+    # informational (a re-extract cannot fix a framework-owned field), never retry-triggering.
+    spec = _cve_spec(source_of_record="not_a_real_source")
+    result = GroundingValidator(known_source_ids=frozenset({"nvd"})).validate(spec, lookups=[])
+    assert any(f.code is GroundingCode.SOURCE_OF_RECORD_UNKNOWN for f in result.findings)
+    assert result.needs_retry is False
+
+
+def test_known_source_of_record_is_clean() -> None:
+    spec = _cve_spec(source_of_record="nvd")
+    result = GroundingValidator(known_source_ids=frozenset({"nvd"})).validate(spec, lookups=[])
+    assert not any(f.code is GroundingCode.SOURCE_OF_RECORD_UNKNOWN for f in result.findings)
+
+
+def test_source_of_record_check_skipped_without_known_ids() -> None:
+    # No known_source_ids supplied → the membership check is skipped (couldn't check).
+    spec = _cve_spec(source_of_record="not_a_real_source")
+    result = GroundingValidator().validate(spec, lookups=[])
+    assert not any(f.code is GroundingCode.SOURCE_OF_RECORD_UNKNOWN for f in result.findings)
 
 
 # --- provenance structure: the other source kinds --------------------------

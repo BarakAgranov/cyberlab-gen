@@ -629,3 +629,25 @@ def test_extras_entry_rejects_empty_name() -> None:
             description=ProvenanceString(value="x", source=ProvenanceSource.USER_PROVIDED),
             source=ProvenanceSource.USER_PROVIDED,
         )
+
+
+def test_advisory_reference_source_accepts_publisher_label_and_round_trips() -> None:
+    # ADR 0077 / 0101: AdvisoryReference.source is a PublisherLabel (a publisher provenance
+    # label, e.g. 'aws') retyped off ExternalDataSourceId so it is not misread as a tool id.
+    # Structurally still a SnakeName: a publisher label round-trips, a non-snake value is rejected.
+    from cyberlab_gen.schemas.attack_spec import AdvisoryReference
+
+    adv = AdvisoryReference(
+        advisory_id="ADV-1",
+        source="aws",  # type: ignore[arg-type]
+        description=_pstr("an advisory"),
+    )
+    assert adv.source == "aws"
+    restored = AdvisoryReference.model_validate(adv.model_dump())
+    assert restored == adv
+    with pytest.raises(ValidationError):
+        AdvisoryReference(
+            advisory_id="ADV-2",
+            source="Not A Snake",  # type: ignore[arg-type]
+            description=_pstr("bad"),
+        )

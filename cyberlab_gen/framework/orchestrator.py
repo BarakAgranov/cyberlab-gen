@@ -410,6 +410,7 @@ def build_pipeline(
     validator: StaticSchemaValidator,
     jury: _JuryLike,
     grounding_validator: GroundingValidator | None = None,
+    known_source_ids: frozenset[str] | None = None,
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
     grounding_retry_attempts: int = DEFAULT_GROUNDING_RETRY_ATTEMPTS,
@@ -452,7 +453,11 @@ def build_pipeline(
     # The grounding stack is orchestrator-owned (ADR 0051/0060). A default is constructed
     # when the caller does not inject one so existing call sites stay unchanged; for a spec
     # with no external_api claims it produces no findings (a behaviour-neutral no-op).
-    grounding = grounding_validator if grounding_validator is not None else GroundingValidator()
+    grounding = (
+        grounding_validator
+        if grounding_validator is not None
+        else GroundingValidator(known_source_ids=known_source_ids)
+    )
 
     def _global_cap_reached(state: PipelineState) -> bool:
         """True when the run has used its whole end-to-end iteration budget (L3)."""
@@ -627,7 +632,10 @@ def build_pipeline(
         """
         assert state.spec is not None
         lookups = state.extraction.lookups if state.extraction is not None else []
-        state.grounding = grounding.validate(state.spec, lookups)
+        # The CVE ship-gate consumes enrichment's per-CVE NVD outcome (enrich runs before
+        # grounding); the validator itself stays no-network (ADR 0101 / §1.6).
+        cve_resolution = state.enrichment.cve_resolution if state.enrichment is not None else None
+        state.grounding = grounding.validate(state.spec, lookups, cve_resolution=cve_resolution)
         retry_findings = state.grounding.retry_findings()
         if not retry_findings:
             # Clean of hallucinations (any structure findings travel to the jury as grounding).
@@ -863,6 +871,7 @@ async def run_pipeline(
     validator: StaticSchemaValidator,
     jury: ExtractorJury,
     grounding_validator: GroundingValidator | None = None,
+    known_source_ids: frozenset[str] | None = None,
     enrichment_config: EnrichmentConfig | None = None,
     structural_retry_attempts: int = DEFAULT_STRUCTURAL_RETRY_ATTEMPTS,
     grounding_retry_attempts: int = DEFAULT_GROUNDING_RETRY_ATTEMPTS,
@@ -891,6 +900,7 @@ async def run_pipeline(
         validator=validator,
         jury=jury,
         grounding_validator=grounding_validator,
+        known_source_ids=known_source_ids,
         enrichment_config=enrichment_config,
         structural_retry_attempts=structural_retry_attempts,
         grounding_retry_attempts=grounding_retry_attempts,
