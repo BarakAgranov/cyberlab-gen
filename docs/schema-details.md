@@ -302,7 +302,8 @@ Some categories are open-set (registry-extensible). These are typed as `str` wit
 
 - `ExecutionContext` (e.g., `attacker_local`) — validated against the `execution_contexts` registry.
 - `ValueTypeName` (e.g., `aws_credentials`) — validated against the merged `value_types` registry.
-- `ExternalDataSourceId` (e.g., `nvd`) — validated against the `external_data_sources` registry.
+- `ExternalDataSourceId` (e.g., `nvd`) — a *tool-adapter* id (the thing the framework calls), validated against the `external_data_sources` registry.
+- `PublisherLabel` (e.g., `aws`) — a *publisher provenance* label, NOT a tool-adapter id (ADR 0077/0101). Used by `AdvisoryReference.source`; structurally a `SnakeName`, kept distinct from `ExternalDataSourceId` so it is not misread as a registry id that must resolve (it never can — the static-schema gate deliberately does not resolve it).
 - `ThesisType` (e.g., `vulnerability_chain`) — validated against the thesis-types registry.
 - `PublisherKind` is closed and is the enum above; `thesis.types` is open and is just `SnakeName`.
 
@@ -312,6 +313,7 @@ Each of these has a thin type alias and a registry validator the schema layer ca
 ExecutionContext = SnakeName
 ValueTypeName = SnakeName
 ExternalDataSourceId = SnakeName
+PublisherLabel = SnakeName
 ThesisType = SnakeName
 ```
 
@@ -762,7 +764,7 @@ class RelatedBlogReference(BaseModel):
 class AdvisoryReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
     advisory_id: NonEmptyString
-    source: ExternalDataSourceId
+    source: PublisherLabel  # publisher provenance label (e.g. 'aws'), NOT a tool-adapter id (ADR 0077/0101)
     url: HttpUrl | None = None
     description: ProvenanceString
 

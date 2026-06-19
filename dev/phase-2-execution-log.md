@@ -817,6 +817,73 @@ RED→GREEN status-staleness regressions).
 
 ---
 
+## Task 9: Full pre-Planner enrichment (data-driven)  (2026-06-19)
+
+**Built (ADR 0101).** The data-driven external-source enrichment seam + the three ADR-0077 items.
+- *Neutral package.* New `cyberlab_gen/external_data_sources/` (depends only on `schemas`): `ports.py`
+  (the relocated `NvdClient` + new `KevClient`/`EpssClient`/`MsrcClient`/`BulletinClient` Protocols,
+  `SourceAdapter`, `EnrichmentContext`, `SourceClients`), `types.py` (the typed records + `EnrichmentResult`
+  + `CveResolution`/`LookupPriority`/`SkippedLookup`/`NvdCveData`, moved), `materiality.py`, `support.py`
+  (citations, discrepancy recording, trigger resolution), `registry.py` (`resolve_adapter` table), and a
+  per-source adapter dir each (`nvd/ mitre/ kev/ epss/ msrc/ bulletins/ osv/`). Realises seams ③.2 + ④.
+- *Data-driven driver.* `framework.enrichment.enrich()` now iterates the registry entries, resolves a
+  `SourceAdapter` per entry, and runs each in `LookupPriority` order — **no hardcoded source dispatch**.
+  Re-exports the moved names for back-compat. Registry expanded to the full v1 set (10 entries) with
+  trigger fields corrected to the real AttackSpec schema (ADR-0020 precedent).
+- *Adapters.* NVD (corroboration-capable CVSS/severity, typed on `CveReference`, + per-CVE `CveResolution`)
+  and MITRE (local seed) preserve prior behaviour; KEV/EPSS/MSRC parse documented publisher payloads into
+  typed lossless records in the `EnrichmentResult` **audit channel**; bulletins parse RSS/Atom on the
+  `target:<cloud>` facet; OSV honest-skips (its `targets.packages` trigger has no schema home), github_api
+  stub-skips (no adapter). Unavailable sources never fatal (ADR 0042; new `ExternalApiUnavailableError`).
+- *ADR-0077 items.* (1) CVE ship-gate un-inerted: the grounding validator consumes enrichment's per-CVE
+  `CveResolution` (ABSENT→hallucination/retry; UNAVAILABLE→never penalised; none→skip) — the validator
+  stays **no-network** (§1.6), enrichment is the network pass. (2) New post-enrichment `source_of_record`
+  membership check (`SOURCE_OF_RECORD_UNKNOWN`, informational), wired via `build_pipeline(known_source_ids=)`
+  threaded from the CLI runner's registries. (3) `AdvisoryReference.source` retyped off `ExternalDataSourceId`
+  to a distinct `PublisherLabel`.
+- Tests: `tests/unit/external_data_sources/test_adapters.py` (+15: parse-lossless + adapter behaviour +
+  data-driven dispatch + never-fatal); grounding tests rewired to the `cve_resolution` gate + `source_of_record`
+  layer; `test_enrichment.py` MITRE source-id; `test_attack_spec.py` advisory-retype round-trip; checkpoint
+  type registry updated for the moved `EnrichmentResult` + `CveResolution`.
+
+**Decisions.** ADR 0101 — data-driven seam; the **schema-home gap → Scope A** (verified NVD CVSS/severity are
+*corroboration-capable* so the additive KEV/EPSS/MSRC/bulletin records live in the audit channel, typed
+contract placement deferred to the Phase-3 Generator); minimal trigger mini-language (unresolved → honest
+skip); the ship-gate refinement of ADR-0077's "wire a client into the validator" wording (no-network, §1.6).
+
+**Surprises / drift.**
+- **The schema-home gap.** The registry's triggers/materiality rules name fields the AttackSpec mostly
+  lacks (`kev_inclusion`, `epss_score`, `affected_products`, `targets.packages`, …). Only NVD has typed
+  homes. Surfaced to the user; resolved as Scope A per the reviewed ruling (verified the NVD-corroboration
+  fact in code before placing). Not silently resolved.
+- **MITRE was not data-driven before.** The old code called `_enrich_techniques` unconditionally (no MITRE
+  registry entry existed — only NVD shipped). Making the driver registry-iterating required adding the
+  `mitre_attack` entry (and the full set) for MITRE to run; its skip source-id changed `mitre_attack_techniques`
+  → the entry id `mitre_attack` (test updated).
+- **Checkpoint allowlist keys on the real `__module__`.** Moving `EnrichmentResult` broke the ADR-0066
+  no-serde-warning round-trips until the registry tuple was repointed to `external_data_sources.types` (+
+  the new `CveResolution` enum added).
+
+**Deferred (owned, ADR 0101 §"owned deferrals").**
+- Typed KEV/EPSS/MSRC/bulletin homes on the AttackSpec → owner: **Phase-3 Generator**; interim exposure:
+  `EnrichmentResult.*_records` in the run report.
+- OSV/GitHub package/repo-target enrichment → owner: **Phase-3 schema work / Scope B**; interim exposure:
+  the OSV honest skip + github_api stub-skip.
+- Live `httpx` clients are **not** wired into the production CLI (no bundled keys); production runs hermetic
+  exactly as before, clients injectable via `SourceClients` for eval/tests. Owner: a later config/keys task.
+- Manifest-side Layer-1 membership unchanged from ADR 0099 §6 (Phase-3 Validator); the AttackSpec-side
+  `source_of_record` check landed here is the spec-side analog.
+
+**Doc edits surfaced** (ADR 0084): `schema-details.md §2.3` adds `PublisherLabel` (publisher-label vs
+tool-adapter-id distinction) + the alias; `schema-details.md` `AdvisoryReference.source` retyped to
+`PublisherLabel`. No architecture-tier contract change (the seam implements `pipeline.md §3.2.4`/`schema.md
+§4.9`). Brief-typo flagged: the Task-9 exit-criteria "`§5.5`" has no matching reading-path section (ADR 0101).
+
+**Verify.** `just verify` green — ruff + format clean, pyright strict 0 errors (pre-existing yaml-load
+warnings only), **960 passed / 1 skipped** (+21 since Task 8).
+
+---
+
 ## Execution-log entry template
 
 ```
