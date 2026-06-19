@@ -19,9 +19,9 @@ mapping the blog's narrative onto the AttackSpec structure
 
 - **id:** `entra-id-actor-token-cross-tenant-global-admin` (matches
   `eval/blog-sets/manifest.yaml`)
-- **shape:** `incident_analysis` (least-bad fit from the closed enum; see §15 —
-  this is really a cloud-provider-flaw / vulnerability disclosure and the
-  shape enum has no slot for it)
+- **shape:** `vulnerability_disclosure` (resolved per ADR 0103 — shape is a
+  descriptive open-set label, not a closed enum; this is a cloud-provider-flaw /
+  vulnerability disclosure. Matches `eval/blog-sets/manifest.yaml`. See §15.)
 - **URL:** https://dirkjanm.io/obtaining-global-admin-in-every-entra-id-tenant-with-actor-tokens/
 - **Canonical URL:** same as above (no observed redirect)
 - **Title:** "One Token to rule them all — obtaining Global Admin in every
@@ -512,17 +512,17 @@ Extractor on the same blog might miss.
   exactly what makes guest-trust hopping a cross-organization harvester rather
   than a single-tenant lookup.
 
-- **Shape call (enum gap):** `shape` was set to `incident_analysis` as the
-  least-bad fit from the closed enum `{aws_ttp, supply_chain,
-  incident_analysis}`, but this is genuinely a **vulnerability-disclosure /
-  cloud_provider_flaw** blog, **not** a real-incident reconstruction
-  (`none_observed`). `aws_ttp` is wrong (it's Azure, and a provider bug not
-  customer tradecraft) and `supply_chain` is wrong. **Candidate new manifest
-  shape:** `azure_vuln_disclosure` / `cloud_provider_flaw` (mirrors the same gap
-  flagged in the codebuild walk). The real signal lives in `thesis.types`
+- **Shape call (resolved — ADR 0103):** `shape` is now `vulnerability_disclosure`,
+  identical in this walk's §1 and the manifest. The earlier draft used
+  `incident_analysis` as a "least-bad fit" from the documented trio `{aws_ttp,
+  supply_chain, incident_analysis}`, but this is genuinely a
+  **vulnerability-disclosure / cloud_provider_flaw** blog, **not** a real-incident
+  reconstruction (`none_observed`). ADR 0103 found `shape` is purely descriptive
+  (nothing in the pipeline or the eval harness branches on its value) and
+  open-set, so the honest `vulnerability_disclosure` value is used directly rather
+  than forcing a trio member. The richer signal lives in `thesis.types`
   (`vulnerability_chain`, `cloud_provider_flaw`, `cross_tenant_compromise`,
-  `privilege_escalation`); `incident_analysis` is in `thesis.types` only for
-  consistency with the chosen shape and a reviewer may prefer to drop it.
+  `privilege_escalation`).
 
 - **Defender techniques on a disclosure (judgment call):** §8 is populated even
   though the field is nominally "for `incident_analysis` blogs only," because the

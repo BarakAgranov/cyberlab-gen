@@ -645,6 +645,8 @@ Labs targeting multiple platforms simply declare multiple `runtime:*` facets (e.
 
 Promotion from best-effort to first-class is a maintainer-PR activity (requires code: Layer 4 verification logic when available in v2, per-platform credential check conventions, etc.); see `architecture.md §8.2`. **Planner proposes** (lab-derived).
 
+**Note — `platform:*` is not a facet.** `platform:*` (e.g. `platform:kubernetes`, `platform:github`) is an *eval-coverage* label used only in the blog-set manifest and walk §14 for breadth counting (`eval.md §7.3`); it is not a facet, has no registry entry, and is proposed by no agent. For the attack surface under test, use `target:*`.
+
 **`lab_class_signal:*`** — facets that influence lab shape. Examples: `lab_class_signal:incident_analysis`, `lab_class_signal:vulnerability_chain` (blog-derived); `lab_class_signal:simulated_components`, `lab_class_signal:multi_language`, `lab_class_signal:parameterized`, `lab_class_signal:requires_infra`, `lab_class_signal:produces_world_state`, `lab_class_signal:expected_detections`, `lab_class_signal:manual_prereq`, `lab_class_signal:external_channel` (mostly blog-derived or split). Two facets named in earlier drafts that need description:
 
 - `lab_class_signal:time_marked` — the attack chain or detection depends on time-of-day, day-of-week, or timing windows being part of the scenario (e.g., the attack only works during business hours; the detection rule uses time-of-day correlation). Blog-derived.

@@ -8,6 +8,16 @@
 # Schema invented (eval.md §7.3 names the file but specifies no shape) —
 # see dev/decisions/0014-blog-set-manifest-schema.md (authoritative).
 # Harness-loader + per-run metrics: dev/decisions/0025-eval-harness-phase1-shape.md.
+#
+# Walk reconciliation (ADR 0103): every entry's `shape` / `complexity` /
+# `coverage_tags` is consistent with its finalized walk. `coverage_tags` is a
+# disciplined VERBATIM SUBSET of the walk's §14 (enforced by
+# test_manifest.py::test_manifest_coverage_tags_subset_of_walk_section_14);
+# `complexity` follows the step-count convention (medium = 4–8 §4 chain steps,
+# complex = 9+); `shape` is a descriptive open-set label (ADR 0103 — nothing
+# branches on its value) and is NOT duplicated as a `shape:*` coverage tag.
+# Namespace rule: `target:*` / `runtime:*` are facets (schema.md §4.13);
+# `platform:*` is an eval-only set-level coverage label (eval.md §7.3).
 
 spec_version: 1
 spec_kind: BlogSetManifest
@@ -25,12 +35,12 @@ curated:
     publisher: Sysdig
     accessed_date: 2026-05-20
     walk: dev/curated-blog-walks/ai-assisted-aws-intrusion.md
-    coverage_tags:
+    coverage_tags:                  # disciplined subset of the walk §14 (verbatim); ADR 0103
       - cloud:aws
-      - shape:incident_analysis
-      - complexity:complex          # 9+ chain steps (eval.md §7.3)
-      - defender_techniques:present
-      - thesis:vulnerability_chain
+      - complexity:medium           # 8 chain steps (4–8 band)
+      - incident_analysis
+      - thesis:ttp_chain
+      - thesis:privilege_escalation
 
   - id: aws-codebuild-actor-id-regex-bypass
     shape: supply_chain                  # implementation-plan.md §3.2 line 181
@@ -48,10 +58,11 @@ curated:
     coverage_tags:
       - cloud:aws
       - platform:github
-      - shape:supply_chain
-      - complexity:medium           # 4-8 chain steps
-      - vulnerability_disclosure:present
+      - multi_platform
+      - complexity:complex          # 11 chain steps (9+ band)
+      - vulnerability_disclosure
       - thesis:vulnerability_chain
+      - thesis:supply_chain_compromise
 
   # Long blog included to exercise the Extractor's chunking on a large input
   # (implementation-plan.md §4.6 long-blog risk; Task-8 brief "include at least
@@ -66,18 +77,18 @@ curated:
     walk: dev/curated-blog-walks/long-multi-stage-cloud-campaign.md
     coverage_tags:
       - cloud:aws
-      - shape:aws_ttp
-      - complexity:complex          # 9+ chain steps; long input
+      - complexity:complex          # 12 chain steps (9+ band)
       - long_blog:chunking
       - thesis:ttp_chain
 
   # --- Phase-2 additions (Task 10, ADR 0102): five REAL published blogs grown to 8 total, covering
   # the four required dimensions (multi-cloud, substantive vulnerability_story, mixed reproducibility,
   # a runtime:* Planner-proposal trigger) and diversifying cloud coverage off the all-AWS Phase-1 set.
-  # `shape:` is open-set (ADR 0014); the documented v1 trio (aws_ttp/supply_chain/incident_analysis)
-  # does not cleanly fit a cloud_provider_flaw / non-AWS disclosure, so accurate open-set shapes are
-  # used and the real signal lives in coverage_tags + the walk (the shape-vocabulary gap is flagged in
-  # each walk's §15). The walks are AGENT-DRAFTED + PROVISIONAL pending a human ground-truth pass
+  # `shape:` is a descriptive open-set label (ADR 0014/0103 — nothing branches on it); the documented
+  # v1 trio (aws_ttp/supply_chain/incident_analysis) has no slot for a cloud_provider_flaw / non-AWS
+  # disclosure, so the disclosures use `vulnerability_disclosure` (netlify keeps `supply_chain` — its
+  # headline blast-radius framing; see its walk §15), each value identical in the walk §1 and here.
+  # The walks are AGENT-DRAFTED + PROVISIONAL pending a human ground-truth pass
   # (ADR 0102 / CALIBRATION.md); no attack_spec fixtures are committed for these (the architect
   # extracts them for the paid plan-eval run), so a provider-backed `--stage plan` run skips them.
 
@@ -91,11 +102,10 @@ curated:
     coverage_tags:
       - cloud:azure                   # first non-AWS surface in the set
       - target:entra_id
-      - shape:vulnerability_disclosure
-      - complexity:complex            # 7 chain steps
-      - vulnerability_disclosure:present   # substantive vulnerability_story (REQUIRED dimension)
+      - complexity:medium             # 7 chain steps (4–8 band)
+      - vulnerability_disclosure      # substantive vulnerability_story (REQUIRED dimension)
       - thesis:cloud_provider_flaw
-      - cross_tenant
+      - thesis:cross_tenant_compromise
       - mixed_reproducibility
 
   - id: confusedfunction-gcp-cloud-functions-privesc
@@ -107,26 +117,27 @@ curated:
     walk: dev/curated-blog-walks/confusedfunction-gcp-cloud-functions-privesc.md
     coverage_tags:
       - cloud:gcp                     # GCP coverage
-      - target:gcp_cloud_functions
-      - shape:vulnerability_disclosure
-      - complexity:medium             # 6 chain steps
+      - complexity:medium             # 6 chain steps (4–8 band)
+      - vulnerability_disclosure
       - thesis:privilege_escalation
+      - thesis:cloud_provider_flaw
       - serverless
+      - confused_deputy
 
   - id: netlify-ipx-cache-poisoning-xss-ssrf
-    shape: vulnerability_disclosure       # web/edge platform vuln; open-set
+    shape: supply_chain                   # headline shape: library bug → every consuming site (matches walk §1; ADR 0103)
     url: https://www.netlify.com/blog/netlify-ipx-vulnerability/
     title: "Netlify IPX image-handler vulnerability (cache poisoning / XSS / SSRF)"
-    publisher: Netlify (with GHSA + researcher corroboration)
+    publisher: Netlify                    # vendor advisory; GHSA + Sam Curry corroborate (walk §10/§15)
     accessed_date: 2026-06-19
     walk: dev/curated-blog-walks/netlify-ipx-cache-poisoning-xss-ssrf.md
     coverage_tags:
       - runtime:netlify               # NON-first-class runtime → REQUIRED Planner runtime:* proposal trigger
       - non_first_class_runtime
       - platform:netlify
-      - target:nextjs
-      - shape:vulnerability_disclosure
-      - complexity:medium             # 5 chain steps
+      - complexity:medium             # 5 chain steps (4–8 band)
+      - vulnerability_disclosure
+      - supply_chain
       - thesis:vulnerability_chain
       - mixed_reproducibility
 
@@ -140,10 +151,12 @@ curated:
     coverage_tags:
       - cloud:gcp
       - platform:kubernetes
-      - target:gke
-      - shape:vulnerability_disclosure
-      - complexity:medium             # 6 chain steps
+      - platform:gke                  # platform:* is a set-level coverage label (eval.md §7.3); target:* is the facet (ADR 0103)
+      - non_first_class_runtime
+      - complexity:medium             # 6 chain steps (4–8 band)
+      - vulnerability_disclosure
       - thesis:privilege_escalation
+      - thesis:cloud_provider_flaw
       - mixed_reproducibility          # the dedicated mixed example (REQUIRED dimension)
 
   - id: lucr-3-scattered-spider-multicloud-identity
@@ -161,11 +174,10 @@ curated:
       - multi_platform
       - platform:okta
       - platform:github
-      - shape:incident_analysis
-      - complexity:complex            # 10 chain steps
+      - complexity:complex            # 10 chain steps (9+ band)
+      - incident_analysis
       - thesis:ttp_chain
-      - incident_analysis:present
-      - defender_techniques:present
+      - identity_provider
       - mixed_reproducibility
 
 held_out: []                             # empty in Phases 1-2; populated Phase 4 per eval.md §7.3 / implementation-plan.md §1.6

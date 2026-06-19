@@ -17,11 +17,11 @@ set that was otherwise all-AWS.
 ## 1. Header
 
 - **id:** `confusedfunction-gcp-cloud-functions-privesc` (matches `eval/blog-sets/manifest.yaml`)
-- **shape:** `aws_ttp` — *recorded under protest; see §15.* This is a 100% GCP
-  chain. `aws_ttp` is the closest documented shape token ("an attacker TTP
-  chain on a cloud provider"), but no `aws` content is present. The honest
-  label would be a `gcp_vuln_disclosure` / `cloud_provider_flaw` shape that the
-  v1 taxonomy does not have.
+- **shape:** `vulnerability_disclosure` (resolved per ADR 0103 — shape is a
+  descriptive open-set label, not a closed enum). This is a 100% GCP
+  confused-deputy privilege-escalation disclosure; the honest descriptive value
+  is used directly rather than forcing the AWS-flavored trio token. Matches
+  `eval/blog-sets/manifest.yaml`. See §15.
 - **URL:** https://www.tenable.com/blog/confusedfunction-a-privilege-escalation-vulnerability-impacting-gcp-cloud-functions
 - **Canonical URL:** https://www.tenable.com/blog/confusedfunction-a-privilege-escalation-vulnerability-impacting-gcp-cloud-functions (same)
 - **Title:** "ConfusedFunction: A Privilege Escalation Vulnerability Impacting GCP Cloud Functions"
@@ -415,17 +415,16 @@ all-AWS before it, so this is the first non-AWS cloud surface. `serverless` and
 **The highest-value section.** Drafted by an agent; flagged provisional. What a
 walker noticed that an LLM Extractor on the same blog might miss.
 
-### Shape-token mismatch (`aws_ttp` vs. 100% GCP)
+### Shape resolved to `vulnerability_disclosure` (ADR 0103)
 
-The v1 shape open-set examples are `aws_ttp` / `supply_chain` /
-`incident_analysis`. None fits a GCP confused-deputy vuln disclosure. `aws_ttp`
-was recorded as the closest "attacker TTP chain on a cloud provider" token, but
-the honest label would be a `gcp_vuln_disclosure` / `cloud_provider_flaw` shape
-the taxonomy lacks — the same gap flagged in the AWS CodeBuild walk (no good slot
-for a vendor vuln disclosure). **Do not read `aws_ttp` as "this is about AWS."**
-An LLM Extractor keying on the literal token could wrongly emit `cloud:aws` /
-`target:aws` facets; the correct cloud facet is `cloud:gcp` / `target:gcp` ONLY.
-Flagged for ADR / manifest-shape consideration.
+The documented `shape` trio (`aws_ttp` / `supply_chain` / `incident_analysis`)
+has no slot for a GCP confused-deputy vuln disclosure. ADR 0103 found `shape` is
+purely descriptive and open-set (nothing in the pipeline or the eval harness
+branches on its value), so this walk and the manifest now both use the honest
+`vulnerability_disclosure` value directly — no trio member is forced. The earlier
+`aws_ttp`-under-protest token is gone, which also removes the trap of an Extractor
+reading "aws_ttp" as "this is about AWS": the correct cloud facet is `cloud:gcp` /
+`target:gcp` ONLY (no `aws` content is present).
 
 ### CVE trap (highest-value warning)
 

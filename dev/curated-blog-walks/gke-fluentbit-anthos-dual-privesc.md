@@ -19,8 +19,10 @@ coverage.
 ## 1. Header
 
 - **id:** `gke-fluentbit-anthos-dual-privesc` (matches `eval/blog-sets/manifest.yaml`)
-- **shape:** `aws_ttp` (closest documented enum fit — see §15; the blog is
-  genuinely a GCP/Kubernetes TTP chain, not AWS)
+- **shape:** `vulnerability_disclosure` (resolved per ADR 0103 — shape is a
+  descriptive open-set label, not a closed enum; the blog is a GCP/Kubernetes
+  privilege-escalation vulnerability disclosure. Matches
+  `eval/blog-sets/manifest.yaml`. See §15.)
 - **URL:** https://unit42.paloaltonetworks.com/google-kubernetes-engine-privilege-escalation-fluentbit-anthos/
 - **Canonical URL:** https://unit42.paloaltonetworks.com/google-kubernetes-engine-privilege-escalation-fluentbit-anthos/
 - **Title:** "Dual Privilege Escalation Chain: Exploiting Monitoring and Service
@@ -422,9 +424,9 @@ Drives the `coverage_tags:` field in `eval/blog-sets/manifest.yaml`:
 - `platform:kubernetes`
 - `platform:gke`
 - `non_first_class_runtime` (the lab targets best-effort `runtime:kubernetes`)
-- `complexity:complex` (the 6-step fine split + the cross-step token-dependency
-  graph; coarser collapse to ~3 steps would read `medium`, but the ground-truth
-  split is fine — see §15)
+- `complexity:medium` (6 chain steps, in the 4–8 band per the step-count
+  convention; the cross-step token-dependency graph adds depth, but the
+  count-based tier is `medium` — see §15)
 - `thesis:ttp_chain`
 - `thesis:privilege_escalation`
 - `thesis:cloud_provider_flaw`
@@ -519,15 +521,15 @@ Extractor on the same blog might miss.
   stipulated initial access. The blog cites no ATT&CK IDs itself; treat these as
   analyst mapping, not source-stated.
 
-- **Shape-token mismatch (flagged).** The schema's `shape` enum closest fits are
-  `{aws_ttp, supply_chain, incident_analysis}`; **none fits cleanly.** This is a
-  GCP/Kubernetes TTP chain and a vulnerability disclosure — not AWS, and not an
-  incident analysis. The walker chose `aws_ttp` as the closest "cloud-provider
-  TTP chain" fit (per the closest-fit / open-set instruction), but it is
-  genuinely a `gcp_kubernetes_ttp` chain. **The real platform signal lives in
-  the `cloud:gcp` / `platform:kubernetes` coverage tags, not in the `shape`
-  token** — any consumer keying off `shape` to infer the cloud will be wrong
-  here.
+- **Shape resolved to `vulnerability_disclosure` (ADR 0103).** The documented
+  `shape` trio `{aws_ttp, supply_chain, incident_analysis}` fits none of this
+  cleanly — it is a GCP/Kubernetes privilege-escalation vulnerability disclosure,
+  not AWS and not an incident analysis. ADR 0103 found `shape` is purely
+  descriptive and open-set (nothing branches on its value), so this walk and the
+  manifest now both use `vulnerability_disclosure` directly instead of the earlier
+  `aws_ttp` "closest fit." **The real platform signal lives in the `cloud:gcp` /
+  `platform:kubernetes` coverage tags, not the `shape` token** — a consumer keying
+  off `shape` to infer the cloud would be wrong here.
 
 - **Phase 1 prompt-engineering hints.**
   1. The Extractor prompt must score reproducibility **with provider-patch

@@ -56,6 +56,16 @@ Coverage requirements apply to the union (curated + held-out), not each set sepa
 
 **Coverage is overlapping by design.** With 30 blogs total against 8+ coverage dimensions, a single blog typically satisfies multiple requirements at once (e.g., a complex multi-cloud incident-analysis vulnerability-chain blog satisfies five requirements simultaneously). The harness emits a **coverage matrix per release** showing which requirements each blog satisfies — readers can verify completeness rather than assuming each requirement is met by a distinct blog.
 
+#### Coverage-tag namespaces and the manifest index
+
+Coverage tags live in two places: each walk's §14 (the full tag set for that blog) and the manifest's per-entry `coverage_tags` (the harness's **index** — a deliberate, disciplined **verbatim subset** of the walk's §14, not a reword; enforced by `tests/eval/test_manifest.py`). Three namespaces recur, with distinct jobs:
+
+- **`target:*`** — the attack *surface* the Extractor is scored on. A blog-derived **facet** (`schema.md §4.13`); as a coverage tag it mirrors the walk's §6 facet.
+- **`runtime:*`** — what the Planner *provisions* to reproduce the lab. A lab-derived **facet** (`schema.md §4.13`), carrying the `first_class` flag.
+- **`platform:*`** — a set-level **coverage label** the harness counts for breadth (e.g. `platform:kubernetes`, `platform:github`). This is an **eval-only** namespace: it is **not** a facet and has no registry entry. It can legitimately coexist with a `target:*` facet for the same noun (e.g. `target:gke` the facet + `platform:kubernetes` the breadth label) because they answer different questions.
+
+Assign by rule, not by guess: the surface under test → `target:`; what the lab stands up → `runtime:`; a breadth bucket the coverage matrix counts → `platform:`. `shape` is a descriptive label carried by the manifest `shape:` field (and the walk §1 header), **not** a coverage tag (ADR 0103).
+
 **Initial v1 seed blogs** include the blogs walked during architecture design plus additional blogs identified during the curated-set buildout. The exact list lives in `eval/blog-sets/manifest.yaml`, versioned with the repo.
 
 #### Rotation policy

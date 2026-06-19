@@ -188,8 +188,9 @@ no defender-investigation narrative.
 
 ## 14. Coverage tags
 
-`cloud:aws`, `shape:aws_ttp`, `complexity:complex`, `long_blog:chunking`,
+`cloud:aws`, `complexity:complex`, `long_blog:chunking`,
 `thesis:ttp_chain`, `lab_class_signal:simulated_components`.
+(Shape lives in the `shape:` field + §1, not as a coverage tag — ADR 0103.)
 
 ## 15. Manual ground-truth notes
 
