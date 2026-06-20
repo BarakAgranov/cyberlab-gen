@@ -17,11 +17,13 @@ resolution.
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import BaseModel
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
@@ -32,7 +34,11 @@ from cyberlab_gen.errors import (
     ToolLoopError,
     TransientFailure,
 )
-from cyberlab_gen.providers.anthropic_provider import AnthropicProvider
+from cyberlab_gen.providers.anthropic_provider import (
+    OUTPUT_TOOL_NAME,
+    AnthropicProvider,
+    output_forcing_model_settings,
+)
 from cyberlab_gen.providers.base import (
     AgentLabel,
     CapabilityHint,
@@ -43,6 +49,11 @@ from cyberlab_gen.providers.base import (
     ToolDefinition,
     ToolResult,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from pydantic_ai.tools import RunContext
 
 _HAIKU = "claude-haiku-4-5-20251001"
 _OPUS = "claude-opus-4-8"
@@ -429,6 +440,9 @@ async def test_tool_executor_error_is_surfaced_then_recovers() -> None:
 
 
 async def test_tool_loop_error_when_never_finishes() -> None:
+    # A model that defies even the forced tool_choice (ADR 0105) still fails safe on the budget: the
+    # real Anthropic API enforces the force, but a FunctionModel ignores model_settings, so the loop
+    # exhausts request_limit and raises ToolLoopError rather than hanging.
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         return ModelResponse(
             parts=[ToolCallPart(tool_name="lookup", args={"q": "x"}, tool_call_id="c")],
@@ -439,6 +453,63 @@ async def test_tool_loop_error_when_never_finishes() -> None:
         await _complete_with_tools(_provider(fn), _EchoExecutor(), max_iterations=2)
     assert exc_info.value.usage is not None
     assert exc_info.value.model == _OPUS
+
+
+# --- forced terminal emit (ADR 0105) ---------------------------------------
+
+
+def test_output_forcing_returns_base_unchanged_without_request_limit() -> None:
+    base = AnthropicModelSettings(max_tokens=4096)
+    assert output_forcing_model_settings(base, None) is base
+
+
+def test_output_forcing_forces_output_tool_on_the_last_permitted_step() -> None:
+    # ADR 0105: with request_limit=N the per-step callable forces tool_choice=[final_result] on the
+    # last allowed request (run_step >= N), carrying the base settings through, so a tool loop emits
+    # instead of overflowing the budget with zero output.
+    from types import SimpleNamespace
+    from typing import cast
+
+    base = AnthropicModelSettings(max_tokens=4096)
+    resolver = cast(
+        "Callable[[RunContext[None]], AnthropicModelSettings]",
+        output_forcing_model_settings(base, 3),
+    )
+
+    def at(step: int) -> AnthropicModelSettings:
+        return resolver(cast("RunContext[None]", SimpleNamespace(run_step=step)))
+
+    assert at(1).get("tool_choice") is None
+    assert at(2).get("tool_choice") is None
+    forced = at(3)
+    assert forced.get("tool_choice") == [OUTPUT_TOOL_NAME]
+    assert forced.get("max_tokens") == 4096  # base settings carried through
+
+
+async def test_tool_loop_forces_output_on_last_step_then_emits() -> None:
+    # End-to-end (ADR 0105): the provider wires the forcing callable, so on the last permitted request
+    # tool_choice forces the output tool. A cooperative FunctionModel honours it (the real Anthropic
+    # API enforces it) -> the loop emits instead of raising ToolLoopError.
+    seen: list[object] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        choice = (info.model_settings or {}).get("tool_choice")
+        seen.append(choice)
+        name = _output_tool(info)
+        if choice == [name]:  # forced -> emit the output tool
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name=name, args={"greeting": "h", "audience": "w"})],
+                usage=_USAGE,
+            )
+        return ModelResponse(  # otherwise keep looping on the regular tool
+            parts=[ToolCallPart(tool_name="lookup", args={"q": "x"}, tool_call_id="c")],
+            usage=_USAGE,
+        )
+
+    resp = await _complete_with_tools(_provider(fn), _EchoExecutor(), max_iterations=2)
+    assert isinstance(resp.output, Greeting)  # emitted; did NOT raise ToolLoopError
+    assert seen[-1] == [OUTPUT_TOOL_NAME]  # forced on the last permitted step
+    assert seen[0] is None  # not forced on the first step
 
 
 # --- transient / hard mapping ---------------------------------------------

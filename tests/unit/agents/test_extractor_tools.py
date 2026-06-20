@@ -247,3 +247,73 @@ async def test_unknown_tool_is_error_not_raise() -> None:
     ex = _executor()
     result = await ex.execute(_call("not_a_tool", {}))
     assert result.is_error
+
+
+# --- caller-aware unavailable-source reply (ADR 0105) ----------------------
+
+
+def _verify_executor(nvd: _FakeNvd | None = None) -> ExtractorToolExecutor:
+    return ExtractorToolExecutor(registries=_registries(), nvd_client=nvd, verify_only=True)  # type: ignore[arg-type]
+
+
+async def test_verify_only_unavailable_source_steers_to_verdict_not_other_sources() -> None:
+    # ADR 0105: a verify-only reviewer (the juries) cannot set fields and must not keep trying other
+    # sources — that spirals the whole source catalog into a ToolLoopError (run-20260620). The
+    # unavailable reply steers it to emit its verdict, and must NOT carry producer-only guidance.
+    ex = _verify_executor()
+    result = await ex.execute(
+        _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "cisa_kev", "params": {"keyword": "x"}})
+    )
+    assert not result.is_error
+    content = result.content.lower()
+    assert "proceed to your verdict" in content
+    assert "do not try other" in content
+    assert "unknown_from_blog" not in content  # producer-only steer must not leak to a reviewer
+
+
+async def test_verify_only_nvd_no_client_steers_to_verdict() -> None:
+    # The nvd no-client degrade path is also caller-aware: a verify-only reviewer is steered to its
+    # verdict, not to "record as requires external research" (which it cannot do).
+    ex = _verify_executor()  # no nvd client
+    result = await ex.execute(
+        _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "nvd", "params": {"cve_id": "CVE-2024-0001"}})
+    )
+    assert not result.is_error
+    assert "proceed to your verdict" in result.content.lower()
+
+
+async def test_producer_unavailable_source_keeps_unknown_from_blog_guidance() -> None:
+    # The producer path is unchanged (ADR 0042 needs the "mark unknown and continue" steer so the
+    # Extractor/Planner record the gap and proceed, never a fatal error result).
+    ex = _executor()  # verify_only=False
+    result = await ex.execute(
+        _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "cisa_kev", "params": {"keyword": "x"}})
+    )
+    content = result.content.lower()
+    assert "unknown_from_blog" in content
+    assert "proceed to your verdict" not in content
+
+
+# --- verify-only external_lookup gate (ADR 0105) ---------------------------
+
+
+def test_verify_only_with_no_work_advertises_no_tools() -> None:
+    # ADR 0105: a verify-only agent with nothing a live source can check is handed NO tool — not even
+    # the dead external_lookup — so it cannot spiral on it.
+    assert extractor_tool_definitions(["nvd"], verify_only=True, offer_external_lookup=False) == []
+
+
+def test_verify_only_with_work_advertises_only_external_lookup() -> None:
+    defs = extractor_tool_definitions(["nvd"], verify_only=True, offer_external_lookup=True)
+    assert {d.name for d in defs} == {TOOL_EXTERNAL_LOOKUP}
+
+
+def test_producer_keeps_full_inventory_regardless_of_offer_flag() -> None:
+    # The gate is verify-only-only: a producer always keeps external_lookup + its propose_* tools.
+    defs = extractor_tool_definitions(["nvd"], offer_external_lookup=False)
+    assert {d.name for d in defs} == {
+        TOOL_EXTERNAL_LOOKUP,
+        TOOL_PROPOSE_VALUE_TYPE,
+        TOOL_PROPOSE_FACET,
+        TOOL_PROPOSE_THESIS_TYPE,
+    }

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     )
     from cyberlab_gen.providers.ranking import ProviderRegistry
     from cyberlab_gen.registries.merge import MergedRegistries
+    from cyberlab_gen.schemas.attack_spec import AttackSpec
 
 
 class ToolUsingAgent:
@@ -80,7 +81,9 @@ class ToolUsingAgent:
         #: enforced by tool availability, not prose.
         self._verify_only_tools = verify_only_tools
 
-    def _build_tools_and_executor(self) -> tuple[list[ToolDefinition], ExtractorToolExecutor]:
+    def _build_tools_and_executor(
+        self, *, offer_external_lookup: bool = True
+    ) -> tuple[list[ToolDefinition], ExtractorToolExecutor]:
         """Build the advertised tools + the executor for one emit (the overridable inventory seam).
 
         The default is the Phase-1 inventory: the Extractor's tools and ``ExtractorToolExecutor``,
@@ -98,7 +101,9 @@ class ToolUsingAgent:
             verify_only=self._verify_only_tools,
         )
         tools = extractor_tool_definitions(
-            registered_source_ids=source_ids, verify_only=self._verify_only_tools
+            registered_source_ids=source_ids,
+            verify_only=self._verify_only_tools,
+            offer_external_lookup=offer_external_lookup,
         )
         return tools, executor
 
@@ -109,6 +114,7 @@ class ToolUsingAgent:
         output_schema: type[T],
         user_content: str,
         max_tokens: int | None = None,
+        offer_external_lookup: bool = True,
     ) -> tuple[ProviderResponse[T], ExtractorToolExecutor]:
         """Run one tool-loop emit and return ``(response, executor)``.
 
@@ -118,7 +124,9 @@ class ToolUsingAgent:
         can read the executor's side-channel — proposals + lookups — or ignore it). The model's
         output is returned, never consulted here for routing (``architecture.md §1.5``).
         """
-        tools, executor = self._build_tools_and_executor()
+        tools, executor = self._build_tools_and_executor(
+            offer_external_lookup=offer_external_lookup
+        )
         messages = self._runner.build_messages(capability=capability, user_content=user_content)
         response = await self._runner.run_with_tools(
             messages,
@@ -132,4 +140,18 @@ class ToolUsingAgent:
         return response, executor
 
 
-__all__ = ["ToolUsingAgent"]
+def verify_only_external_lookup_offered(*, nvd_client_wired: bool, spec: AttackSpec) -> bool:
+    """Whether a verify-only agent (the juries) should be offered ``external_lookup`` (ADR 0105).
+
+    The verify-only executor can serve only NVD this phase (every other source returns unavailable),
+    so there is verifiable work iff an NVD client is wired AND the spec carries >= 1 CVE for it to
+    check. With no client (today's jury wiring) or no CVE (e.g. the codebuild blog), the dead tool is
+    withheld so the jury emits its verdict rather than walking the whole source catalog into a
+    ``ToolLoopError`` (the run-20260620 Planner-Jury spiral). Generalises as more sources gain live
+    executor paths: extend the predicate to "any integrated source has a matching spec value".
+    """
+    refs = spec.external_references
+    return nvd_client_wired and refs is not None and len(refs.cves) > 0
+
+
+__all__ = ["ToolUsingAgent", "verify_only_external_lookup_offered"]

@@ -60,7 +60,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider as PydAnthropicProvider
-from pydantic_ai.tools import Tool
+from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.usage import UsageLimits
 
 from cyberlab_gen.errors import (
@@ -86,6 +86,8 @@ from cyberlab_gen.providers.base import (
 from cyberlab_gen.providers.cost_ledger import PricingTable, compute_cost, load_pricing_table
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pydantic_ai.messages import ModelMessage
     from pydantic_ai.models import Model
     from pydantic_ai.usage import RunUsage
@@ -99,6 +101,13 @@ _PROVIDER_NAME = "anthropic"
 #: pass an explicit value.
 DEFAULT_MAX_TOKENS = 4096
 
+#: pydantic-ai's default structured-output tool name (``pydantic_ai._output.DEFAULT_OUTPUT_TOOL_NAME``).
+#: Forced on the last permitted tool-loop request so the loop can never exhaust the request budget
+#: with zero structured output (ADR 0105 — the run-20260620 Planner-Jury ``ToolLoopError``). Forcing
+#: requires Anthropic *thinking* to be OFF (``_model_settings`` configures none); under thinking
+#: pydantic-ai degrades a forced tool_choice to 'auto', so this guard would not fire.
+OUTPUT_TOOL_NAME = "final_result"
+
 #: Provider-internal malformed-output retry budget (pydantic-ai ``retries={'output': N}``).
 #: This is the within-call re-prompt budget that ADR 0018 places *below* the call
 #: surface's stage-level structural retry (2: initial + 1 retry, to cap the worst-case
@@ -109,6 +118,34 @@ DEFAULT_OUTPUT_RETRIES = 2
 #: exhaustion they surface as ``ModelHTTPError`` and map to ``TransientFailure``.
 _TRANSIENT_STATUS_MIN_SERVER_ERROR = 500
 _RATE_LIMIT_STATUS = 429
+
+
+def output_forcing_model_settings(
+    base: AnthropicModelSettings, request_limit: int | None
+) -> AnthropicModelSettings | Callable[[RunContext[None]], AnthropicModelSettings]:
+    """Model settings that force the output tool on the last permitted tool-loop request (ADR 0105).
+
+    pydantic-ai checks the request limit *before* each model call and raises ``UsageLimitExceeded``
+    with no output once it is hit — so a tool-use loop that never emits dies empty (the run-20260620
+    Planner-Jury ``ToolLoopError``). When ``request_limit`` is set (the tool path), this returns a
+    *per-step* settings callable that forces ``tool_choice=[final_result]`` on the final allowed
+    request (``run_step >= request_limit``), so the loop emits its structured output instead of
+    overflowing. A **callable** ``model_settings`` is what pydantic-ai 1.103 supports for per-step
+    ``tool_choice`` (a static forced ``tool_choice`` raises ``UserError``); it is resolved once per
+    request. Off the tool path (``request_limit is None``) the plain settings suffice — with no tools
+    the model emits on the first request. Relies on thinking being OFF (see :data:`OUTPUT_TOOL_NAME`).
+    """
+    if request_limit is None:
+        return base
+    limit = request_limit  # narrowed to int for the closure
+
+    def _resolve(ctx: RunContext[None]) -> AnthropicModelSettings:
+        if ctx.run_step >= limit:
+            forced: AnthropicModelSettings = {**base, "tool_choice": [OUTPUT_TOOL_NAME]}
+            return forced
+        return base
+
+    return _resolve
 
 
 class AnthropicProvider(Provider):
@@ -216,7 +253,9 @@ class AnthropicProvider(Provider):
             instructions=instructions or None,
             tools=pyd_tools,
             retries={"output": self._output_retries},
-            model_settings=self._model_settings(max_tokens),
+            model_settings=output_forcing_model_settings(
+                self._model_settings(max_tokens), request_limit
+            ),
         )
         usage_limits = UsageLimits(request_limit=request_limit) if request_limit else None
 

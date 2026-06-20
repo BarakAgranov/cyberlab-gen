@@ -116,14 +116,20 @@ class Planner(ToolUsingAgent):
         )
         self._max_output_tokens = max_output_tokens
 
-    def _build_tools_and_executor(self) -> tuple[list[ToolDefinition], ExtractorToolExecutor]:
+    def _build_tools_and_executor(
+        self, *, offer_external_lookup: bool = True
+    ) -> tuple[list[ToolDefinition], ExtractorToolExecutor]:
         """The Planner's producer tool set (ADR 0089): read-only ``external_lookup`` for the slice.
 
         Overrides the base Extractor inventory so the Planner never advertises a ``propose_*`` tool
         (no value-type proposals — Extractor authority; ``propose_facet`` is Task 7). The executor
         is a :class:`PlannerToolExecutor` (an ``ExtractorToolExecutor`` subtype, so the return type
         holds and reuses the shared ``external_lookup`` engine).
+
+        ``offer_external_lookup`` is accepted to match the base signature but ignored: the gate is a
+        verify-only concern (ADR 0105), and the Planner is a producer that always keeps its lookup.
         """
+        del offer_external_lookup  # producer: the verify-only lookup gate does not apply
         source_ids = sorted(e.id for e in self._registries.external_data_sources.entries)
         executor = PlannerToolExecutor(registries=self._registries, nvd_client=self._nvd_client)
         return planner_tool_definitions(source_ids), executor

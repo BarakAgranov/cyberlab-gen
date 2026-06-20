@@ -333,3 +333,32 @@ async def test_jury_consumes_supplied_grounding_findings() -> None:
         spec=_spec(), blog_content="the blog", grounding_findings=[finding]
     )
     assert out.verdict is Verdict.APPROVE
+
+
+# --- verify-only external_lookup gate decision (ADR 0105) ------------------
+
+
+def _spec_with_cve() -> AttackSpec:
+    from cyberlab_gen.schemas.attack_spec import CveReference, ExternalRefsBlock
+
+    return _spec().model_copy(
+        update={
+            "external_references": ExternalRefsBlock(
+                cves=[CveReference(cve_id="CVE-2024-0001", description=_pstr("a cve"))]  # type: ignore[arg-type]
+            )
+        }
+    )
+
+
+def test_verify_only_lookup_offered_requires_client_and_cve() -> None:
+    # ADR 0105: the verify-only executor can serve only NVD this phase, so external_lookup is offered
+    # iff an NVD client is wired AND the spec carries a CVE for it to check. Either missing -> no
+    # tool, so the jury emits its verdict rather than spiralling the source catalog into a
+    # ToolLoopError (the run-20260620 Planner-Jury failure; latent in extract too).
+    from cyberlab_gen.agents.tool_agent import verify_only_external_lookup_offered
+
+    no_cve = _spec()
+    with_cve = _spec_with_cve()
+    assert verify_only_external_lookup_offered(nvd_client_wired=True, spec=no_cve) is False
+    assert verify_only_external_lookup_offered(nvd_client_wired=False, spec=with_cve) is False
+    assert verify_only_external_lookup_offered(nvd_client_wired=True, spec=with_cve) is True

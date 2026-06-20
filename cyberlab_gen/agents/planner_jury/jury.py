@@ -32,7 +32,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from cyberlab_gen.agents.extractor_jury.schema import JuryVerdict
-from cyberlab_gen.agents.tool_agent import ToolUsingAgent
+from cyberlab_gen.agents.tool_agent import ToolUsingAgent, verify_only_external_lookup_offered
 from cyberlab_gen.providers.base import AgentLabel, CapabilityHint
 
 if TYPE_CHECKING:
@@ -108,6 +108,11 @@ class PlannerJury(ToolUsingAgent):
             capability=CapabilityHint.HIGH_QUALITY_REASONING,
             output_schema=JuryVerdict,
             user_content=user_content,
+            # Gate the dead verify-only external_lookup off unless there is verifiable work (ADR
+            # 0105): without this the jury spirals the source catalog into a ToolLoopError.
+            offer_external_lookup=verify_only_external_lookup_offered(
+                nvd_client_wired=self._nvd_client is not None, spec=attack_spec
+            ),
         )
         return response.output
 

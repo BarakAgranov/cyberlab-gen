@@ -157,6 +157,7 @@ def extractor_tool_definitions(
     registered_source_ids: list[str] | None = None,
     *,
     verify_only: bool = False,
+    offer_external_lookup: bool = True,
 ) -> list[ToolDefinition]:
     """The tool schemas advertised to the model (``agents.md §5.4``).
 
@@ -220,6 +221,11 @@ def extractor_tool_definitions(
         ),
     ]
     if verify_only:
+        # Gate the verify-only tool on verifiable work (ADR 0105): a reviewer with nothing a live
+        # source can check is handed NO tool, so it emits its verdict instead of spiralling through
+        # the source catalog into a ToolLoopError. Producers always keep their full inventory.
+        if not offer_external_lookup:
+            return []
         return [t for t in tools if t.name == TOOL_EXTERNAL_LOOKUP]
     return tools
 
@@ -293,6 +299,27 @@ class ExtractorToolExecutor:
 
     # --- external_lookup ---------------------------------------------------
 
+    def _unavailable_proceed_clause(self) -> str:
+        """Caller-appropriate guidance when an external source cannot be served (ADR 0105).
+
+        A **producer** (Extractor / Planner) writes fields, so the unavailable reply tells it to
+        mark the value ``unknown_from_blog`` and continue (ADR 0042 — never a fatal error result).
+        A **verify-only** reviewer (the Planner-Jury / Extractor-Jury) cannot set fields and has no
+        reason to keep walking the source catalog: tell it to treat the value as unverifiable and
+        emit its verdict. Without this branch, an all-sources-unavailable phase spirals the jury
+        through every registered source ("…and continue") until the request budget is exhausted with
+        no verdict — the run-20260620 Planner-Jury ``ToolLoopError``.
+        """
+        if self._verify_only:
+            return (
+                "treat the value as unverifiable and proceed to your verdict; do NOT try other "
+                "external sources"
+            )
+        return (
+            "treat the value as requiring external research (set the field to unknown_from_blog "
+            "with a reason) and continue"
+        )
+
     def _external_lookup(self, call: ToolCall) -> ToolResult:
         source_id = str(call.arguments.get("source_id", ""))
         raw_params: object = call.arguments.get("params", {})
@@ -317,9 +344,8 @@ class ExtractorToolExecutor:
         known = self._registries.external_source(source_id) is not None
         availability = "registered but not integrated this phase" if known else "not a known source"
         detail = (
-            f"external source {source_id!r} is unavailable ({availability}); treat the value as "
-            f"requiring external research (set the field to unknown_from_blog with a reason) "
-            f"and continue"
+            f"external source {source_id!r} is unavailable ({availability}); "
+            f"{self._unavailable_proceed_clause()}"
         )
         self.lookups.append(
             ExternalLookupRecord(source_id=source_id, params=params, found=False, detail=detail)
@@ -338,8 +364,8 @@ class ExtractorToolExecutor:
             # the model to mark the field unknown and continue.
             detail = (
                 "external_lookup against nvd needs a cve_id and none was supplied; couldn't "
-                "look it up — set the field to unknown_from_blog (requires external research) "
-                "and continue (do not retry this call without a cve_id)"
+                f"look it up — {self._unavailable_proceed_clause()} "
+                "(do not retry this call without a cve_id)"
             )
             self.lookups.append(
                 ExternalLookupRecord(
@@ -349,7 +375,7 @@ class ExtractorToolExecutor:
             return ToolResult(call_id=call.call_id, content=detail, is_error=False)
         if self._nvd_client is None:
             detail = (
-                "nvd lookup unavailable (no client wired); record as requires external research"
+                f"nvd lookup unavailable (no client wired); {self._unavailable_proceed_clause()}"
             )
             self.lookups.append(
                 ExternalLookupRecord(

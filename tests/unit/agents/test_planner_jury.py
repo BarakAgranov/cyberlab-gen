@@ -132,6 +132,19 @@ def test_planner_jury_advertises_only_external_lookup() -> None:
     assert TOOL_PROPOSE_VALUE_TYPE not in names
 
 
+def test_planner_jury_withholds_external_lookup_when_no_verifiable_work() -> None:
+    # ADR 0105: with nothing a live source can verify, the verify-only tool is withheld entirely so
+    # the jury emits its verdict instead of walking the source catalog into a ToolLoopError. The
+    # default (offer_external_lookup=True) still advertises external_lookup (unchanged behaviour).
+    from cyberlab_gen.agents.extractor.tools import TOOL_EXTERNAL_LOOKUP
+
+    jury = _jury(MockProvider())
+    off, _ = jury._build_tools_and_executor(offer_external_lookup=False)  # pyright: ignore[reportPrivateUsage]
+    assert off == []
+    on, _ = jury._build_tools_and_executor(offer_external_lookup=True)  # pyright: ignore[reportPrivateUsage]
+    assert {t.name for t in on} == {TOOL_EXTERNAL_LOOKUP}
+
+
 # --- rubric floor: placeholder + asymmetric-calibration discipline ---------
 
 
