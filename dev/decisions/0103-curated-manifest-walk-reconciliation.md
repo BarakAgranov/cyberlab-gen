@@ -105,10 +105,11 @@ for its own sake. The canonical-vocabulary question is **deferred** until a real
   fixture stays a documented paper deferral for v0.3 — chunking is an *extract*-stage concern and the
   paid step-4 run is `--stage plan` (which skips this entry), so authoring a ~6k-word body now would
   build against a stage we are not running. Wire it when `--stage extract` goes live (Phase 3).
-- **Possibly-stale, left for the architect:** the walks still carry their PROVISIONAL banners and the
-  manifest still notes "pending a human ground-truth pass." The brief states the human pass has
-  happened; lifting provisional status gates calibration-locking (CALIBRATION.md) and is the
-  architect's call, so it was *not* done here.
+- **Provisional status — RESOLVED (2026-06-20, ADR 0104):** at the time of this ADR the walks still
+  carried PROVISIONAL banners and the manifest noted "pending a human ground-truth pass." The
+  architect has since confirmed the human pass complete; provisional status is now lifted across the
+  walks, manifest, and CALIBRATION.md (ADR 0104). The calibration gate (the six CALIBRATION.md values)
+  remains separate and still pending the paid `--stage plan` run.
 
 ## Docs touched (ADR 0084 — surfaced)
 

@@ -84,7 +84,9 @@ resolve architectural ambiguities silently).
    be locked against an unreviewed walk.** An LLM reading the blog is not independent ground truth
    (same model class, same blind spots). The walks are honest enough to *build* the set and drive the
    harness; the architect's paid pass reviews the walks **first**, then calibrates. Recorded as a gate
-   in `CALIBRATION.md`, not merely a note.
+   in `CALIBRATION.md`, not merely a note. **Update (2026-06-20):** the human ground-truth pass is
+   complete and provisional status is lifted (ADR 0104); the calibration gate (the six values) remains
+   separate and still pending the paid `--stage plan` run.
 
 7. **The codebuild fixture's schema-currency is due now (promoted from the parked stale-fixture
    item).** Because it becomes the demo input, it must be confirmed schema-current (it is

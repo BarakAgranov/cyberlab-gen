@@ -108,11 +108,12 @@ re-derives and locks them at the `v0.3` tag.
 | **Per-run auto-accept proposal cap (`--auto`)** | 5 — `interrupt.DEFAULT_AUTO_ACCEPT_PROPOSAL_CAP` | `cli/interrupt.py` | The Planner now contributes **facet** proposals too (`PlanRunRecord.facet_proposals` / `PlanBlogAggregate.total_facet_proposals`); the run checks whether the curated set routinely exceeds 5 facet proposals/run. |
 | **Pre-Planner external-API budget per run** | 100 / run — `framework.enrichment._DEFAULT_BUDGET` | `framework/enrichment.py` | Calibrated against observed enrichment usage on the curated set. |
 
-**Walk-review gate (ADR 0102).** The five Phase-2 curated additions ship with **agent-drafted,
-provisional** ground-truth walks (sourced from the real blogs but not independently human-verified —
-an LLM reading the source is the same model class being evaluated, so it is not independent ground
-truth). **No calibration value above may be locked against an unreviewed walk.** The architect's paid
-pass **reviews the walks first** (promoting them from provisional to verified), *then* calibrates.
+**Walk-review gate (ADR 0102) — CLEARED (human pass complete, 2026-06-20; ADR 0104).** The five
+Phase-2 curated additions were agent-drafted, then reviewed against their source blogs in the human
+ground-truth pass with corrections applied; the walks are now **verified/blessed** ground truth. This
+clears **only** the human-pass gate. **The six values above remain locked/pending the separate paid
+`just eval --stage plan` calibration run** — that gate has not happened. Lifting provisional does
+*not* unlock, fill, or finalize any calibration value; those still depend on observed run data.
 
 These rows are the Phase-2 calibration record for the upcoming `v0.3` tag. When the first
 provider-backed `just eval --stage plan` run lands, append a new section with the real numbers — do

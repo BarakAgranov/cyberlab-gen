@@ -1,13 +1,12 @@
 # Blog walk: `lucr-3-scattered-spider-multicloud-identity`
 
-> **PROVISIONAL — AGENT-DRAFTED.** This walk was drafted by an agent from the
-> Permiso p0 Labs source (`dev/.task10-research/multi-cloud-lucr3.json`,
-> originally via WebFetch). It ships **provisional, pending a human
-> ground-truth pass**. No eval calibration value may be locked against an
-> unreviewed walk (ADR 0102, `eval.md §7.2`): until a human reads the source
-> end-to-end and signs off, treat every classification, facet, and
-> reproducibility tier below as a draft hypothesis, not a gold-standard
-> reference.
+> **Ground-truth reference — human-reviewed (2026-06-20).** This walk was
+> agent-drafted from the Permiso p0 Labs source (originally via WebFetch), then
+> reviewed against the source in the human ground-truth pass and corrected; it now
+> stands as **blessed ground truth** for Extractor/Planner scoring. Distinct gate:
+> the eval **calibration values** (CALIBRATION.md) remain pending the separate
+> paid `--stage plan` run — the human-pass gate is cleared, the calibration gate
+> is not (ADR 0104).
 
 A manual ground-truth reading of a curated blog. The walker reads the blog
 end-to-end and maps its narrative onto the AttackSpec structure

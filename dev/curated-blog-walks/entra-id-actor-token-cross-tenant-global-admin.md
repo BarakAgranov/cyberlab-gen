@@ -1,13 +1,12 @@
 # Blog walk: `entra-id-actor-token-cross-tenant-global-admin`
 
-> **PROVISIONAL — agent-drafted, pending a human ground-truth pass.** This walk
-> was drafted by an LLM agent reading the source blog and curated research
-> material, not by an independent human walker. Per ADR 0102 §6 and
-> `eval.md §7.2`, an LLM reading the same blog is **not** independent ground
-> truth (same model class, same blind spots), so **no eval calibration value may
-> be locked against this walk until a human ground-truth pass reviews it.** It is
-> honest enough to build the curated set and drive the harness; it is not yet a
-> calibration reference.
+> **Ground-truth reference — human-reviewed (2026-06-20).** This walk was
+> agent-drafted from Dirk-Jan Mollema's source blog, then reviewed against the
+> source in the human ground-truth pass and corrected; it now stands as **blessed
+> ground truth** for Extractor/Planner scoring. Distinct gate: the eval
+> **calibration values** (CALIBRATION.md) remain pending the separate paid
+> `--stage plan` run — the human-pass gate is cleared, the calibration gate is
+> not (ADR 0104).
 
 A manual ground-truth reading of Dirk-Jan Mollema's CVE-2025-55241 disclosure,
 mapping the blog's narrative onto the AttackSpec structure

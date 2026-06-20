@@ -88,9 +88,11 @@ curated:
   # v1 trio (aws_ttp/supply_chain/incident_analysis) has no slot for a cloud_provider_flaw / non-AWS
   # disclosure, so the disclosures use `vulnerability_disclosure` (netlify keeps `supply_chain` — its
   # headline blast-radius framing; see its walk §15), each value identical in the walk §1 and here.
-  # The walks are AGENT-DRAFTED + PROVISIONAL pending a human ground-truth pass
-  # (ADR 0102 / CALIBRATION.md); no attack_spec fixtures are committed for these (the architect
-  # extracts them for the paid plan-eval run), so a provider-backed `--stage plan` run skips them.
+  # The walks were agent-drafted, then human-reviewed against their sources (ground-truth pass
+  # complete 2026-06-20; ADR 0104) and now stand as blessed ground truth. No attack_spec fixtures are
+  # committed for these (the architect extracts them for the paid plan-eval run), so a provider-backed
+  # `--stage plan` run skips them. (The six CALIBRATION.md values remain pending that paid run — a
+  # separate gate from the human pass.)
 
   - id: entra-id-actor-token-cross-tenant-global-admin
     shape: vulnerability_disclosure       # cloud_provider_flaw; open-set (ADR 0014)

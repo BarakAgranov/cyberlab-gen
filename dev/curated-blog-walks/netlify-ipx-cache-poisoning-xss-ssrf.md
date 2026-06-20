@@ -1,12 +1,12 @@
 # Blog walk: `netlify-ipx-cache-poisoning-xss-ssrf`
 
-> **PROVISIONAL — AGENT-DRAFTED.** This walk was drafted by an agent from the
-> source material, not read end-to-end by a human walker. It ships
-> **provisional, pending a human ground-truth pass.** Until that pass lands, no
-> eval calibration value may be locked against this walk — an unreviewed walk is
-> not a gold-standard reference (ADR 0102; `eval.md §7.2`, the honest framing of
-> OSS evaluation). Treat every classification below as a candidate, not a
-> verdict.
+> **Ground-truth reference — human-reviewed (2026-06-20).** This walk was
+> agent-drafted from the Netlify advisory (with GHSA + Sam Curry corroboration),
+> then reviewed against the source in the human ground-truth pass and corrected;
+> it now stands as **blessed ground truth** for Extractor/Planner scoring.
+> Distinct gate: the eval **calibration values** (CALIBRATION.md) remain pending
+> the separate paid `--stage plan` run — the human-pass gate is cleared, the
+> calibration gate is not (ADR 0104).
 
 A manual ground-truth reading of a curated blog, mapping the blog's narrative
 onto the AttackSpec structure (`docs/schema.md §4.8`). This entry's distinctive

@@ -1002,6 +1002,36 @@ backed `just eval --stage plan` was **not** run (eval is user-run, real money).
 
 ---
 
+## Post-Task-10 — v0.3-exit reconciliation + provisional lift  (2026-06-20)
+
+Two architect-directed steps between Task 10 and the `v0.3` tag (no provider calls — eval stays
+user-run).
+
+**Walk source-verification (2nd pass) + manifest↔walk reconciliation (ADR 0103).** Corrected entra
+(CVE is blog-asserted, only CVSS external; B2B-trust-hopping elevated to a wormable §5 path), netlify
+(`T1595.002`→`.003`), long-blog (`T1552.005`→`T1555.006`; chunking fixture marked an owned deferral).
+Then made `eval/blog-sets/manifest.yaml` provably consistent with the finalized walks: `shape`
+reconciled one-value-per-entry (the 3 disclosures → `vulnerability_disclosure`; netlify keeps
+`supply_chain`; `shape` found **descriptive, not load-bearing** → registry deferred); `complexity`
+fixed to the §4 step-count convention (ai-assisted/codebuild were inverted); `coverage_tags` rewritten
+as a **verbatim subset of each walk §14**, enforced by two new tests (subset + shape↔§1). Namespaces
+documented (`target:`/`runtime:` = facets, `platform:` = eval-only coverage) in `eval.md §7.3` +
+`schema.md §4.13`. netlify `url:` verified canonical (no change).
+
+**Provisional status lifted (ADR 0104).** The architect confirmed the human ground-truth pass
+complete, so the 5 Phase-2 walk banners (the 3 Phase-1 walks never had one) + the manifest comment +
+the CALIBRATION.md walk-review gate were updated from "agent-drafted / provisional" to "human-reviewed
+/ blessed (2026-06-20)," with resolution pointers added to ADR 0102/0103. **Hard line held:** this
+clears *only* the human-pass gate; the **six CALIBRATION.md values stay locked/pending** the separate
+paid `--stage plan` run — nothing was unlocked or filled. The unrelated proposal "provisional
+resolution" machinery (ADR 0044) was left untouched. `:present` flattening confirmed coverage-neutral
+(nothing keys on it).
+
+**Verify.** `just verify` green — ruff + format clean, pyright strict 0 errors, **1001 passed /
+1 skipped**.
+
+---
+
 ## Execution-log entry template
 
 ```

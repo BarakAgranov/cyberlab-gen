@@ -1,11 +1,11 @@
 # Blog walk: `confusedfunction-gcp-cloud-functions-privesc`
 
-> **PROVISIONAL — AGENT-DRAFTED.** This walk was drafted by an agent from the
-> source material, not authored by a human walker. It ships **provisional,
-> pending a human ground-truth pass**. No eval calibration value may be locked
-> against an unreviewed walk (ADR 0102, `eval.md §7.2`). Treat every
-> classification, facet, and reproducibility tier below as a draft hypothesis
-> until a human confirms it.
+> **Ground-truth reference — human-reviewed (2026-06-20).** This walk was
+> agent-drafted from the Tenable source blog, then reviewed against the source in
+> the human ground-truth pass and corrected; it now stands as **blessed ground
+> truth** for Extractor/Planner scoring. Distinct gate: the eval **calibration
+> values** (CALIBRATION.md) remain pending the separate paid `--stage plan` run —
+> the human-pass gate is cleared, the calibration gate is not (ADR 0104).
 
 A manual ground-truth reading of a curated blog. The walker reads the blog
 end-to-end and maps its narrative onto the AttackSpec structure
@@ -412,8 +412,8 @@ all-AWS before it, so this is the first non-AWS cloud surface. `serverless` and
 
 ## 15. Manual ground-truth notes
 
-**The highest-value section.** Drafted by an agent; flagged provisional. What a
-walker noticed that an LLM Extractor on the same blog might miss.
+**The highest-value section.** What a human reviewer noticed that an LLM Extractor
+on the same blog might miss.
 
 ### Shape resolved to `vulnerability_disclosure` (ADR 0103)
 

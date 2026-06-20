@@ -1,12 +1,11 @@
 # Blog walk: `gke-fluentbit-anthos-dual-privesc`
 
-> **PROVISIONAL — AGENT-DRAFTED.** This walk was drafted by an agent from the
-> structured source material, not read end-to-end by a human. It ships
-> **provisional, pending a human ground-truth pass**. Per ADR 0102 and
-> `eval.md §7.2`, **no eval calibration value may be locked against an
-> unreviewed walk** — the per-step and lab-level reproducibility tiers, facets,
-> and value-type mappings below must be confirmed by a human walker before this
-> entry is used as gold-standard reference for Extractor/Planner scoring.
+> **Ground-truth reference — human-reviewed (2026-06-20).** This walk was
+> agent-drafted from the Unit 42 source blog, then reviewed against the source in
+> the human ground-truth pass and corrected; it now stands as **blessed ground
+> truth** for Extractor/Planner scoring. Distinct gate: the eval **calibration
+> values** (CALIBRATION.md) remain pending the separate paid `--stage plan` run —
+> the human-pass gate is cleared, the calibration gate is not (ADR 0104).
 
 A manual ground-truth reading of a curated blog. The walker reads the blog
 end-to-end and maps its narrative onto the AttackSpec structure
@@ -290,7 +289,8 @@ if the v1 `registry/value_types.yaml` does not yet carry the Kubernetes set
 registry-evolution — justification: this is the curated set's first
 Kubernetes/GKE blog, so the Kubernetes value-type vocabulary lands with it.
 (A human reviewer should confirm which of these already exist before relying on
-the membership status — consistent with the provisional banner.)
+the membership status — the manifest Layer-1 facet/value-type membership check is
+a Phase-3 `generate` Validator deferral, ADR 0099/0102.)
 
 ## 8. Defender techniques
 
