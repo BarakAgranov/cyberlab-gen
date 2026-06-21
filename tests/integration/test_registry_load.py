@@ -40,6 +40,18 @@ def test_value_types_yaml_loads_through_bundled_schema() -> None:
     assert loaded.entries[0].name == "aws_credentials"
 
 
+def test_bundled_value_types_register_github_actor_id() -> None:
+    # ADR 0109: the codebuild plan-eval's central flowing value (the GitHub numeric actor id) must
+    # resolve as a registered value_type, or the Planner cannot type it (the run-20260621 route-back /
+    # spiral). Pin the entry's presence + its non-sensitive numeric shape.
+    path = bundled_registry_dir() / "value_types.yaml"
+    loaded = load_bundled_file(path, ValueTypeEntry)
+    entry = next((e for e in loaded.entries if e.name == "github_actor_id"), None)
+    assert entry is not None
+    assert entry.sensitive is False
+    assert "actor_id" in entry.schema_.get("properties", {})
+
+
 def test_facets_yaml_loads_through_bundled_schema() -> None:
     path = bundled_registry_dir() / "facets.yaml"
     loaded = load_bundled_file(path, FacetEntry)

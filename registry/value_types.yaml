@@ -21,3 +21,23 @@ entries:
       Long-lived; the common form of "leaked AWS key" in supply-chain blogs.
       Distinct from aws_temporary_credentials (which includes session token).
     platforms: [aws]
+  - name: github_actor_id
+    description: "A GitHub account's immutable numeric actor/user ID (distinct from the mutable login). The value an unanchored webhook ACTOR_ID filter matches against."
+    schema:
+      type: object
+      required: [actor_id]
+      properties:
+        actor_id:
+          type: string
+          pattern: "^[0-9]+$"
+        login:
+          type: string
+    sensitive: false
+    examples:
+      - actor_id: "226755743"
+        login: "example-bot[bot]"
+    notes_for_generator: |
+      The immutable numeric account id, not the login. Central to ACTOR_ID
+      webhook-filter-bypass labs, where an attacker computes a superstring id whose
+      decimal form an unanchored regex still matches.
+    platforms: [github]
