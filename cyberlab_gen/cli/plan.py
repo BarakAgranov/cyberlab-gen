@@ -112,6 +112,7 @@ PLAN_STATUS_TO_RUN_STATUS: dict[PlanPipelineStatus, RunStatus] = {
     PlanPipelineStatus.HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED: RunStatus.HALTED_VALIDATION,
     PlanPipelineStatus.HALTED_CANNOT_PLAN: RunStatus.FAILED,
     PlanPipelineStatus.HALTED_ITERATION_CAP: RunStatus.FAILED,
+    PlanPipelineStatus.HALTED_PLANNER_EMIT_EXHAUSTED: RunStatus.FAILED,
     PlanPipelineStatus.ROUTE_BACK_TO_EXTRACTOR: RunStatus.FAILED,
 }
 

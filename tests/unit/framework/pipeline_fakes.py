@@ -511,16 +511,20 @@ class FakePlanner:
         plan_results: list[PlanResult],
         *,
         refine_results: list[PlanResult] | None = None,
+        raises: Exception | None = None,
     ) -> None:
         self._plan_results = plan_results
         self._refine_results = refine_results
+        self._raises = raises  # if set, plan() raises it (a provider failure, e.g. ToolLoopError)
         self.plan_calls = 0
         self.refine_calls: list[tuple[LabManifest, list[JuryFieldFeedback]]] = []
 
     async def plan(self, attack_spec: AttackSpec, *, preferences: str | None = None) -> PlanResult:
         del attack_spec, preferences
-        idx = min(self.plan_calls, len(self._plan_results) - 1)
         self.plan_calls += 1
+        if self._raises is not None:
+            raise self._raises
+        idx = min(self.plan_calls - 1, len(self._plan_results) - 1)
         return self._plan_results[idx]
 
     async def refine(

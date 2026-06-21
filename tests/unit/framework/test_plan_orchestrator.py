@@ -86,6 +86,28 @@ async def test_plan_then_approve_ships() -> None:
     assert jury.calls == 1  # one review, no refinement
 
 
+# --- ADR 0107: a Planner tool-loop overflow degrades to a named halt -------
+
+
+async def test_planner_tool_loop_degrades_to_named_halt() -> None:
+    # ADR 0107: when the Planner's tool loop overflows (even the ADR-0105 forced emit + its reserved
+    # output-retries could not land a valid manifest), plan_node catches the ToolLoopError and halts
+    # with a deterministic named status + reason — never letting the raw exception escape to the
+    # eval/CLI boundary as an unclassified blog_fatal.
+    from cyberlab_gen.errors import ToolLoopError
+
+    planner = FakePlanner([], raises=ToolLoopError("tool-use loop exceeded its request budget"))
+    jury = FakePlannerJury([make_verdict(Verdict.APPROVE)])
+    final = await _run_state(planner, jury)
+
+    assert final.status is PlanPipelineStatus.HALTED_PLANNER_EMIT_EXHAUSTED
+    assert final.manifest is None  # the Planner produced nothing to route on
+    assert final.halt_reason is not None
+    assert "tool-use loop" in final.halt_reason
+    assert jury.calls == 0  # the jury never ran
+    assert planner.plan_calls == 1
+
+
 # --- route-back (THE Task-4 exit criterion) --------------------------------
 
 

@@ -64,6 +64,7 @@ from cyberlab_gen.agents.extractor_jury.schema import JuryFieldFeedback, JuryVer
 # extract orchestrator's field-type imports).
 from cyberlab_gen.agents.proposals import ProposedFacet
 from cyberlab_gen.agents.results import PlannerRefusal, PlanOutcome, PlanResult
+from cyberlab_gen.errors import ToolLoopError
 from cyberlab_gen.framework.graph_support import traced_async, traced_sync
 from cyberlab_gen.framework.orchestrator import (
     DEFAULT_REFINEMENT_CAP,
@@ -114,6 +115,11 @@ class PlanPipelineStatus(StrEnum):
     HALTED_SEMANTIC_CROSS_CHECK_UNRESOLVED = "halted_semantic_cross_check_unresolved"
     # The global iteration cap bound the whole pipeline (ADR 0056 backstop).
     HALTED_ITERATION_CAP = "halted_iteration_cap"
+    # The Planner exhausted its tool-loop request budget without emitting a valid manifest — even the
+    # ADR-0105 forced terminal emit plus its ADR-0107 reserved output-retries could not land a
+    # schema-valid output. A framework-deterministic degrade of a raw ``ToolLoopError`` to a named
+    # halt (ADR 0107), not a fabricated Planner outcome. Descriptive name, no ordinal token (§5.5).
+    HALTED_PLANNER_EMIT_EXHAUSTED = "halted_planner_emit_exhausted"
 
 
 # --- the typed pipeline state (the LangGraph channel) ----------------------
@@ -292,17 +298,34 @@ def build_plan_pipeline(
             recorder.enter_stage(
                 round_index=state.total_iterations, stage="refine" if is_refine else "plan"
             )
-        if is_refine:
-            assert state.pending_feedback is not None and state.manifest is not None
-            result = await planner.refine(
-                prior_manifest=state.manifest,
-                attack_spec=state.attack_spec,
-                feedback=state.pending_feedback,
-                preferences=state.preferences,
+        try:
+            if is_refine:
+                assert state.pending_feedback is not None and state.manifest is not None
+                result = await planner.refine(
+                    prior_manifest=state.manifest,
+                    attack_spec=state.attack_spec,
+                    feedback=state.pending_feedback,
+                    preferences=state.preferences,
+                )
+                state.pending_feedback = None  # consumed by this re-run
+            else:
+                result = await planner.plan(state.attack_spec, preferences=state.preferences)
+        except ToolLoopError as exc:
+            # The Planner exhausted its tool-loop budget without emitting a valid manifest — even the
+            # ADR-0105 forced emit + its ADR-0107 reserved output-retries could not land a schema-valid
+            # output. Degrade to a deterministic named halt rather than let the raw ToolLoopError
+            # escape to the eval/CLI boundary as an unclassified blog_fatal (ADR 0107). Framework
+            # decision (a fixed except), no LLM judgment (§1.5): the Planner produced nothing to route.
+            state.status = PlanPipelineStatus.HALTED_PLANNER_EMIT_EXHAUSTED
+            state.halt_reason = (
+                "Planner exhausted its tool-loop budget without emitting a valid manifest "
+                f"(no structured output within the request budget): {exc}"
             )
-            state.pending_feedback = None  # consumed by this re-run
-        else:
-            result = await planner.plan(state.attack_spec, preferences=state.preferences)
+            state.route = END
+            logger.warning(
+                "plan: Planner tool-loop budget exhausted without a valid emit; halting cleanly"
+            )
+            return state
         state.plan_result = result
         # The Planner's outcome is its decision dimension (planned / route-back / cannot-plan).
         if recorder is not None:
