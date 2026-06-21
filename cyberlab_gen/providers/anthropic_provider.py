@@ -105,7 +105,10 @@ DEFAULT_MAX_TOKENS = 4096
 #: Forced on the last permitted tool-loop request so the loop can never exhaust the request budget
 #: with zero structured output (ADR 0105 — the run-20260620 Planner-Jury ``ToolLoopError``). Forcing
 #: requires Anthropic *thinking* to be OFF (``_model_settings`` configures none); under thinking
-#: pydantic-ai degrades a forced tool_choice to 'auto', so this guard would not fire.
+#: pydantic-ai degrades a forced tool_choice to 'auto' and the guarantee silently dies. So the tool
+#: path now *enforces* thinking-OFF as a standing precondition: :func:`output_forcing_model_settings`
+#: raises :class:`ForcedEmitThinkingConflictError` rather than let a forced-emit run degrade to zero-output
+#: death (ADR 0105 part 3 — promoted from a documented caveat to a fail-loud guard).
 OUTPUT_TOOL_NAME = "final_result"
 
 #: Provider-internal malformed-output retry budget (pydantic-ai ``retries={'output': N}``).
@@ -118,6 +121,24 @@ DEFAULT_OUTPUT_RETRIES = 2
 #: exhaustion they surface as ``ModelHTTPError`` and map to ``TransientFailure``.
 _TRANSIENT_STATUS_MIN_SERVER_ERROR = 500
 _RATE_LIMIT_STATUS = 429
+
+
+class ForcedEmitThinkingConflictError(RuntimeError):
+    """Anthropic *thinking* was enabled on the tool path, breaking the ADR-0105 terminal-emit guard.
+
+    A forced ``tool_choice`` degrades to a non-binding 'auto' under thinking, so the loop can again
+    exhaust its request budget with zero structured output (the run-20260620 ``ToolLoopError``).
+    Enabling thinking for a tool-using agent must therefore first switch the final-step guard to
+    *dropping function tools* (the ADR-0105 part-3 caveat). This is a programming/configuration
+    error that must crash loudly — deliberately a ``RuntimeError`` and **not** a ``CyberlabGenError``,
+    so the eval runner never misclassifies it as a blog-fatal pipeline outcome (ADR 0034).
+    """
+
+
+def _thinking_is_enabled(settings: AnthropicModelSettings) -> bool:
+    """Whether ``settings`` turns Anthropic extended thinking on (``{'type': 'enabled', ...}``)."""
+    thinking = settings.get("anthropic_thinking")
+    return thinking is not None and thinking.get("type") == "enabled"
 
 
 def output_forcing_model_settings(
@@ -133,10 +154,21 @@ def output_forcing_model_settings(
     overflowing. A **callable** ``model_settings`` is what pydantic-ai 1.103 supports for per-step
     ``tool_choice`` (a static forced ``tool_choice`` raises ``UserError``); it is resolved once per
     request. Off the tool path (``request_limit is None``) the plain settings suffice — with no tools
-    the model emits on the first request. Relies on thinking being OFF (see :data:`OUTPUT_TOOL_NAME`).
+    the model emits on the first request. On the tool path this *enforces* thinking-OFF: it raises
+    :class:`ForcedEmitThinkingConflictError` if thinking is enabled (see :data:`OUTPUT_TOOL_NAME`), rather
+    than silently degrade the force to 'auto' and re-open zero-output death (ADR 0105 part 3).
     """
     if request_limit is None:
         return base
+    if _thinking_is_enabled(base):
+        # ADR 0105 part 3 standing precondition: a forced tool_choice only binds with thinking OFF.
+        # Fail loud rather than silently degrade to 'auto' and re-open the zero-output ToolLoopError.
+        raise ForcedEmitThinkingConflictError(
+            "extended thinking is enabled on the tool path; the forced terminal emit (ADR 0105 "
+            "part 3) would degrade to a non-binding 'auto' tool_choice and re-open the zero-output "
+            "ToolLoopError. Disable thinking for tool-using agents, or first switch the final-step "
+            "guard to dropping function tools (the ADR-0105 part-3 caveat)."
+        )
     limit = request_limit  # narrowed to int for the closure
 
     def _resolve(ctx: RunContext[None]) -> AnthropicModelSettings:

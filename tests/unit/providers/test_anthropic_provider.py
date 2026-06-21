@@ -37,6 +37,7 @@ from cyberlab_gen.errors import (
 from cyberlab_gen.providers.anthropic_provider import (
     OUTPUT_TOOL_NAME,
     AnthropicProvider,
+    ForcedEmitThinkingConflictError,
     output_forcing_model_settings,
 )
 from cyberlab_gen.providers.base import (
@@ -510,6 +511,36 @@ async def test_tool_loop_forces_output_on_last_step_then_emits() -> None:
     assert isinstance(resp.output, Greeting)  # emitted; did NOT raise ToolLoopError
     assert seen[-1] == [OUTPUT_TOOL_NAME]  # forced on the last permitted step
     assert seen[0] is None  # not forced on the first step
+
+
+# --- thinking-OFF standing precondition (ADR 0105 part 3) -------------------
+
+
+def test_output_forcing_raises_when_thinking_enabled_on_the_tool_path() -> None:
+    # ADR 0105 part 3: forcing only binds with thinking OFF. The tool path (request_limit set) now
+    # fails loud rather than silently degrade the force to 'auto' and re-open zero-output death.
+    thinking_on = AnthropicModelSettings(
+        max_tokens=4096, anthropic_thinking={"type": "enabled", "budget_tokens": 1024}
+    )
+    with pytest.raises(ForcedEmitThinkingConflictError):
+        output_forcing_model_settings(thinking_on, 9)
+
+
+def test_output_forcing_allows_thinking_off_the_tool_path() -> None:
+    # Off the tool path (no request_limit -> no tools -> the model emits on the first request) there
+    # is no force to degrade, so thinking is irrelevant: the guard must NOT fire.
+    thinking_on = AnthropicModelSettings(
+        max_tokens=4096, anthropic_thinking={"type": "enabled", "budget_tokens": 1024}
+    )
+    assert output_forcing_model_settings(thinking_on, None) is thinking_on
+
+
+def test_provider_model_settings_keep_thinking_off_so_forcing_holds() -> None:
+    # Canary: the provider must keep thinking OFF on the tool path, or the ADR-0105 forced emit would
+    # degrade. Running the real settings through the guard trips loudly if a future change enables it.
+    provider = AnthropicProvider()
+    settings = provider._model_settings(None)  # pyright: ignore[reportPrivateUsage]
+    output_forcing_model_settings(settings, 9)  # must not raise (thinking is off today)
 
 
 # --- transient / hard mapping ---------------------------------------------

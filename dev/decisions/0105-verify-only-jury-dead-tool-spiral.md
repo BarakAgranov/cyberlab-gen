@@ -43,10 +43,15 @@ only dead sources.)
 
 1. **Caller-aware unavailable-source reply** (`ExtractorToolExecutor`). The unavailable replies (the
    non-NVD branch and the NVD no-cve / no-client branches) branch on `self._verify_only`. The
-   **producer** wording is unchanged (verified it is still wanted — ADR 0042 needs "mark unknown and
-   continue"). A **verify-only** caller is told: "treat the value as unverifiable and proceed to your
-   verdict; do NOT try other external sources." Implemented as one `_unavailable_proceed_clause()`
-   helper used by all three branches.
+   **producer** *semantics* are unchanged (ADR 0042 needs "mark unknown and continue"): the non-NVD
+   branch is byte-identical, and the two NVD branches (no-cve / no-client) were **unified** onto the
+   same canonical ADR-0042 phrasing they previously abbreviated ("set the field to unknown_from_blog
+   (requires external research) and continue" / "record as requires external research") — same
+   contract, one wording. A **verify-only** caller is told: "treat the value as unverifiable and
+   proceed to your verdict; do NOT try other external sources." Implemented as one
+   `_unavailable_proceed_clause()` helper used by all three branches. (The "unchanged producer
+   wording" was sharpened to "unchanged producer *semantics*" after the adversarial review noted the
+   two NVD branches were re-worded, not byte-identical.)
 
 2. **Gate `external_lookup` off when there is no verifiable work** (verify-only only). New
    `verify_only_external_lookup_offered(*, nvd_client_wired, spec)` returns true iff an NVD client is
@@ -67,9 +72,17 @@ only dead sources.)
    `model_settings` is pydantic-ai 1.103's supported channel for per-step `tool_choice` (a static
    forced choice raises `UserError`); it resolves to Anthropic `{'type':'tool','name':'final_result'}`.
    This is the **standing invariant** kept even after (1)+(2) remove this particular spiral — it also
-   backstops the Extractor and Planner. **Caveat:** tool-forcing requires Anthropic *thinking* OFF
-   (`_model_settings` configures none); under thinking pydantic-ai degrades the force to 'auto', so if
-   thinking is ever enabled this guard must switch to dropping function tools on the final step.
+   backstops the Extractor and Planner. **Standing precondition (enforced, not just documented):**
+   tool-forcing only binds with Anthropic *thinking* OFF (`_model_settings` configures none); under
+   thinking pydantic-ai degrades the force to 'auto' and the guarantee silently dies. To stop that
+   coupling from rotting, `output_forcing_model_settings` now **fails loud** on the tool path —
+   raising `ForcedEmitThinkingConflictError` (a `RuntimeError`, deliberately **not** a `CyberlabGenError`,
+   so the eval runner never misclassifies the bug as a blog-fatal pipeline outcome, ADR 0034) if
+   thinking is ever enabled — backed by a provider canary test that runs the real `_model_settings`
+   through the guard. A future thinking-ON change must therefore first switch the final-step guard to
+   dropping function tools (the documented alternative), turning a silent regression into an
+   immediate, actionable crash. (Promoted from a documented caveat to an enforced guard after the
+   adversarial review.)
 
 All three are framework-side (tool availability, reply text, the tool loop) — no change to the
 LLM/framework split (`§1.5`/`§1.6`); the LLM still only produces the verdict.
@@ -90,9 +103,16 @@ lookup-starvation.
 - **Behaviour change:** verify-only juries are offered `external_lookup` **only** when verification is
   actually possible (client wired + checkable value). Until a verifying client is wired they review
   without it — the honest state (the tool could never succeed before either).
-- Tests: caller-aware reply (verify-only vs producer), the gate decision + the no-tool result, and the
+- Tests: caller-aware reply (verify-only vs producer, incl. the producer NVD no-client branch), the
+  gate decision + the no-tool result + a present-but-empty `ExternalRefsBlock` fails-closed, and the
   forced-emit settings (unit) + end-to-end (a cooperative `FunctionModel` honours the forced
-  `tool_choice` and the loop emits instead of raising `ToolLoopError`). `just verify` green.
+  `tool_choice` and the loop emits instead of raising `ToolLoopError`) + the thinking-OFF guard
+  (raises on enabled, dormant on the real `_model_settings`). `just verify` green.
+- **Adversarial review (2026-06-21):** a 5-dimension multi-agent review (split-fidelity, gate
+  subsumption + live-wiring survival, the terminal-emit boundary traced against pydantic-ai 1.103's
+  `run_step`/`check_before_request`, no-producer-regression, fails-closed) found **no surviving
+  concern**. It surfaced three durability nits, all addressed here: the producer-wording wording
+  above, the producer NVD no-client test, and the empty-`cves` fails-closed test.
 
 ## Not part of this ADR (separate follow-ups, recorded for the owner)
 

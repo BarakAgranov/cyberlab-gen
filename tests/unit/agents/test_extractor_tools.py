@@ -284,13 +284,29 @@ async def test_verify_only_nvd_no_client_steers_to_verdict() -> None:
 
 async def test_producer_unavailable_source_keeps_unknown_from_blog_guidance() -> None:
     # The producer path is unchanged (ADR 0042 needs the "mark unknown and continue" steer so the
-    # Extractor/Planner record the gap and proceed, never a fatal error result).
+    # Extractor/Planner record the gap and proceed, never a fatal error result). Branch 1 (non-NVD).
     ex = _executor()  # verify_only=False
     result = await ex.execute(
         _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "cisa_kev", "params": {"keyword": "x"}})
     )
     content = result.content.lower()
     assert "unknown_from_blog" in content
+    assert "proceed to your verdict" not in content
+
+
+async def test_producer_nvd_no_client_keeps_unknown_from_blog_guidance() -> None:
+    # ADR 0105 unified the three unavailable branches onto one helper; this pins the producer steer on
+    # Branch 3 (NVD, cve present but no client wired) — the branch the review flagged as the sole
+    # untested producer path. Producer semantics must be preserved: not fatal, mark unknown + continue,
+    # never the verify-only "proceed to your verdict" steer.
+    ex = _executor()  # verify_only=False, no nvd client
+    result = await ex.execute(
+        _call(TOOL_EXTERNAL_LOOKUP, {"source_id": "nvd", "params": {"cve_id": "CVE-2024-0001"}})
+    )
+    assert not result.is_error
+    content = result.content.lower()
+    assert "unknown_from_blog" in content
+    assert "external research" in content
     assert "proceed to your verdict" not in content
 
 

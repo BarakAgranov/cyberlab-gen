@@ -362,3 +362,14 @@ def test_verify_only_lookup_offered_requires_client_and_cve() -> None:
     assert verify_only_external_lookup_offered(nvd_client_wired=True, spec=no_cve) is False
     assert verify_only_external_lookup_offered(nvd_client_wired=False, spec=with_cve) is False
     assert verify_only_external_lookup_offered(nvd_client_wired=True, spec=with_cve) is True
+
+
+def test_verify_only_lookup_withheld_for_non_none_block_with_empty_cves() -> None:
+    # ADR 0105 fails-closed (review hardening): a present-but-empty ExternalRefsBlock (cves=[]) is no
+    # verifiable work — the predicate must withhold the tool even with a client wired, exactly as the
+    # None case does. Pins the empty-list state the requires-client-and-cve test reaches only via None.
+    from cyberlab_gen.agents.tool_agent import verify_only_external_lookup_offered
+    from cyberlab_gen.schemas.attack_spec import ExternalRefsBlock
+
+    empty_refs = _spec().model_copy(update={"external_references": ExternalRefsBlock(cves=[])})
+    assert verify_only_external_lookup_offered(nvd_client_wired=True, spec=empty_refs) is False
