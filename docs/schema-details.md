@@ -20,7 +20,7 @@ class ArtifactModel(BaseModel):
     """Base for everything that gets serialized as a final artifact (AttackSpec, Manifest).
 
     `extra="forbid"` is critical: unknown fields in user-edited artifacts (post-interrupt
-    edits) must surface as Layer 1 validation errors, not be silently dropped.
+    edits) must surface as static-schema validation errors, not be silently dropped.
     """
     model_config = ConfigDict(
         extra="forbid",
@@ -42,7 +42,7 @@ class InternalModel(BaseModel):
     )
 ```
 
-YAML round-trip: every artifact model has a `to_yaml()` method (calls `ruamel.yaml` with project-standard formatting) and a `from_yaml()` classmethod. Pydantic's JSON Schema export is enabled and produces the artifact's JSON Schema for Layer 1 validation (`validation.md §6.4`).
+YAML round-trip: every artifact model has a `to_yaml()` method (calls `ruamel.yaml` with project-standard formatting) and a `from_yaml()` classmethod. Pydantic's JSON Schema export is enabled and produces the artifact's JSON Schema for static-schema validation (`validation.md §6.4`).
 
 Generic syntax: PEP 695 throughout. `class Provenance[T](BaseModel): ...`, not `Generic[T]`. This requires Python 3.12+; `pyproject.toml` pins `requires-python = ">=3.13"` (with a narrow upper bound; see ADR 0003).
 
@@ -298,7 +298,7 @@ class DefenseApplicability(StrEnum):
 
 ### 2.3 Open-set string types
 
-Some categories are open-set (registry-extensible). These are typed as `str` with validation against the loaded registry happening at Layer 1 (not as a Pydantic enum constraint), because the set of valid values depends on which registries are loaded:
+Some categories are open-set (registry-extensible). These are typed as `str` with validation against the loaded registry happening at static-schema validation (not as a Pydantic enum constraint), because the set of valid values depends on which registries are loaded:
 
 - `ExecutionContext` (e.g., `attacker_local`) — validated against the `execution_contexts` registry.
 - `ValueTypeName` (e.g., `aws_credentials`) — validated against the merged `value_types` registry.
@@ -1019,7 +1019,7 @@ class InputBlock(BaseModel):
     name: SnakeName
     type: ValueTypeName
     source: InputSource
-    default: Any | None = None  # validated structurally against value-type schema at Layer 1
+    default: Any | None = None  # validated structurally against value-type schema at static-schema validation
     description: NonEmptyString | None = None
 
     @model_validator(mode="after")
@@ -1130,12 +1130,12 @@ class ProducesWorldState(BaseModel):
 
 class PhaseImplementation(BaseModel):
     """schema.md §4.5. ADR 0079: ``path`` is optional. The manifest is one
-    incrementally-built model and Layer 1 runs after every stage, so the Planner
+    incrementally-built model and static-schema validation runs after every stage, so the Planner
     emits a skeleton phase with no code and no path (``agents.md §5.7``); a
-    required path would fail the Planner's own Layer-1 validation. Invariant:
+    required path would fail the Planner's own static-schema validation. Invariant:
     path <-> file. The Per-phase Generator (Phase 3) materializes the file and
     the path together via the ``id`` -> path derivation (``agents.md §9.4``);
-    Layer 2 (post-generation) enforces ``path == derive(id)`` + file-exists."""
+    the semantic cross-check (post-generation) enforces ``path == derive(id)`` + file-exists."""
     model_config = ConfigDict(extra="forbid")
 
     language: Literal["python"]  # v1; widens in v1.5+
@@ -1169,7 +1169,7 @@ class StepBlock(BaseModel):
     # steps (CoreBlock.reproducibility / §5.1). Reuses the AttackSpec block. ADR 0081.
     reproducibility: PerStepReproducibility
     cli_equivalent: list[NonEmptyString] = Field(default_factory=list)
-    # illustrative, not authoritative; Layer 2 does not verify equivalence per schema.md §4.7
+    # illustrative, not authoritative; the semantic cross-check does not verify equivalence per schema.md §4.7
     outputs: list[StepOutput] = Field(default_factory=list)
     tradecraft_notes: list[TradecraftNote] = Field(default_factory=list)
     extras: list[ExtrasEntry] = Field(default_factory=list)
@@ -1362,7 +1362,7 @@ class StaticCatalogsRegistry(ArtifactModel):
     entries: list[StaticCatalogEntry] = Field(default_factory=list)
 ```
 
-The typed split is enforced structurally: a YAML entry under `static_catalogs:` with an `enrichment_triggers` field fails at parse time because `StaticCatalogEntry` rejects the unknown field (`extra="forbid"`). Same for a `notes_for_generator` under `external_data_sources:`. The two registries can no longer be confused for each other, and the misconfiguration mode that was previously silent now surfaces as a Layer 1 error.
+The typed split is enforced structurally: a YAML entry under `static_catalogs:` with an `enrichment_triggers` field fails at parse time because `StaticCatalogEntry` rejects the unknown field (`extra="forbid"`). Same for a `notes_for_generator` under `external_data_sources:`. The two registries can no longer be confused for each other, and the misconfiguration mode that was previously silent now surfaces as a static-schema error.
 
 ### 6.4 `execution_contexts` meta-schema
 
@@ -1387,14 +1387,14 @@ class ExecutionContextsRegistry(ArtifactModel):
 
 ```python
 class LabCredentialEntry(ArtifactModel):
-    """schema.md §4.11. Canonical fake-credential patterns. Used by Generator and Validator Layer 5."""
+    """schema.md §4.11. Canonical fake-credential patterns. Used by Generator and the Validator's safety scans."""
 
     id: SnakeName  # e.g., "aws_canonical_access_key"
     platform: SnakeName  # "aws", "github", etc.
     description: NonEmptyString
     pattern: NonEmptyString  # regex or fixed string identifying canonical fakes
     example: NonEmptyString
-    whitelist_rationale: NonEmptyString  # why Layer 5 may ignore this pattern
+    whitelist_rationale: NonEmptyString  # why the safety scans may ignore this pattern
 
 
 class LabCredentialsRegistry(ArtifactModel):
@@ -1498,7 +1498,7 @@ class OverlayRegistryFile[E: BaseModel](ArtifactModel):
         return getattr(entry, key_field)
 ```
 
-Promotion from overlay to bundled drops the proposals block: the entry is copied to the bundled file's `entries:` list and the corresponding key under `proposals:` is removed. The bundled-file Pydantic shape is just `BundledRegistryFile[E]` with only an `entries: list[E]` field — no `proposals:` block, validated under `extra="forbid"` so a bundled file accidentally carrying proposal audit fails Layer 1.
+Promotion from overlay to bundled drops the proposals block: the entry is copied to the bundled file's `entries:` list and the corresponding key under `proposals:` is removed. The bundled-file Pydantic shape is just `BundledRegistryFile[E]` with only an `entries: list[E]` field — no `proposals:` block, validated under `extra="forbid"` so a bundled file accidentally carrying proposal audit fails static-schema validation.
 
 ### 6.7 External-source response schemas
 
@@ -1545,14 +1545,14 @@ This table is the cheat sheet the implementing agent uses when generating code f
 
 ## 8. JSON Schema export
 
-Layer 1 validation (`validation.md §6.4`) uses the JSON Schemas generated from these Pydantic models. The export convention:
+Static-schema validation (`validation.md §6.4`) uses the JSON Schemas generated from these Pydantic models. The export convention:
 
 - `AttackSpec.model_json_schema()` produces `attackspec.schema.json`.
 - `LabManifest.model_json_schema()` produces `manifest.schema.json`.
 - Each registry meta-schema exports to `<registry-name>.schema.json`.
-- Exports happen at build time and check into `cyberlab_gen/schemas/json/`. They are NOT regenerated at runtime; the static export is what Layer 1 validates against. Drift between Pydantic and JSON Schema is a CI failure (a build-step test re-exports and diffs).
+- Exports happen at build time and check into `cyberlab_gen/schemas/json/`. They are NOT regenerated at runtime; the static export is what static-schema validation validates against. Drift between Pydantic and JSON Schema is a CI failure (a build-step test re-exports and diffs).
 
-This keeps Layer 1 fast (no Pydantic-load overhead per validation) and lets non-Python consumers (the eval harness's external scripts, future TypeScript tooling) read the schemas directly.
+This keeps static-schema validation fast (no Pydantic-load overhead per validation) and lets non-Python consumers (the eval harness's external scripts, future TypeScript tooling) read the schemas directly.
 
 ---
 
@@ -1561,7 +1561,7 @@ This keeps Layer 1 fast (no Pydantic-load overhead per validation) and lets non-
 These are out of scope for `schema-details.md` and live elsewhere when they exist:
 
 - **Exact prompt text** that instructs the Extractor to populate these shapes. Lives in `prompts.md` (Phase 1 deliverable per `implementation-plan.md §8.6`).
-- **Layer-specific validation rules** (severity floors, what counts as a Layer 2 finding). Lives in `validator-rules.md` (Phase 3 deliverable).
+- **Per-pass validation rules** (severity floors, what counts as a semantic cross-check finding). Lives in `validator-rules.md` (Phase 3 deliverable).
 - **Registry seed contents.** Lives in `registry-details.md` (the companion document).
 - **Migration logic between schema versions.** Per `architecture.md §0.6`: no migration in v1. Old artifacts produce a "regenerate from blog URL" message.
 - **Performance tuning.** Pydantic v2 is fast enough; profile if needed.

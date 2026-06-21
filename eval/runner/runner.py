@@ -298,7 +298,7 @@ class ProviderBackedEvalRunner:
             # F1 (eval.md §7.4): read the pipeline's EMITTED static-schema verdict — the one
             # it computed WITH this run's provisional-proposals context — instead of
             # re-running a validator here. Re-validation outside the pipeline risks a
-            # different result (e.g. a Layer-1 false failure from not re-applying the run's
+            # different result (e.g. a static-schema false failure from not re-applying the run's
             # provisional proposals); the harness measures pipeline truth, it never
             # re-derives it (architecture.md §1.8: a peer that measures, not a second
             # implementation of the checks).

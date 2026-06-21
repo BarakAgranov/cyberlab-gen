@@ -232,8 +232,8 @@ class PipelineExtractRunner:
         the checkpoint the LangGraph checkpointer wrote on each completed super-step —
         never an in-memory field set only on a clean graph return. Reading it here is what
         lets a mid-graph abort (Ctrl-C / budget halt / crash), which never returns
-        cleanly, still surface the partial AttackSpec for persistence — closing the L4
-        drop-partial-on-abort gap (a spec already in ``checkpoint.sqlite`` that the run
+        cleanly, still surface the partial AttackSpec for persistence — closing the
+        lost-partial-spec-on-abort gap (a spec already in ``checkpoint.sqlite`` that the run
         record never listed). On a clean ship the latest checkpoint is the final enriched
         state, so the same read serves both halt and ship. ``None`` when this run was
         driven without a checkpoint (no persistence) or none was written yet.

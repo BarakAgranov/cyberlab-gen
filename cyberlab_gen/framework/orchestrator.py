@@ -109,7 +109,8 @@ DEFAULT_GROUNDING_RETRY_ATTEMPTS = 2
 #: the first run). ``architecture.md §6`` "Total iteration cap (default 20)" — the
 #: end-to-end bound that binds regardless of the per-node caps. With the default per-node
 #: caps the realistic maximum is ~6 runs, so this is a backstop for raised/buggy per-node
-#: budgets and routing pathologies, enforced as a clean ``HALTED_VALIDATION`` (L3, ADR 0056).
+#: budgets and routing pathologies, enforced as a clean ``HALTED_VALIDATION`` (the global
+#: iteration cap, ADR 0056).
 GLOBAL_ITERATION_CAP = 20
 
 #: The LangGraph ``recursion_limit`` (a super-step bound), set as the final graph-level
@@ -273,7 +274,7 @@ class PipelineState(BaseModel):
     grounding_attempts: int = 0
     refinement_iterations: int = 0
     # total Extractor runs across the whole pipeline (structural + grounding + refinement +
-    # first); bounded by the global iteration cap (``architecture.md §6``, L3).
+    # first); bounded by the global iteration cap (``architecture.md §6``).
     total_iterations: int = 0
 
     # accumulated feedback for the next re-run (cleared after the re-run consumes)
@@ -460,7 +461,7 @@ def build_pipeline(
     )
 
     def _global_cap_reached(state: PipelineState) -> bool:
-        """True when the run has used its whole end-to-end iteration budget (L3)."""
+        """True when the run has used its whole end-to-end iteration budget (the global cap)."""
         return state.total_iterations >= global_iteration_cap
 
     def _halt_global_cap(state: PipelineState) -> PipelineState:
@@ -490,7 +491,8 @@ def build_pipeline(
           the flagged paths, convergent by construction.
         """
         # Every Extractor run — first, structural retry, or refinement — is one global
-        # iteration; the cap on this counter bounds the whole pipeline end-to-end (L3).
+        # iteration; the cap on this counter (the global iteration cap) bounds the whole
+        # pipeline end-to-end.
         state.total_iterations += 1
         pending = state.pending_feedback
         is_refinement = (
@@ -523,7 +525,8 @@ def build_pipeline(
             # budget. A grounding retry is bounded by its OWN counter (``grounding_attempts``,
             # bumped in ``grounding_node``) and a jury-revise refinement by ``refinement_iterations``
             # (bumped in ``jury_node``); neither may charge the structural counter — the three
-            # retry/refinement mechanisms have independent budgets (``architecture.md §1.7``; L2).
+            # retry/refinement mechanisms have independent budgets (the per-node structural-retry
+            # budget and the per-agent refinement budget; ``architecture.md §1.7``).
             if pending is None or pending.kind is FeedbackKind.STRUCTURAL_RETRY:
                 state.structural_attempts += 1
         state.extraction = result
@@ -594,7 +597,7 @@ def build_pipeline(
         state.last_static_finding_signature = signature
         if state.structural_attempts < structural_retry_attempts:
             # Global backstop: never start another Extractor run past the end-to-end cap,
-            # even if the per-node structural budget still has room (L3).
+            # even if the per-node structural budget still has room (the global iteration cap).
             if _global_cap_reached(state):
                 return _halt_global_cap(state)
             state.pending_feedback = RefinementFeedback(
@@ -659,7 +662,8 @@ def build_pipeline(
             return state
         state.last_grounding_finding_signature = signature
         if state.grounding_attempts < grounding_retry_attempts:
-            # Global backstop: never start another Extractor run past the end-to-end cap (L3).
+            # Global backstop: never start another Extractor run past the end-to-end cap (the
+            # global iteration cap).
             if _global_cap_reached(state):
                 return _halt_global_cap(state)
             state.grounding_attempts += 1
@@ -748,7 +752,7 @@ def build_pipeline(
         feedback = RefinementFeedback(kind=FeedbackKind.REFINEMENT, jury_feedback=verdict.feedback)
         if state.refinement_iterations < refinement_cap:
             # Global backstop: never start another Extractor run past the end-to-end cap,
-            # even if the per-agent refinement budget still has room (L3).
+            # even if the per-agent refinement budget still has room (the global iteration cap).
             if _global_cap_reached(state):
                 return _halt_global_cap(state)
             state.refinement_iterations += 1
@@ -841,7 +845,8 @@ def build_pipeline(
         # made in a node, ADR 0023). The *returned* channel is the source of truth,
         # not the input object; coerce it back to the typed model.
         #
-        # ``recursion_limit`` is always set as the graph-level backstop (L3, ADR 0056):
+        # ``recursion_limit`` is always set as the graph-level backstop (the global iteration
+        # cap's recursion-limit backstop, ADR 0056):
         # it bounds total super-steps regardless of the application caps, so a routing
         # pathology raises ``GraphRecursionError`` rather than spinning forever. It is sized
         # above the global iteration cap's super-steps, so the clean semantic halt wins first.

@@ -111,7 +111,7 @@ class MergedRegistries(BaseModel):
         self._execution_context_index = {e.name: e for e in self.execution_contexts.entries}
         self._thesis_type_index = {e.name: e for e in self.thesis_types.entries}
         # lab_credentials uses a list-with-filter accessor rather than a
-        # single-key dict; Layer 5 scans the catalog and a per-platform
+        # single-key dict; the safety-scan pass scans the catalog and a per-platform
         # bucket would be premature for ~7 v1 entries.
         return self
 
@@ -137,7 +137,7 @@ class MergedRegistries(BaseModel):
         """Return lab-credential patterns, optionally filtered by ``platform``.
 
         ``platform=None`` returns every entry — the default scan
-        Validator Layer 5 runs against generated content. A specific
+        the safety-scan pass runs against generated content. A specific
         platform returns only entries whose ``platform`` field matches;
         unknown platforms return an empty list.
         """

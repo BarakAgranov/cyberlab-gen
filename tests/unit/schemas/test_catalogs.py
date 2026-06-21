@@ -211,7 +211,7 @@ def test_closed_catalog_yaml_loads_through_model(
 def test_severity_levels_seed_has_all_four_ordinals() -> None:
     """The severity seed maps each ``Severity`` member to a distinct ordinal.
 
-    Layer 3's severity-floor rules read ``ordinal``; a missing or duplicated
+    The containerized dry-run's severity-floor rules read ``ordinal``; a missing or duplicated
     ordinal would break cross-severity comparison.
     """
     path = bundled_registry_dir() / "severity_levels.yaml"

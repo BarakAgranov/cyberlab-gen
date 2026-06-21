@@ -289,7 +289,8 @@ def build_plan_pipeline(
         → the Planner-Jury; ``attackspec_incoherent`` → route back to the Extractor;
         ``cannot_plan`` → halt with the gap report. The Planner never repairs the AttackSpec.
         """
-        # Every Planner run — first plan or a refine — is one global iteration (L3, ADR 0056).
+        # Every Planner run — first plan or a refine — is one global iteration (the global
+        # iteration cap, ADR 0056).
         state.total_iterations += 1
         is_refine = state.pending_feedback is not None and state.manifest is not None
         # Stamp the round the upcoming billed call(s) belong to (ADR 0098); the provider-side
@@ -399,7 +400,8 @@ def build_plan_pipeline(
         # revise: refinement, bounded by the per-agent cap. The structured field feedback (manifest
         # paths + suggested_fix) drives the Planner's targeted patch (ADR 0054/0091).
         if state.refinement_iterations < refinement_cap:
-            # Global backstop: never start another Planner run past the end-to-end cap (L3).
+            # Global backstop: never start another Planner run past the end-to-end cap (the
+            # global iteration cap).
             if _global_cap_reached(state):
                 return _halt_global_cap(state)
             state.refinement_iterations += 1

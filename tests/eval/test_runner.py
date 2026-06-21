@@ -292,7 +292,7 @@ def test_run_once_records_billed_model_not_self_report_on_halt(tmp_path: Path) -
 def test_run_once_persists_partial_from_checkpoint_on_crash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The eval's identical L4 gap: a mid-graph crash persists the checkpointed partial.
+    """The eval's identical checkpoint/lossless-persistence gap: a mid-graph crash persists the checkpointed partial.
 
     Drives the *real* ``PipelineExtractRunner`` (ingestion stubbed) whose pipeline aborts
     after extract + validate have checkpointed the partial spec. The eval reads the same

@@ -100,7 +100,7 @@ The directory layout is specified in `implementation-plan.md §3.2`. This sectio
 
 Two architectural concerns don't live under `cyberlab_gen/`:
 
-- **Validation code.** The five validation layers (per `validation.md`) are foundational to the system and ship from Phase 1 onward. Their codebase location isn't pre-pinned — most likely `cyberlab_gen/validators/` with one submodule per layer (`layer1.py`, `layer2.py`, `layer3.py`, `layer5.py`; Layer 4 is v2-deferred), but the decision is recorded in `dev/decisions/` when the first validator ships in Phase 1.
+- **Validation code.** The five validation passes (per `validation.md`) are foundational to the system and ship from Phase 1 onward. Their codebase location isn't pre-pinned — most likely `cyberlab_gen/validators/` with one descriptively-named submodule per pass (`static_schema_validator.py`, `semantic_cross_check_validator.py`, `containerized_dry_run_validator.py`, `safety_scan_validator.py`; the real-platform-apply pass is v2-deferred, so its slot stays reserved), but the decision is recorded in `dev/decisions/` when the first validator ships in Phase 1.
 - **Eval harness.** The eval harness lives at the **repo-level** `eval/` directory, not as a subpackage of `cyberlab_gen/`. It's structured as a sibling of the package because it evaluates the system rather than being part of it (per `implementation-plan.md §3.2` repo layout). Imports flow one way: eval imports from `cyberlab_gen`; `cyberlab_gen` never imports from eval.
 
 ### 3.2 The `dev/` directory
@@ -231,9 +231,9 @@ Functions that return a value are nouns or noun phrases (`load_registry`, `compu
 
 Any construct the architecture numbers or sequences — a **validation layer**, a **phase**, a **tier**, a **stage**, a **step** — takes a *meaningful, descriptive name* in all code: identifiers, filenames, types, enums, enum members, functions, variables. The bare ordinal — "Layer 2", "Phase 3", "Tier 1", "Stage 4" — is a **documentation-side slot reference only**, and the token (`layer2` / `layer_2` / `l2` / `L2` / `phase3` / `tier1` / …) must not appear in any code identifier.
 
-- **Precedent.** Validator Layer 1 is `static_schema_validator` everywhere — module, class (`StaticSchemaValidator`), enum (`StaticSchemaCode`), report keys, graph node id — never `layer1` (ADR 0046). Validator Layer 2 is `semantic_cross_check_validator` / `SemanticCrossCheck*` (its §6.5 architectural title). The pattern generalizes from validation layers to *every* ordinal construct.
+- **Precedent.** The validation passes carry descriptive names everywhere — module, class, enum, report/metric keys, graph node id — never the bare ordinal (`layer1` / `layer_2` / …). The static-schema validation pass is `static_schema_validator` (class `StaticSchemaValidator`, enum `StaticSchemaCode`, report key `static_schema`) — never `layer1` (ADR 0046). The full set, in the cheap-to-expensive run order, with the code tokens that stand in for the ordinal: static-schema validation (`static_schema`), semantic cross-check (`semantic_cross_check`), containerized dry-run (`containerized_dry_run`), real-platform apply (`real_platform_apply`, v2-deferred — its slot stays reserved so v2 adds it without renumbering), and safety scans (`safety_scan`) — ADR 0108. The pattern generalizes from validation passes to *every* ordinal construct.
 - **A brief's shorthand is a placeholder, not a name.** When a task brief writes `L2Code`, `layer2.py`, or "the Phase-3 generator," that is a slot reference to be **resolved to the descriptive name when the code lands** — never carried into code "for now" and renamed later. Replace it at landing.
-- **Comments and docstrings may still say "the second validation layer" / "Phase 3"** to orient a reader against the architecture docs — descriptive prose referencing the ordinal is fine. What's banned is the ordinal living in a *name*. (Loop-level shorthand like `L3` in a comment for an ADR-0056 cap, or a generated-lab artifact path like `attack/phase_1_initial_access.py` in an example string, is prose/domain data, not a tool identifier — out of scope of this rule.)
+- **Comments and docstrings may still say "the semantic cross-check" / "Phase 3"** to orient a reader against the architecture docs — descriptive prose referencing a pass or a stage is fine. What's banned is the ordinal living in a *name*. (Loop-level shorthand in a comment naming a retry/iteration cap — e.g. the global iteration cap with its recursion-limit backstop (ADR 0056) — or a generated-lab artifact path like `attack/phase_1_initial_access.py` in an example string, is prose/domain data, not a tool identifier — out of scope of this rule.)
 
 **Why.** Readability and maintainability are first-class engineering goals, equal to scalability and decoupling. A name you have to decode against a numbering scheme — and that silently goes stale when the architecture renumbers — is debt. A descriptive name says what the thing *is*; the ordinal says only where it sits in a list. Cite ADR 0046 and this section when naming a new numbered construct.
 
@@ -426,7 +426,7 @@ Dependencies are added when the phase that needs them ships, not all at Phase 0.
 
 **Phase 3 (added when generation ships):**
 
-Additional dev tooling for validators (`ruff`, `mypy`, `tflint`, etc.) gets containerized for Layer 3 dry-runs. These are container-image dependencies, not Python deps in `pyproject.toml`.
+Additional dev tooling for validators (`ruff`, `mypy`, `tflint`, etc.) gets containerized for the containerized-dry-run pass. These are container-image dependencies, not Python deps in `pyproject.toml`.
 
 Things that look load-bearing and are deliberately *not* dependencies, ever:
 

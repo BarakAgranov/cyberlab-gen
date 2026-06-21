@@ -7,7 +7,8 @@ Every mechanical validator layer reports the same shape: a list of *findings*, e
 location, detail)`` triple with a one-line rendering, wrapped in a *result*. Phase 1 ships two such
 layers (the static-schema validator and the orchestrator-owned grounding stack); each had its own
 independent ``Finding``/``Result`` pair with divergent ``validate()`` signatures, so every Phase-2
-layer (L2/L3/L5) would be a bespoke type-pair. This module gives them one generic base so a new
+layer (the semantic cross-check, containerized dry-run, and safety-scan validators) would be a
+bespoke type-pair. This module gives them one generic base so a new
 layer subclasses two parametrised classes, and the locator convention (a JSONPath-like ``location``)
 is enforced in exactly one place.
 

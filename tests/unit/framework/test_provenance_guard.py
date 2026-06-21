@@ -42,7 +42,7 @@ def _poisoned_external_api_float(value: float) -> ProvenanceFloat:
     """An external_api provenance the LLM has illegitimately self-stamped framework_enriched.
 
     Only the framework's enrichment pass may set framework_enriched; this is structurally
-    valid (passes Layer 1), which is exactly why a downstream mechanical reset is required.
+    valid (passes static-schema validation), which is exactly why a downstream mechanical reset is required.
     """
     return ProvenanceFloat(
         value=value,

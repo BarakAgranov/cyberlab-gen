@@ -178,7 +178,7 @@ Specified in `pipeline.md §3.2.4`; not repeated here. Brief: deterministic fram
 - `phases` populated with steps but without `implementation.path` (no code generated yet).
 - `produces_world_state` declarations per phase.
 - Facets declared.
-- `lab_resources` declared with type, identifier, **intended IaC resource type**, and **`lab_role`** list (per `schema.md §4.4`). The Planner assigns lab_role values per resource — `attack_target`, `attacker_infrastructure`, `defender_infrastructure`, or `neutral` — based on what the resource is doing in the lab. A single resource can have multiple roles (e.g., a logging bucket the attack deletes from is `[defender_infrastructure, attack_target]`). When the role is `attack_target`, Layer 3 relaxes security-finding strictness for that specific resource (see `validation.md §6.6`). The Lab-level Generator translates lab_resources into actual IaC code per §5.11.
+- `lab_resources` declared with type, identifier, **intended IaC resource type**, and **`lab_role`** list (per `schema.md §4.4`). The Planner assigns lab_role values per resource — `attack_target`, `attacker_infrastructure`, `defender_infrastructure`, or `neutral` — based on what the resource is doing in the lab. A single resource can have multiple roles (e.g., a logging bucket the attack deletes from is `[defender_infrastructure, attack_target]`). When the role is `attack_target`, the containerized dry-run relaxes security-finding strictness for that specific resource (see `validation.md §6.6`). The Lab-level Generator translates lab_resources into actual IaC code per §5.11.
 - Per-step `reproducibility` carried forward from the AttackSpec at the **step level** (per `architecture.md §0.7`'s emergent-class principle); lab-level `reproducibility` derived per `schema.md §4.8`.
 - Re-keyed per-phase excerpt bundles from the AttackSpec's chain_step_excerpts.
 - No actual code, IaC, or docs.
@@ -285,7 +285,7 @@ This is the **agent that runs in parallel** — one instance per phase, invoked 
 - The phase's blog excerpts (the relevant slice of the blog, re-keyed from chain_step_excerpts by the Planner).
 - The value_types entries for all types this phase consumes or produces.
 - The facets declared on this phase.
-- The names of any lab-level Terraform outputs this phase has declared it will reference (per `references_lab_outputs` in the manifest), but not the Terraform code itself. **Lab-level Terraform output names were declared by the Planner in the manifest's `lab_resources` block; the Lab-level Generator is contractually bound to produce outputs matching those declared names.** The Validator's Layer 2 verifies this contract (`validation.md §6.5`).
+- The names of any lab-level Terraform outputs this phase has declared it will reference (per `references_lab_outputs` in the manifest), but not the Terraform code itself. **Lab-level Terraform output names were declared by the Planner in the manifest's `lab_resources` block; the Lab-level Generator is contractually bound to produce outputs matching those declared names.** The Validator's semantic cross-check verifies this contract (`validation.md §6.5`).
 - Canonical code-shape examples for the phase's `step_composition` × `execution_context` combination (provided as prompt examples, not constraints — see §5.10).
 - The canonical lab-credentials catalog (read-only; for planting fakes that pass detection-scanner heuristics — see `validation.md §6.8`).
 
@@ -321,14 +321,14 @@ The per-phase cleanup script's scope:
 - Imports are minimal: only the cloud SDK appropriate to the phase's `runtime:*` facet (boto3 for AWS, azure-mgmt-* / azure-identity for Azure, google-cloud-* for GCP, PyGithub / requests for GitHub, etc.) plus manifest-declared dependencies. No over-engineering, no presentation libraries unless the manifest declares them. (Specific library *choices* per runtime are in the prompt overlay; this quality bar names the property — "only what the runtime requires plus what the manifest declares" — not specific library names.)
 - All values consumed from AttackConfig are typed correctly per the manifest's input declarations.
 - Cloud API calls validated against the per-cloud catalog (AWS IAM, Azure RBAC, GCP IAM permissions).
-- **`produces_world_state` entries are populated with correct `identifier_kind`** (per `schema.md §4.5`). When the phase generates runtime-random identifiers (suffixed branch names, timestamped IAM users, UUID-suffixed buckets), the entry must use `identifier_kind: runtime_generated` with an `identifier_source` pointing into the phase's `run_phase()` return dict (the key the phase actually writes to). When identifiers are deterministic across runs, the entry uses `identifier_kind: static` with the literal value. Getting this wrong produces cleanup code that looks correct at validation but fails at runtime; Layer 2 verifies that runtime_generated entries' `identifier_source` paths resolve to declared phase outputs.
-- Planted credentials use only patterns from the canonical lab-credentials catalog (so detection scenarios work and Layer 5 whitelist applies — see `validation.md §6.8`).
+- **`produces_world_state` entries are populated with correct `identifier_kind`** (per `schema.md §4.5`). When the phase generates runtime-random identifiers (suffixed branch names, timestamped IAM users, UUID-suffixed buckets), the entry must use `identifier_kind: runtime_generated` with an `identifier_source` pointing into the phase's `run_phase()` return dict (the key the phase actually writes to). When identifiers are deterministic across runs, the entry uses `identifier_kind: static` with the literal value. Getting this wrong produces cleanup code that looks correct at validation but fails at runtime; the semantic cross-check verifies that runtime_generated entries' `identifier_source` paths resolve to declared phase outputs.
+- Planted credentials use only patterns from the canonical lab-credentials catalog (so detection scenarios work and the safety-scan whitelist applies — see `validation.md §6.8`).
 
 (Style preferences like try/except wrapping conventions live in the prompt overlay, not the architecture's quality bar.)
 
 **Failure modes.**
 
-- Generator produces code that doesn't implement a declared step → Validator catches via Layer 2 cross-check (every `step.function_name` must exist in the emitted module).
+- Generator produces code that doesn't implement a declared step → Validator catches via the semantic cross-check (every `step.function_name` must exist in the emitted module).
 - Generator hallucinates a cloud API → Validator catches via the per-cloud catalog cross-check.
 - Generator produces a step that calls APIs not declared in the manifest's input/output types → Validator flags as a manifest-implementation mismatch.
 - Generator produces 200 lines for what should be 30 → Critic flags as over-engineering.
@@ -400,7 +400,7 @@ The Generator picks the closest canonical example, adapts it to the phase's spec
 
 - Setup script doesn't handle a declared auto-fixable prereq → Validator catches via cross-check.
 - IaC mismatch between provisioning_mechanism declarations and what's actually emitted → Validator catches.
-- Lab-level output names don't match what per-phase Generators reference → Validator Layer 2 catches the contract violation.
+- Lab-level output names don't match what per-phase Generators reference → the Validator's semantic cross-check catches the contract violation.
 
 **Notes.**
 
@@ -471,7 +471,7 @@ cd infra && terraform destroy -auto-approve
 
 **Failure modes.**
 
-- Phase declared a world-state change but neither the per-phase cleanup nor lab-level cleanup addresses it → Validator catches via Layer 2 cross-check.
+- Phase declared a world-state change but neither the per-phase cleanup nor lab-level cleanup addresses it → Validator catches via the semantic cross-check.
 - Per-phase cleanup script doesn't exist when manifest declares the phase produces world state → Validator flags.
 - Cleanup invokes per-phase scripts in wrong order → caught at Critic review (semantic correctness against attack DAG).
 - Cleanup script uses `set -e` and aborts on first error → Critic flags.
@@ -559,7 +559,7 @@ cd infra && terraform destroy -auto-approve
 - **Per-dimension rubric scores** (whole-lab):
   - Fidelity to blog.
   - Completeness.
-  - **Implementation correctness against attack semantics** (not Layer 2 territory — see "Correctness narrowed" below).
+  - **Implementation correctness against attack semantics** (not semantic-cross-check territory — see "Correctness narrowed" below).
   - Code quality.
   - Doc quality.
   - Cleanup quality.
@@ -576,13 +576,13 @@ cd infra && terraform destroy -auto-approve
 
 **Provenance discipline.** Critic feedback itself is LLM-inference-with-reasoning. Every concern has a citation back to the artifact + the rationale.
 
-**Correctness narrowed (avoiding double-count with Layer 2).** Layer 2 of the Validator already checks "does the implementation match the manifest's declarations" (function names match, declared outputs returned, world-state items in cleanup). The Critic does **not** re-verify these mechanical checks. The Critic's "implementation correctness against attack semantics" assesses:
+**Correctness narrowed (avoiding double-count with the semantic cross-check).** The Validator's semantic cross-check already checks "does the implementation match the manifest's declarations" (function names match, declared outputs returned, world-state items in cleanup). The Critic does **not** re-verify these mechanical checks. The Critic's "implementation correctness against attack semantics" assesses:
 
 - Whether declared types and shapes are *correct for the attack* (not just internally consistent — e.g., manifest declares `aws_credentials` and code returns `aws_credentials`, but they're IAM-user creds when the attack semantically requires role-assumption creds).
 - Whether the attack's semantics are reproduced (e.g., the IAM policy actually grants the access the attack needs; the payload actually exploits the vulnerability).
 - Whether fallback decisions made by the Generator (per `schema.md §4.20`) were honest — did the agent settle for `partial_simulation` when `full` was achievable? At implementation level — LabManifest-level fallbacks were reviewed by the Planner-Jury per §5.8.
 
-**Non-first-class runtime adjustment.** When the lab targets non-first-class runtimes (per `schema.md §4.13`), the Critic's confidence reflects reduced coverage in Layer 2 cross-checks and the absence of platform-specific verification.
+**Non-first-class runtime adjustment.** When the lab targets non-first-class runtimes (per `schema.md §4.13`), the Critic's confidence reflects reduced coverage in semantic cross-checks and the absence of platform-specific verification.
 
 **Quality bar.**
 
@@ -648,7 +648,7 @@ Specified in `pipeline.md §3.2.12`; not repeated here. Brief: deterministic fra
 **Quality bar.**
 
 - Patches are minimal and targeted. **Mechanical thresholds** (v1 placeholders pending eval-harness data per `architecture.md §8.4`): a patch modifies no more than 3 files per turn; a patch touching the manifest requires an explicit justification field populated by the agent. A patch exceeding the file count or touching the manifest without justification halts the turn with structured feedback asking the user whether to proceed (legitimate cases exist — adding a missing import across phases, for instance — but they're rare enough to warrant explicit user acknowledgment).
-- Each patch passes the minimal validation flow before being shown to the user: Layer 1 if manifest touched, Layer 2 for cross-checks, Layer 5 safety. Layer 3 auto-runs when the patch touches IaC files; `--validate-patches-thoroughly` controls the other cases. Layer 4 not applicable.
+- Each patch passes the minimal validation flow before being shown to the user: static-schema validation if manifest touched, the semantic cross-check for cross-checks, safety scans. The containerized dry-run auto-runs when the patch touches IaC files; `--validate-patches-thoroughly` controls the other cases. Real-platform apply not applicable (its slot stays v2-deferred).
 - The agent honestly distinguishes "this is a lab bug I can fix" from "this is your environment, here's what you need to do."
 - Web search is used for syntax/freshness verification, not as a primary information source.
 - Follow-up questions are focused — one specific question at a time, not a list.
@@ -762,17 +762,17 @@ Agents have overlapping concerns by nature — the Planner thinks about reproduc
 | Concern | Primary owner | Other agents involved |
 |---|---|---|
 | Blog fidelity (extraction faithfulness) | Extractor-Jury | Critic (informs as feedback) |
-| AttackSpec structural validity | Validator Layer 1 | Extractor-Jury (semantic check) |
+| AttackSpec structural validity | Validator static-schema validation | Extractor-Jury (semantic check) |
 | Provenance correctness on AttackSpec fields | Extractor-Jury | — |
 | Phase decomposition reasonableness | Planner-Jury | — |
-| LabManifest structural validity | Validator Layer 1 | Planner-Jury (semantic check) |
+| LabManifest structural validity | Validator static-schema validation | Planner-Jury (semantic check) |
 | Provenance correctness on Manifest fields | Planner-Jury | — |
 | Fallback decision honesty (LabManifest-level — what the Planner chose) | Planner-Jury | — |
 | Fallback decision honesty (implementation-level — what the Generator chose) | Critic | — |
-| Implementation correctness against attack semantics | Critic | Validator Layer 2 (mechanical sub-check) |
-| Code-manifest cross-check (mechanical) | Validator Layer 2 | — |
-| Static analysis (linters, typecheckers, IaC scanners) | Validator Layer 3 | — |
-| Safety scans (credentials, host attacks) | Validator Layer 5 | — |
+| Implementation correctness against attack semantics | Critic | Validator semantic cross-check (mechanical sub-check) |
+| Code-manifest cross-check (mechanical) | Validator semantic cross-check | — |
+| Static analysis (linters, typecheckers, IaC scanners) | Validator containerized dry-run | — |
+| Safety scans (credentials, host attacks) | Validator safety scans | — |
 | Code quality, doc quality, cleanup quality | Critic | — |
 | Per-phase confidence assessment | Critic | (surfaces in README and validation-report.md) |
 | Registry proposal authorship (value types) | Extractor | Extractor-Jury reviews |
@@ -780,12 +780,12 @@ Agents have overlapping concerns by nature — the Planner thinks about reproduc
 | Registry proposal authorship (runtime / lab-derived lab_class_signal facets) | Planner | Planner-Jury reviews |
 | Registry proposal acceptance | User (interactive: Accept/Edit) / auto-accept (auto, capped) | — |
 | Runtime issue diagnosis (user-reported, post-generation) | Repair Agent (in fix session) | — |
-| Patch correctness against runtime errors | Repair Agent | Minimal validation (Layers 1, 2, 5) |
+| Patch correctness against runtime errors | Repair Agent | Minimal validation (static-schema, semantic cross-check, safety scans) |
 | Patch application | Framework (after user review) | — |
 
 **Per-proposal "no reject" semantics.** Per `schema.md §4.16`, there is no "Reject" option on per-proposal menus. The per-proposal menu offers Accept and Edit. A user who disagrees with a proposal has three real paths: Edit, provide upstream-agent feedback at the artifact level, or Abort.
 
-(Layer 4 row is omitted — Layer 4 is v2-deferred per `architecture.md §8.1`. It will return to this ownership table when v2 ships.)
+(The real-platform apply row is omitted — real-platform apply is v2-deferred per `architecture.md §8.1`; its slot stays reserved so v2 adds it back without renumbering. It will return to this ownership table when v2 ships.)
 
 Reading the table:
 
@@ -809,7 +809,7 @@ The Critic is advisory by design (per `architecture.md §1.6` locked decision) b
 
 Cleanup is a three-tier hybrid (per §5.9 and §5.12): inline `try/finally` in phase code for in-runtime resources; per-phase `cleanup.sh` written by the phase agent for state the phase persists; lab-level `cleanup.sh` written by the Cleanup Generator that orchestrates the per-phase scripts in reverse-DAG order plus handles cross-phase shared state and lab-level resource teardown.
 
-Post-generation, the Repair Agent (§5.16) handles user-reported runtime issues conversationally — peer pipeline to generation, separate budget, separate state. Layer 4 (real-platform apply validation) is deferred from v1; v1 validates statically via Layers 1, 2, 3, 5, and labs are validated against real cloud by the user running them — with Repair Agent assistance when needed.
+Post-generation, the Repair Agent (§5.16) handles user-reported runtime issues conversationally — peer pipeline to generation, separate budget, separate state. Real-platform apply validation is deferred from v1 (its slot stays reserved for v2); v1 validates statically via the static-schema, semantic cross-check, containerized dry-run, and safety-scan passes, and labs are validated against real cloud by the user running them — with Repair Agent assistance when needed.
 
 The agent boundary discipline (§5.20) names a primary owner for every concern. Overlap is informational, never authoritative.
 

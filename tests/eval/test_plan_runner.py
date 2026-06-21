@@ -91,7 +91,7 @@ def test_global_fatal_aborts_the_whole_run() -> None:
         run_index=0,
         status=None,
         shipped=False,
-        layer2_passed=False,
+        semantic_cross_check_passed=False,
         route_back=False,
         cost_usd=Decimal("0"),
         manifest_field_coverage=0.0,
@@ -146,7 +146,7 @@ def test_provider_runner_maps_shipped_result() -> None:
     rec = runner.plan_once("a", run_index=0)
     assert fake.run_calls == 1  # the runner.run seam was driven directly
     assert rec.shipped is True
-    assert rec.layer2_passed is True
+    assert rec.semantic_cross_check_passed is True
     assert rec.facet_proposals == 2  # counted off the result, NOT promoted
     assert rec.lab_level is not None
 
@@ -208,7 +208,7 @@ def test_plan_progress_shows_failure_kind_not_fabricated_infra_failure(
         run_index=0,
         status=None,
         shipped=False,
-        layer2_passed=False,
+        semantic_cross_check_passed=False,
         route_back=False,
         cost_usd=Decimal("0.01"),
         manifest_field_coverage=0.0,
@@ -262,7 +262,7 @@ def test_plan_runner_module_has_no_promotion_machinery() -> None:
 # --- PlanEvalReport aggregate methods + archive round-trip ------------------
 
 
-def test_report_methods_count_layer2_route_backs_and_planned() -> None:
+def test_report_methods_count_cross_check_route_backs_and_planned() -> None:
     from cyberlab_gen.framework.plan_orchestrator import PlanPipelineStatus
 
     records = [
@@ -281,7 +281,7 @@ def test_report_methods_count_layer2_route_backs_and_planned() -> None:
         blog_ids=["a", "b", "c"],
         records=records,
     )
-    assert abs(report.overall_layer2_pass_rate() - 2 / 4) < 1e-9
+    assert abs(report.overall_semantic_cross_check_pass_rate() - 2 / 4) < 1e-9
     assert report.blogs_planned() == 1  # only "a" shipped in every run
     assert report.total_route_backs() == 1
 

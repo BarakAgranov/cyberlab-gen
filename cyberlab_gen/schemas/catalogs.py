@@ -10,7 +10,7 @@ participate in the runtime proposal lifecycle, so they live here rather than in
 ``registries.py``, and they are deliberately *not* part of ``MergedRegistries``
 (``schema-details.md §6.6``): the merged view holds the runtime-consulted
 registries, while these catalogs carry display/ordinal/extension/validator-support
-metadata consulted on demand by specific consumers (Layer 3 reads ``ordinal``;
+metadata consulted on demand by specific consumers (the containerized dry-run reads ``ordinal``;
 the Generator reads ``validator_support``; the Docs Generator reads
 ``display_name``).
 
@@ -60,7 +60,7 @@ class SeverityLevelEntry(ArtifactModel):
     """One entry in the ``severity_levels`` catalog. ``registry-details.md §7.2``.
 
     Adds the ``ordinal`` (4=Critical ... 1=Low) used for cross-severity
-    comparison in the validator's Layer 3 severity-floor rules. ``name`` is a
+    comparison in the validator's containerized dry-run severity-floor rules. ``name`` is a
     ``Severity`` enum member.
     """
 

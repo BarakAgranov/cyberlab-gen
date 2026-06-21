@@ -397,7 +397,7 @@ class ChangingBadExtractor:
 
     Each run carries a distinct unknown facet, so the finding set keeps changing and the
     orchestrator's no-progress early-bail (ADR 0057) never fires — used to drive a runaway
-    loop all the way to the global iteration cap / LangGraph recursion_limit (L3).
+    loop all the way to the global iteration cap / LangGraph recursion_limit.
     """
 
     def __init__(self) -> None:

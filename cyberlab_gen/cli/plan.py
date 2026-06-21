@@ -290,7 +290,7 @@ def _load_manifest_from_yaml(text: str) -> LabManifest:
     """Parse + structurally revalidate edited YAML into a ``LabManifest`` (``pipeline.md §3.1.1``).
 
     **Structural** revalidation only — ``§3.2.8``/``§3.1.1`` (the authority) over the brief's "Layer
-    1/2" (ADR 0100); there is no manifest Layer-1 facet-membership gate to revalidate against in any
+    1/2" (ADR 0100); there is no manifest static-schema facet-membership gate to revalidate against in any
     case (ADR 0099 §6 owned deferral). After structural validation, an old-schema artifact is refused,
     never migrated (``architecture.md §0.6``; ADR 0069), surfacing as ``SpecVersionError``.
     """

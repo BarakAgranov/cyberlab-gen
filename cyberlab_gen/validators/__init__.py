@@ -1,7 +1,7 @@
 """Validators subpackage — the mechanical validation layers.
 
-Architectural source: ``validation.md`` (the four active v1 layers; Layer 4 is
-v2-deferred). The Validator is **framework code, not an agent**
+Architectural source: ``validation.md`` (the four active v1 validation passes; the
+real-platform-apply pass (pass 4) is v2-deferred). The Validator is **framework code, not an agent**
 (``validation.md §6.1``, ``architecture.md §1.6``): every layer runs
 deterministic checks and never invokes an LLM. ADR 0022 records this subpackage's
 location.

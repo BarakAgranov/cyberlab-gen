@@ -71,7 +71,7 @@ The architecture documents have a `v1.5+` and `v2` deferral discipline that is m
 | 0 — Skeleton | `--version` | 3 | — | — | Tooling baseline |
 | 1 — Extractor | `extract` | 3–5 | — | Extractor + Jury | Extractor budget, completeness floor |
 | 2 — Planner | `plan` | 8–10 | — | Planner + Jury | Reproducibility derivation, dep failure default |
-| 3 — Generators (AWS only) | `generate` (AWS) | 12–15 | — | 4 Generators | Generator budgets, Layer 3 floors |
+| 3 — Generators (AWS only) | `generate` (AWS) | 12–15 | — | 4 Generators | Generator budgets, containerized dry-run floors |
 | 4 — Critic, refinement, multi-cloud | `generate` (full) | 18 | 12 | Critic | Refinement caps, stopping strategy |
 | 5 — Fix, telemetry, polish | all four | same | same | Repair Agent | Fix budget, multi-model jury value |
 | 6 — Release | same | same | rotated | — | Final calibration, pre-release budget run |
@@ -298,12 +298,12 @@ The `static_catalogs` registry is registered but empty in Phase 1; it's used by 
 - Counts per-agent iterations against a per-agent cap (placeholder: 3 iterations in P1; revisit in Phase 4 when the full refinement loop comes online).
 - On cap exhaustion, ship the last AttackSpec with `low_jury_confidence: true` flag and unresolved feedback in the run report.
 
-**Validator Layer 1 (skeleton).** Per `validation.md §6.4`:
+**Static-schema validator (skeleton).** Per `validation.md §6.4`:
 
 - JSON Schema validator over the AttackSpec.
 - Registry reference resolution (every type/facet referenced exists in the merged registry).
 - `spec_kind` discriminator enforcement.
-- Failure routing: Layer 1 failures go to the responsible agent's retry mechanism, *not* refinement (per `validation.md §6.10`). Implement this distinction even though Phase 1 has only one agent — getting the retry/refinement split right early matters.
+- Failure routing: static-schema-validation failures go to the responsible agent's retry mechanism, *not* refinement (per `validation.md §6.10`). Implement this distinction even though Phase 1 has only one agent — getting the retry/refinement split right early matters.
 
 **Post-Extractor interrupt (interactive mode).** Per `pipeline.md §3.2.5`:
 
@@ -319,7 +319,7 @@ The `static_catalogs` registry is registered but empty in Phase 1; it's used by 
 **Eval harness Phase 1 additions.** Per `eval.md §7.3`:
 
 - Per-blog eval runner that invokes the Extractor pipeline N times and records metrics.
-- Metrics from `eval.md §7.4` available in Phase 1: Layer 1 pass rate, cost per AttackSpec, structural completeness score, registry proposals issued, `extras` entries count.
+- Metrics from `eval.md §7.4` available in Phase 1: static-schema pass rate, cost per AttackSpec, structural completeness score, registry proposals issued, `extras` entries count.
 - Manual jury-decision review tooling: maintainer reads the AttackSpec, marks each jury verdict as correct/false-approval/false-rejection.
 - `eval.md §7.5` calibration: false-approval and false-rejection rates per blog.
 
@@ -341,7 +341,7 @@ Record each locked value in `CALIBRATION.md` with the evidence that drove it.
 ### 4.5 Exit criteria
 
 - `cyberlab-gen extract <url>` produces a valid AttackSpec for at least 2 of the 3 curated blogs in N=3 runs (the third is a synthetic long-blog fixture with no live URL, excluded from the live-run gate).
-- Layer 1 pass rate ≥ 95% on the curated set.
+- Static-schema pass rate ≥ 95% on the curated set.
 - Completeness scores cluster in a defensible band on the curated set.
 - Asymmetric jury threshold calibration is documented in `CALIBRATION.md` with the evidence.
 - `--auto` and `--interactive` modes both work; the four-option interrupt menu functions; the per-proposal Accept/Edit menu functions; proposal edits are revalidated.
@@ -361,7 +361,7 @@ Tag `v0.2`. Move to Phase 2.
 
 ## 5. Phase 2 — Planner + Jury
 
-**Goal:** Consume an AttackSpec and produce a draft LabManifest. Still no generation, no validation beyond Layer 1 + cross-block Layer 2.
+**Goal:** Consume an AttackSpec and produce a draft LabManifest. Still no generation, no validation beyond static-schema + cross-block semantic cross-check.
 
 ### 5.1 Scope
 
@@ -383,7 +383,7 @@ Phase 2 is where the manifest's role as "single source of truth" starts to matte
 **Manifest schema (full).** Build out the Pydantic models for every Manifest block:
 
 - `CoreBlock` with the structured `reproducibility` block (mirrors AttackSpec shape per `schema.md §4.4`).
-- `facets`: a list of facet-name references (registry-validated `FacetName` strings, resolved at Layer 1) — not a bespoke block.
+- `facets`: a list of facet-name references (registry-validated `FacetName` strings, resolved by the static-schema pass) — not a bespoke block.
 - `PrereqBlock` (pre_lab / mid_lab split).
 - `InputBlock`.
 - `LabResourceBlock` — including the `lab_role` list (values: `attack_target`, `attacker_infrastructure`, `defender_infrastructure`, `neutral`) and optional `role_notes` dict per `schema.md §4.4`.
@@ -403,16 +403,16 @@ Phase 2 is where the manifest's role as "single source of truth" starts to matte
 
 **Pre-Planner enrichment (full).** Wire in the remaining external_data_sources that were stubs in Phase 1: MSRC, OSV.dev, KEV, EPSS, security bulletins. Each becomes a real triggered lookup. The materiality classification per source now uses the `discrepancy_materiality_rules` field on the source's registry entry.
 
-**Validator Layer 2 (skeleton).** Per `validation.md §6.5`:
+**Semantic cross-check validator (skeleton).** Per `validation.md §6.5`:
 
 - Cross-checks between manifest blocks (e.g., phase `bind_inputs` reference declared phase outputs).
-- Facet `implies` enforcement. Missing implied facets are *flagged as findings* — Layer 2 does not mutate the manifest (per `validation.md §6.5`). The finding routes to the Planner for re-run.
+- Facet `implies` enforcement. Missing implied facets are *flagged as findings* — the semantic cross-check does not mutate the manifest (per `validation.md §6.5`). The finding routes to the Planner for re-run.
 - Facet `incompatible_with` enforcement.
 - `references_lab_outputs` cross-check, both directions: per-phase IaC references existing lab outputs (Lab-level Generator failure) AND per-phase IaC references existing `lab_resources` (per-phase Generator failure).
 - `produces_world_state.identifier_source` resolution: for every `identifier_kind: runtime_generated` entry, verify the source path resolves to a declared phase output.
 - `affected_platforms` consistency check (if present, must match `target:*` facets).
 
-In Phase 2 there is no per-phase code yet, so Layer 2's code-vs-manifest checks are inert; the cross-block-within-manifest checks are live. Build the full Layer 2 framework now; the code-vs-manifest checks light up in Phase 3.
+In Phase 2 there is no per-phase code yet, so the semantic cross-check's code-vs-manifest checks are inert; the cross-block-within-manifest checks are live. Build the full semantic cross-check framework now; the code-vs-manifest checks light up in Phase 3.
 
 **Post-Planner interrupt.** Per `pipeline.md §3.2.8`:
 
@@ -455,7 +455,7 @@ Grow to 8–10 blogs. Add blogs that exercise:
 ### 5.5 Exit criteria
 
 - `cyberlab-gen plan` produces a valid LabManifest for at least 2 of the 3 Phase 1 curated blogs and at least 2 of the Phase 2 additions.
-- Layer 1 + Layer 2 cross-block checks pass on ≥90% of curated runs.
+- Static-schema + semantic cross-check cross-block checks pass on ≥90% of curated runs.
 - Lab-level reproducibility classification is correct per the any-heterogeneity rule on every test case.
 - `lab_role` lists populate sensibly on lab_resources for at least one multi-role example (e.g., a logging bucket that's both `defender_infrastructure` and `attack_target`).
 - The Planner correctly routes back to the Extractor when AttackSpec coherence problems are encountered (not "repairs" them).
@@ -478,9 +478,9 @@ Tag `v0.3`. Move to Phase 3.
 
 ### 6.1 Scope
 
-Phase 3 is the largest phase. Four agents (per-phase, Lab-level, Cleanup, Docs), three validator layers (1, 2, 3, 5), the lab directory structure on disk, and the eval harness extensions to measure code quality.
+Phase 3 is the largest phase. Four agents (per-phase, Lab-level, Cleanup, Docs), three validator passes (the static-schema, semantic cross-check, containerized dry-run, and safety-scan passes), the lab directory structure on disk, and the eval harness extensions to measure code quality.
 
-AWS only. Azure and GCP come in Phase 4. The single-cloud restriction in Phase 3 keeps Layer 3 (containerized dry-run) manageable — one cloud SDK in the container, one IAM catalog to integrate, one set of tflint rules.
+AWS only. Azure and GCP come in Phase 4. The single-cloud restriction in Phase 3 keeps the containerized dry-run manageable — one cloud SDK in the container, one IAM catalog to integrate, one set of tflint rules.
 
 ### 6.2 Build inventory
 
@@ -517,7 +517,7 @@ AWS only. Azure and GCP come in Phase 4. The single-cloud restriction in Phase 3
 - Output: root `README.md` (with the three-tier per-phase confidence presentation from `agents.md §5.13` — though in Phase 3 confidence is placeholder until Phase 4 brings the Critic online), `docs/attack_guide.md`, `docs/concepts.md`, `docs/attack_narrative.md`, `docs/real_world_examples.md`, `docs/prerequisites.md`, `docs/defender_techniques.md` (when applicable), `detection/mitre_mapping.md`, `detection/cnapp_mapping.md`.
 - Quality bar from `agents.md §5.13`: no LLM-original technical claims. Every substantive technical claim grounded in AttackSpec, validation report, or web_search with citation.
 
-**Validator Layer 2 (full).** Now that code exists, the manifest-vs-code cross-checks light up. Per `validation.md §6.5`:
+**Semantic cross-check validator (full).** Now that code exists, the manifest-vs-code cross-checks light up. Per `validation.md §6.5`:
 
 - Function name matching (`step.function_name` exists in module).
 - Declared output shape matching.
@@ -526,14 +526,14 @@ AWS only. Azure and GCP come in Phase 4. The single-cloud restriction in Phase 3
 - `references_lab_outputs` contract verification.
 - `identifier_source` path resolution for `runtime_generated` entries.
 
-**Validator Layer 3.** Per `validation.md §6.6`:
+**Containerized dry-run validator.** Per `validation.md §6.6`:
 
 - Container with Terraform, AWS CLI, Python, ruff, mypy, tflint with AWS plugin, tfsec, checkov, cfn-lint, shellcheck.
 - Static analyzers split by category per `validation.md §6.6`: code-quality at conventional strictness; security-finding rules read `lab_role` from the manifest and treat findings on `attack_target` resources as informational rather than failing.
 - Cloud-API hallucination cross-check against `static_catalogs` for every catalog-relevant identifier in generated code.
 - Per-step reproducibility handling: `demonstration_only` steps get syntax-only validation.
 
-**Validator Layer 5.** Per `validation.md §6.8`:
+**Safety-scan validator.** Per `validation.md §6.8`:
 
 - Credential scanners (trufflehog, gitleaks). OSS only per `validation.md §6.8`.
 - Canonical lab-credentials catalog whitelisting.
@@ -550,7 +550,7 @@ AWS only. Azure and GCP come in Phase 4. The single-cloud restriction in Phase 3
 
 **Eval harness Phase 3 additions.**
 
-- Layer 2 and Layer 3 pass rates per layer.
+- Semantic cross-check and containerized dry-run pass rates per pass.
 - Per-cloud (AWS-only in P3) sub-metrics.
 - Code-shape adherence to canonical examples.
 - Cleanup coverage rate (declared world-state items addressed).
@@ -565,22 +565,22 @@ Grow to 12–15 blogs. Add AWS-focused blogs covering:
 - Lambda exploitation.
 - S3 misconfiguration.
 - Cross-account assumption attacks.
-- At least one blog with intentionally vulnerable lab_resources (so Layer 3 intentional-misconfig handling is exercised).
+- At least one blog with intentionally vulnerable lab_resources (so the containerized dry-run's intentional-misconfig handling is exercised).
 
 ### 6.4 Calibration items locked in Phase 3
 
 - **Per-agent token budgets** for each of the four Generators.
 - **Per-phase Generator budget per phase** (this multiplies for multi-phase labs).
-- **Layer 3 static-analyzer severity floors** per analyzer per category.
+- **Containerized dry-run static-analyzer severity floors** per analyzer per category.
 - **Container image baseline** (Phase 3 builds the AWS-only variant; Azure/GCP added in Phase 4).
 - **Cleanup-confidence gate threshold** stays at placeholder; calibrated in Phase 5 once real Critic data exists.
 
 ### 6.5 Exit criteria
 
 - `cyberlab-gen generate <url>` produces a runnable AWS lab for at least 8 of 12-15 curated AWS-focused blogs.
-- Layer 2 cross-checks pass on ≥80% of generations.
-- Layer 3 (containerized dry-run) passes on ≥70% of generations.
-- Layer 5 catches at least one accidental real-credential pattern in curated-set evaluation (validates the layer works).
+- Semantic cross-check cross-checks pass on ≥80% of generations.
+- The containerized dry-run passes on ≥70% of generations.
+- The safety scans catch at least one accidental real-credential pattern in curated-set evaluation (validates the pass works).
 - The intentional-misconfig handling works: tfsec fires on declared `attack_target` resources without failing the layer.
 - Cleanup scripts work end-to-end on at least 3 blogs manually run by you against a real AWS account (this is a manual check; not the eval harness).
 - `produces_world_state` with `identifier_kind: runtime_generated` produces cleanup that actually reads the runtime value (don't trust eval; manually verify on at least 2 cases).
@@ -590,9 +590,9 @@ Tag `v0.4`. Move to Phase 4.
 
 ### 6.6 Risks
 
-- **Cleanup correctness.** This is the hardest single problem in Phase 3. A lab that "passes Layer 3" can still leave orphaned resources if `identifier_kind` was misclassified or the cleanup script doesn't actually read `identifier_source` correctly. The `architecture.md §0.5` cleanup-confidence gate exists because we know this is unreliable. Manual verification on real AWS accounts (with disposable lab accounts) is non-negotiable here.
-- **Per-phase Generator parallelism bugs.** Phase DAG computation has edge cases. A phase that fans out into multiple "independent" branches that secretly share `produces_world_state` will produce race conditions that don't show up in Layer 3. Build the DAG verification tooling early.
-- **Intentional-misconfig false negatives.** A bug in `lab_role` handling could cause Layer 3 to relax strictness on resources that shouldn't be relaxed. Cross-check that Layer 3 *still fails* on a resource that's deliberately mislabeled as `attack_target` but has a *different* security problem.
+- **Cleanup correctness.** This is the hardest single problem in Phase 3. A lab that "passes the containerized dry-run" can still leave orphaned resources if `identifier_kind` was misclassified or the cleanup script doesn't actually read `identifier_source` correctly. The `architecture.md §0.5` cleanup-confidence gate exists because we know this is unreliable. Manual verification on real AWS accounts (with disposable lab accounts) is non-negotiable here.
+- **Per-phase Generator parallelism bugs.** Phase DAG computation has edge cases. A phase that fans out into multiple "independent" branches that secretly share `produces_world_state` will produce race conditions that don't show up in the containerized dry-run. Build the DAG verification tooling early.
+- **Intentional-misconfig false negatives.** A bug in `lab_role` handling could cause the containerized dry-run to relax strictness on resources that shouldn't be relaxed. Cross-check that the containerized dry-run *still fails* on a resource that's deliberately mislabeled as `attack_target` but has a *different* security problem.
 - **Docs Generator hallucination.** This is the agent with the most freedom and the most user-facing output. The "no LLM-original technical claims" quality bar needs eval-harness teeth: maintainer manual review of Docs outputs against the AttackSpec + Critic web_search results, with ungrounded claims flagged.
 - **Container image size.** With AWS SDK + Terraform + IaC tooling + scanners, the base image is multi-GB. Note in `dev/operations-debt.md` for Phase 5/6 to address before release.
 
@@ -621,11 +621,11 @@ This is also when the per-phase confidence values become real and the cleanup-co
 **Refinement loop coordinator (full).** Per `pipeline.md §3.2.12`:
 
 - Consumes Validator report + Critic verdict.
-- Routing table per `validation.md §6.10`: Layer 1 → retry (not refinement); Layer 2 → implementation agent; Layer 3 → file's responsible agent; Layer 5 high → halt; Critic refine → re-run per Critic's recommendations.
+- Routing table per `validation.md §6.10`: static-schema → retry (not refinement); semantic cross-check → implementation agent; containerized dry-run → file's responsible agent; safety-scan high → halt; Critic refine → re-run per Critic's recommendations.
 - Per-agent cap (placeholder 5) and total cap (placeholder 20). Per-agent is a fairness mechanism; total cap typically binds.
 - Oscillation handling: cycle detection (coupled re-generation), phase-level repeat detection (cap-per-stage), cascade detection (route to upstream).
 - Cycle-resolved pairs locked for remainder of refinement loop (per `pipeline.md §3.2.12`).
-- Same-root-cause finding deduplication: Layer 2 and Critic findings on same artifact route once (per `validation.md §6.10`).
+- Same-root-cause finding deduplication: semantic cross-check and Critic findings on same artifact route once (per `validation.md §6.10`).
 - Best-state retention: top-3 by combined validator+quality score plus most recent. Stored under `iteration_snapshots/`.
 
 **Multi-cloud Generator extensions.**
@@ -723,7 +723,7 @@ Tag `v0.5`. Move to Phase 5.
 
 ### 8.1 Scope
 
-Phase 5 brings the fourth CLI verb (`fix`) online, builds the telemetry submission flow, and polishes everything user-facing for release readiness. This is also where Layer 3 auto-on-IaC-patches lights up, fix_history continuity is implemented, and the credential-paste detector becomes functional.
+Phase 5 brings the fourth CLI verb (`fix`) online, builds the telemetry submission flow, and polishes everything user-facing for release readiness. This is also where the containerized dry-run auto-on-IaC-patches lights up, fix_history continuity is implemented, and the credential-paste detector becomes functional.
 
 ### 8.2 Build inventory
 
@@ -741,18 +741,18 @@ Phase 5 brings the fourth CLI verb (`fix`) online, builds the telemetry submissi
 - Session startup loads minimal context per `pipeline.md §3.4.2`.
 - Fix_history continuity check: compute file hashes of files referenced by prior fix_history entries; if any changed, mark prior history as "background context only" and surface in opening summary.
 - Minimal validation on proposed patches per `pipeline.md §3.4.4`:
-  - Layer 1 if manifest touched.
-  - Layer 2 on declared-types or `references_lab_outputs` changes.
-  - Layer 5 on every patch.
-  - **Layer 3 auto-runs on IaC patches** (per `pipeline.md §3.4.4`); `--validate-patches-thoroughly` flag for non-IaC cases.
+  - Static-schema validation if manifest touched.
+  - Semantic cross-check on declared-types or `references_lab_outputs` changes.
+  - Safety scans on every patch.
+  - **The containerized dry-run auto-runs on IaC patches** (per `pipeline.md §3.4.4`); `--validate-patches-thoroughly` flag for non-IaC cases.
 - `fix_history.json` persisted incrementally; written definitively on session exit.
 - Separate budget from generation (placeholder pending Phase 5 calibration from observed usage).
 - Cross-session continuity (next session reads prior history as background).
 
-**Layer 5 fix_history handling.** Per `validation.md §6.8`:
+**Safety-scan fix_history handling.** Per `validation.md §6.8`:
 
-- During fix patch validation: Layer 5 scans the proposed patch AND the new fix_history entry being written.
-- During explicit `cyberlab-gen validate`: Layer 5 scans the entire lab including fix_history.json.
+- During fix patch validation: the safety scans scan the proposed patch AND the new fix_history entry being written.
+- During explicit `cyberlab-gen validate`: the safety scans scan the entire lab including fix_history.json.
 - Complementary to the Repair Agent's live credential-paste detector.
 
 **Telemetry submission flow.** Per `pipeline.md §3.6`:
@@ -782,7 +782,7 @@ Phase 5 brings the fourth CLI verb (`fix`) online, builds the telemetry submissi
 **Eval harness Phase 5 additions.**
 
 - Fix-session pattern aggregation (privacy-narrowed per `eval.md §7.9`): patch diffs, validation findings on patches, fix outcomes, recurring `unknown_from_blog.reason` strings. *Not* conversational content.
-- Layer 5 finding-rate tracking over time (per `eval.md §7.12`).
+- Safety-scan finding-rate tracking over time (per `eval.md §7.12`).
 - Sparse-telemetry early-period acknowledgment in reports (per `eval.md §7.9`).
 
 ### 8.3 Curated set in Phase 5
@@ -800,7 +800,7 @@ Stable at 18 + 12 held-out. Phase 5 doesn't grow the set; it tightens the existi
 
 - `cyberlab-gen fix <lab-dir>` works on at least 5 deliberately-broken curated labs (you intentionally break them in different ways and walk through fixing them).
 - Fix_history continuity check fires correctly when a lab is modified between sessions.
-- Layer 5 catches a user-pasted real-credential fragment in a fix session.
+- The safety scans catch a user-pasted real-credential fragment in a fix session.
 - Telemetry submission's sanitization preview shows the diff correctly; nothing in the redacted-out list leaks through.
 - `cyberlab-gen validate` correctly refuses an old-schema lab.
 - Checkpoint + resume work end-to-end on a mid-pipeline kill (you SIGTERM during generation, resume picks up).
@@ -850,14 +850,14 @@ Phase 6 is the discipline that prevents shipping with "we know these are wrong" 
 - Schema walk (per `eval.md §7.10`) against the post-rotation curated set.
 - All metrics from `eval.md §7.4` reported with bootstrapped confidence intervals.
 - Cost-per-quality composite metric per stopping strategy.
-- Layer 5 finding-rate baseline established (for `eval.md §7.12` drift monitoring).
+- Safety-scan finding-rate baseline established (for `eval.md §7.12` drift monitoring).
 - Coverage matrix per `eval.md §7.3`.
 - Paired-rotation status (which held-out blogs have been consumed).
 
 **Release artifacts.**
 
 - PyPI package with proper metadata, dependencies, version pinning.
-- Container image for Layer 3 — versioned, tagged, documented.
+- Container image for the containerized dry-run — versioned, tagged, documented.
 - Release notes covering: locked defaults, known limitations, the v1.5+ and v2 deferral list, pre-release calibration evidence.
 - A `CHANGELOG.md` mentioning every locked decision from `CALIBRATION.md`.
 
@@ -886,7 +886,7 @@ The full set, replacing all placeholders that had observable usage in Phase 5:
 - Cleanup-confidence gate threshold.
 - Default stopping strategy.
 - Default jury thresholds (asymmetrically calibrated).
-- All Layer 3 severity floors.
+- All containerized dry-run severity floors.
 - Coefficient-of-variation threshold for high-variance flagging.
 - Per-run cap on auto-accepted proposals.
 
@@ -898,7 +898,7 @@ Everything that was "placeholder pending data" in earlier phases now has a value
 - `CALIBRATION.md` lists every locked decision with its evidence link.
 - Final eval report is in `eval/reports/`.
 - PyPI package builds, installs, runs `cyberlab-gen --version` on a clean machine.
-- Container image builds, runs Layer 3 on a sample lab.
+- Container image builds, runs the containerized dry-run on a sample lab.
 - Manual end-to-end test: install fresh on a new machine, generate one lab, run it on a disposable cloud account, verify cleanup, run fix mode on a deliberately-broken version, submit telemetry. All steps work.
 - Release notes pass a careful read for accuracy.
 - Architecture docs reviewed against implementation; any drift is either fixed or documented.

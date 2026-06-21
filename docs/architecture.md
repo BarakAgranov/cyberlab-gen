@@ -9,7 +9,7 @@ This is the hub document. It covers foundations, foundational design decisions, 
 - `pipeline.md` — the generation and fix pipelines, stage by stage.
 - `schema.md` — manifest, AttackSpec, registries, provenance.
 - `agents.md` — agent contracts (Extractor, Planner, Generators, Critic, juries, Repair Agent).
-- `validation.md` — validator layers (Layer 1, 2, 3, 5; Layer 4 v2-deferred).
+- `validation.md` — validator passes (static-schema, semantic cross-check, containerized dry-run, safety scans; real-platform apply v2-deferred).
 - `eval.md` — eval harness, mechanical and subjective metrics, telemetry feedback loop.
 
 Cross-references in this document use section numbers within a file (`§1.5`) and file names for cross-file references (`pipeline.md §3.2`).
@@ -79,7 +79,7 @@ A `cyberlab-gen` v1 is successful if all of the following hold:
 
 3. **Generated labs are runnable.** A user who follows the generated root-level `README.md` and runs the generated `setup.sh` can get the lab running on their own cloud account (or other declared platform) without surprise prerequisites or undocumented manual steps.
 
-4. **Generated labs are tearable-down.** Every lab produces a `cleanup.sh` and a `verify.sh`. v1 verifies cleanup as a *static* property: the generated cleanup orchestration covers every declared `produces_world_state` item across phases plus the lab-level `lab_resources`, and the Validator confirms this coverage at Layer 2. End-to-end real-platform verification (actually running cleanup against a real account and confirming no orphaned resources remain) is v2-deferred along with Layer 4 (see §8). When runtime cleanup issues arise — hallucinated resource IDs, missing permissions, race conditions — `cyberlab-gen fix` is the v1 mechanism for addressing them with user-reviewed patches. The cleanup-confidence mechanical gate (criterion 2 above) is the v1 safety net for cases where the system itself is uncertain about cleanup correctness.
+4. **Generated labs are tearable-down.** Every lab produces a `cleanup.sh` and a `verify.sh`. v1 verifies cleanup as a *static* property: the generated cleanup orchestration covers every declared `produces_world_state` item across phases plus the lab-level `lab_resources`, and the Validator confirms this coverage in the semantic cross-check. End-to-end real-platform verification (actually running cleanup against a real account and confirming no orphaned resources remain) is v2-deferred along with the real-platform apply pass (see §8). When runtime cleanup issues arise — hallucinated resource IDs, missing permissions, race conditions — `cyberlab-gen fix` is the v1 mechanism for addressing them with user-reviewed patches. The cleanup-confidence mechanical gate (criterion 2 above) is the v1 safety net for cases where the system itself is uncertain about cleanup correctness.
 
 5. **The schema is the contract.** Every generated lab carries a structured manifest (`lab.yaml`) that fully describes what the lab is, what it depends on, what it produces, and what it cleans up. The manifest is human-readable and machine-validatable.
 
@@ -107,7 +107,7 @@ Things we are deliberately not building, with reasoning:
 
 - **No multi-lab generation from one blog.** One blog produces one lab. If the blog is long, the lab has many phases, organized via chaptered documentation. The system does not support splicing a single blog into multiple labs, and does not support generating partial labs from sections of a blog. (The `--from-phase` mechanism is a *resume* tool for failed generation runs, not a way to slice blogs.)
 
-- **No autonomous real-cloud apply during generation in v1.** Layer 4 (real-platform apply validation) is deferred to v2. The asymmetric risk — broken cleanup leaving orphaned cloud resources the user pays for — outweighs the v1 value of automated apply validation. `cyberlab-gen fix` is the v1 mechanism for runtime issues, keeping the user in the loop for every patch.
+- **No autonomous real-cloud apply during generation in v1.** The real-platform apply pass (validation pass 4, the reserved v2 slot) is deferred to v2. The asymmetric risk — broken cleanup leaving orphaned cloud resources the user pays for — outweighs the v1 value of automated apply validation. `cyberlab-gen fix` is the v1 mechanism for runtime issues, keeping the user in the loop for every patch.
 
 ### 0.7 The "lab class is emergent" principle
 
@@ -142,7 +142,7 @@ The decisions in this section are the load-bearing architectural decisions for c
 
 Every generated lab carries a YAML manifest (`lab.yaml`) describing what the lab is. The manifest is the single source of truth for the lab's structure: phases, lab resources, prerequisites, inputs, outputs, world state, facets declared, reproducibility decisions.
 
-**Why this is non-obvious.** A simpler design would have generated labs as plain code directories with no metadata. The manifest costs additional generation work and adds a structural-validation gate (Layer 1) the system must pass. The justification: every other piece of the architecture coordinates through the manifest — the Generator reads it to write code, the Validator reads it to check consistency, the Critic reads it to assess fidelity, the Docs Generator reads it to write docs, the Cleanup Generator reads it to write cleanup orchestration. Without a structured manifest, every consumer would have to re-derive structure from code, with no canonical answer.
+**Why this is non-obvious.** A simpler design would have generated labs as plain code directories with no metadata. The manifest costs additional generation work and adds a structural-validation gate (the static-schema validation pass) the system must pass. The justification: every other piece of the architecture coordinates through the manifest — the Generator reads it to write code, the Validator reads it to check consistency, the Critic reads it to assess fidelity, the Docs Generator reads it to write docs, the Cleanup Generator reads it to write cleanup orchestration. Without a structured manifest, every consumer would have to re-derive structure from code, with no canonical answer.
 
 **Lifecycle.** The manifest is produced incrementally across agent stages:
 
@@ -168,7 +168,7 @@ Lab properties are declared via *facets* — named tags drawn from three categor
 
 Values that flow between phases (credentials, resource references, tokens, etc.) are *typed* against entries in the `value_types` registry. Each entry has a name, JSON Schema for shape, sensitive flag, examples, and `notes_for_generator` (guidance about known LLM failure modes for this type).
 
-**Why this is non-obvious.** A simpler design would have used free-form strings everywhere. Typing values lets the Validator catch inter-phase mismatches at Layer 2 (phase A declares output type X; phase B expects type Y), lets the Generator emit the right credential-handling code per type, and lets cleanup scripts target the right resources.
+**Why this is non-obvious.** A simpler design would have used free-form strings everywhere. Typing values lets the Validator catch inter-phase mismatches in the semantic cross-check (phase A declares output type X; phase B expects type Y), lets the Generator emit the right credential-handling code per type, and lets cleanup scripts target the right resources.
 
 **`notes_for_generator` authorship.** This field is written at proposal time (by the Extractor when proposing a new type) and stays with the entry. Agents do not modify `notes_for_generator` of existing entries at runtime — that would create runtime registry churn. Users can edit `notes_for_generator` when reviewing a proposal at the interrupt. Maintainers can update via PR to the bundled registry, informed by eval-harness data.
 
@@ -192,7 +192,7 @@ These are the four *Generator* agents. The broader agent inventory includes Extr
 - **Cleanup fidelity.** The phase agent that creates state has the freshest context for cleaning that state up. Per-phase cleanup is owned by the phase Generator; the Cleanup Generator orchestrates rather than re-deriving.
 - **Failure routing.** Different generation problems route to different agents. A Docs Generator issue doesn't re-run all the code generation.
 
-**Cross-phase contracts.** Lab-level Terraform output names are *declared by the Planner* in the manifest's `lab_resources` block. The Per-phase Generator references those declared names. The Lab-level Generator is contractually bound to produce outputs matching those names. The Validator's Layer 2 verifies this contract (`validation.md §6.5`).
+**Cross-phase contracts.** Lab-level Terraform output names are *declared by the Planner* in the manifest's `lab_resources` block. The Per-phase Generator references those declared names. The Lab-level Generator is contractually bound to produce outputs matching those names. The Validator's semantic cross-check verifies this contract (`validation.md §6.5`).
 
 ### 1.5 The orchestrator is deterministic; LLMs are specialist workers
 
@@ -219,24 +219,24 @@ These decisions are framework code, deterministic and auditable. The split is en
 
 Validation is split into mechanical layers (deterministic checks running in code) and the Critic (an LLM-based holistic assessment running as a peer to the validator, not as a layer within it).
 
-**Mechanical layers in v1** (see `validation.md §6`):
+**Mechanical passes in v1**, listed in the cheap→expensive order they run (see `validation.md §6`):
 
-1. **Layer 1** — static schema validation.
-2. **Layer 2** — semantic cross-check (declarations vs. implementations).
-3. **Layer 3** — containerized dry-run.
-4. **Layer 4** — *v2-deferred*. Real-platform apply validation, with stricter safety boundaries when it returns in v2 (see §8 rationale).
-5. **Layer 5** — safety scans, including the canonical lab-credentials catalog whitelist.
+1. **Static-schema validation** — the cheapest pass.
+2. **Semantic cross-check** — declarations vs. implementations.
+3. **Containerized dry-run**.
+4. **Real-platform apply** — *v2-deferred*; the slot stays reserved (validation pass 4) so v2 can add it without renumbering. Validates with stricter safety boundaries when it returns in v2 (see §8 rationale).
+5. **Safety scans** — the most expensive pass, including the canonical lab-credentials catalog whitelist.
 
 The Critic runs after the mechanical layers complete. It produces per-dimension rubric scores, per-phase confidence, and a verdict (`approve` / `refine` / `reject`).
 
-**Mechanizable safety-critical checks are mechanical, never LLM-based.** Layer 5 high-severity findings halt the pipeline; no LLM is asked to judge whether credential content is "really" a leak. The cleanup-confidence gate (§0.5 criterion 2) is the same pattern at a different point in the lifecycle — when the Critic's per-phase confidence for cleanup-relevant phases falls below threshold, the generated `setup.sh` mechanically refuses to run without explicit acknowledgement, rather than relying on the user to read flags. Some safety properties (like "this isn't a phishing kit") are not fully mechanizable and rely on the layered safety model — scope (§0.2), ingestion notices (`pipeline.md §3.1.1`), mechanical credential/host-attack scans (Layer 5), and the Critic together provide defense in depth, not perfect prevention.
+**Mechanizable safety-critical checks are mechanical, never LLM-based.** Safety-scan high-severity findings halt the pipeline; no LLM is asked to judge whether credential content is "really" a leak. The cleanup-confidence gate (§0.5 criterion 2) is the same pattern at a different point in the lifecycle — when the Critic's per-phase confidence for cleanup-relevant phases falls below threshold, the generated `setup.sh` mechanically refuses to run without explicit acknowledgement, rather than relying on the user to read flags. Some safety properties (like "this isn't a phishing kit") are not fully mechanizable and rely on the layered safety model — scope (§0.2), ingestion notices (`pipeline.md §3.1.1`), mechanical credential/host-attack scans (the safety-scan pass), and the Critic together provide defense in depth, not perfect prevention.
 
 **Critic verdict semantics.**
 - Critic `approve` + mechanical layers pass → lab ships with high confidence.
 - Critic `refine` → feeds refinement loop's stopping decision; budget permitting, refine and re-check.
 - Critic `reject` after exhausted refinement → lab still ships, with the rejection prominently surfaced in `validation-report.md` and per-phase confidence flags in the README. The user decides whether to use the lab (with `cyberlab-gen fix` for runtime issues) or regenerate.
 
-The Critic is advisory. Its verdict never directly blocks shipping a lab. The only mechanical-fail case that blocks shipping is Layer 5 high-severity (`validation.md §6.8`).
+The Critic is advisory. Its verdict never directly blocks shipping a lab. The only mechanical-fail case that blocks shipping is a safety-scan high-severity finding (`validation.md §6.8`).
 
 ### 1.7 Refinement is bounded and strategy-pluggable
 
@@ -265,7 +265,7 @@ Refinement is for *quality* feedback; retry is for *structural* flakiness. Schem
 
 **Placeholder caps pending eval-harness data.** The $10 / 20 / 5 defaults are starting points. The first eval-harness run measures actual usage on the curated set and produces calibrated values for v1 release. Users may need to raise caps in the interim; see §8 for items requiring empirical data before locking. (The $25 catastrophe ceiling is a backstop, not an everyday number to calibrate — it stays well above the everyday budget. These caps and the predictive interrupt must *exist and be live* even at placeholder values; an interrupt that never fires because next-iteration cost is hardwired to zero is a bug, not a placeholder.)
 
-**Two budgets in v1, not three.** LLM token budget (paid to providers, per this section) and external API call cap (operational concern, see `pipeline.md §3.2.4`). Cloud resource budget is v2-bound — it doesn't apply in v1 because Layer 4 (the only stage that would spend cloud money) is v2-deferred.
+**Two budgets in v1, not three.** LLM token budget (paid to providers, per this section) and external API call cap (operational concern, see `pipeline.md §3.2.4`). Cloud resource budget is v2-bound — it doesn't apply in v1 because the real-platform apply pass (the only stage that would spend cloud money) is v2-deferred.
 
 ### 1.8 The eval harness is a peer of the pipeline, not an afterthought
 
@@ -380,7 +380,7 @@ Major v1 decisions made during architecture design, recorded here so the reasoni
 
 - **Scope enforced by agent judgment, not registry coverage.** The registries are *prior knowledge*, not *permission*. Agents propose new entries when they encounter novel values; scope refusals happen at the Extractor (out-of-scope content) and Planner (unplanable infrastructure), not at registry-lookup time. **Rationale:** registry-as-gate would refuse labs for novel attacks on novel technologies that the agents could in principle reason about coherently. The system's real limits are what agents can produce, what validators can check, and what platforms exist — not what's in the seeded registry.
 
-- **Layer 4 deferred to v2.** Real-platform apply validation removed from v1. **Rationale:** asymmetric risk. When cleanup is broken (hallucinated resources, missing permissions, race conditions), Layer 4 leaves orphaned cloud resources the user pays for. The system should not modify the user's real cloud without the user being actively in the loop. `cyberlab-gen fix` is the v1 mechanism with the user in the loop for every patch. Layer 4 may return in v2 with stricter safety boundaries (mandatory pre-apply confirmation, mandatory post-apply verification before any cleanup, refusal to apply when cleanup is structurally incomplete).
+- **Real-platform apply pass deferred to v2.** Real-platform apply validation removed from v1; its slot (validation pass 4) stays reserved so v2 can add it without renumbering. **Rationale:** asymmetric risk. When cleanup is broken (hallucinated resources, missing permissions, race conditions), the real-platform apply pass leaves orphaned cloud resources the user pays for. The system should not modify the user's real cloud without the user being actively in the loop. `cyberlab-gen fix` is the v1 mechanism with the user in the loop for every patch. The real-platform apply pass may return in v2 with stricter safety boundaries (mandatory pre-apply confirmation, mandatory post-apply verification before any cleanup, refusal to apply when cleanup is structurally incomplete).
 
 - **Open-runtime model with first-class flag.** `runtime:*` is open-set; the Planner can propose new runtime entries; proposed entries are `first_class: false` and generate labs with reduced coverage flags. **Rationale:** refusing to generate labs for Cloudflare, Vercel, or other non-Big-Three runtimes contradicts the scope-by-agent-judgment principle. First-class status is about *coverage quality*, not *whether a lab can be generated*.
 
@@ -397,11 +397,11 @@ Major v1 decisions made during architecture design, recorded here so the reasoni
 - **`cyberlab-gen fix --regenerate-phase`** — from a fix session, regenerate a specific phase rather than patching it. v1 fix mode patches only; regeneration directs the user back to `cyberlab-gen generate`.
 - **Fix-pattern learning loop** — automated promotion of recurring successful fix patterns to prompt overlays or registry `notes_for_generator`. v1 keeps this manual (maintainer review).
 - **Fix-session continuity refinements** — auto-detect when prior fix history is stale because the user re-ran generate.
-- **Runtime promotion to first-class** — moving a proposed runtime to first-class status requires Layer 4 verification logic, credential check conventions, and confirmation friction; this is a maintenance activity in v1.5+.
+- **Runtime promotion to first-class** — moving a proposed runtime to first-class status requires real-platform apply verification logic, credential check conventions, and confirmation friction; this is a maintenance activity in v1.5+.
 
 ### 8.3 v2 scope items (named, not specified)
 
-- **Layer 4 (real-platform apply validation)** with stricter safety boundaries. The v1 deferral is documented in §8.1 above; the v2 design considerations (mandatory pre-apply confirmation, post-apply verification before cleanup, refusal-on-incomplete-cleanup) are sketched in `validation.md §6.7`.
+- **Real-platform apply (the v2-reserved validation pass, real-platform apply validation)** with stricter safety boundaries. The v1 deferral is documented in §8.1 above; the v2 design considerations (mandatory pre-apply confirmation, post-apply verification before cleanup, refusal-on-incomplete-cleanup) are sketched in `validation.md §6.7`.
 
 ### 8.4 Items requiring empirical data before locking
 
@@ -419,7 +419,7 @@ The following are v1 placeholders to be calibrated. They are organized into two 
 - **Default stopping strategy choice** (currently fixed-N as baseline).
 - **Coefficient-of-variation threshold for high-variance flagging** (currently 0.3).
 - **Per-run cap on auto-accepted registry proposals** (currently 5; may need adjustment based on observed proposal patterns).
-- **Fix-mode validation strictness** (Layer 3 auto-runs on IaC patches per `pipeline.md §3.4.4`; the `--validate-patches-thoroughly` flag controls the other cases).
+- **Fix-mode validation strictness** (the containerized dry-run auto-runs on IaC patches per `pipeline.md §3.4.4`; the `--validate-patches-thoroughly` flag controls the other cases).
 - **Critic web_search call budget** (v1 placeholder 5 calls per Critic run, framework-tracked; exceeding the cap fails the stage rather than relying on prompt-level "sparingly" discipline).
 - **User-confirmation confidence threshold** (currently 0.6 placeholder; suggested starting value, pending eval data). When `source == llm_inference` and `confidence` is below this threshold, the framework sets `requires_user_confirmation: true` on the provenance metadata, and the post-Extractor / post-Planner interrupts surface the field for per-field review (see `schema.md §4.9` for the flag's semantics).
 - **Tool-use loop `max_iterations` per agent** (no v1 default; per-agent placeholders pending eval data). Each tool-using agent declares the maximum number of tool-call iterations the provider's `complete_with_tools` loop will run before raising `ProviderError.ToolLoopError` (routed to refinement-or-abandon per `pipeline.md §3.2.12`). Initial placeholders: Extractor 5, Planner 5, Critic 6 (informed by the Critic web_search budget above), Repair Agent 10. See `provider-interface.md §13.1` for context.
@@ -445,7 +445,7 @@ The three-tier presentation is the architectural commitment; the exact threshold
 - **`--auto-extend-registry` confirmation flag** — theater, since labs are decoupled from the registry after generation.
 - **`revalidate <lab-dir>` command** — no real use case once labs are understood as decoupled from the tool after generation.
 - **Planner authority to propose value types** — concentrated in the Extractor only.
-- **Layer 4 in v1** — see §8.1 for rationale.
+- **Real-platform apply in v1** — see §8.1 for rationale.
 - **Unlisted publisher notice** — low marginal value; Extractor's out-of-scope path is the real source-quality filter.
 - **`local_simulator` and `runtime:multi` as bounded entries** — redundant with the open-runtime proposal model. Multi-platform labs simply declare multiple `runtime:*` facets.
 - **Per-step `bind_inputs`** — step-to-step value flow is handled by phase composition mode (sequential threads outputs; independent keeps results per-step).
@@ -483,7 +483,7 @@ These deferred items have explicit seams in the v1 architecture, so adding them 
 - **provenance** — the structured `{value, source, citations, confidence}` metadata on every content field.
 - **artifact** — a structured YAML output (AttackSpec or Manifest) with versioned schema.
 - **lab class** — emergent property of a lab, not pre-classified. The result of per-step decisions per `schema.md §4.20`.
-- **first-class runtime** — a runtime with built-in Layer 4 verification logic, credential check conventions, and cleanup support. v1: AWS, Azure, GCP, GitHub.
+- **first-class runtime** — a runtime with built-in real-platform apply verification logic, credential check conventions, and cleanup support. v1: AWS, Azure, GCP, GitHub.
 - **fix session** — a single invocation of `cyberlab-gen fix <lab-dir>`. The REPL maintains live conversation context for the session; cross-session continuity comes from `fix_history.json`.
 
 ### 9.2 YAML examples and field shapes

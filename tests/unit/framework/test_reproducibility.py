@@ -183,7 +183,7 @@ def test_derive_sources_canonical_chain_only_not_alt_paths() -> None:
 
 
 def test_derived_block_round_trips() -> None:
-    # The derived block is a Layer-1-valid artifact (with overall_assessment absent).
+    # The derived block is a static-schema-valid artifact (with overall_assessment absent).
     block = derive_lab_reproducibility(_spec_with_tiers([FULL, DEMO]))
     from cyberlab_gen.schemas.attack_spec import ReproducibilityBlock
 

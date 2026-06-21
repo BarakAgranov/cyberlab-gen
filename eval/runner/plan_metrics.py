@@ -18,9 +18,9 @@ emitted output*, it never re-derives a pipeline decision.** Concretely:
   The brief's "lab-level reproducibility classification (using Task 2's rule)" is satisfied by reading
   the value Task 2's rule *stamped onto the manifest*, not by recomputing it (re-deriving outside the
   pipeline would measure the harness, not the pipeline — ``architecture.md §1.8``; ADR 0102).
-* ``layer2_passed`` / ``route_back`` are read off the pipeline's emitted *terminal status*
-  (:class:`~cyberlab_gen.framework.plan_orchestrator.PlanPipelineStatus`), never by re-running the
-  semantic cross-check.
+* ``semantic_cross_check_passed`` / ``route_back`` are read off the pipeline's emitted *terminal
+  status* (:class:`~cyberlab_gen.framework.plan_orchestrator.PlanPipelineStatus`), never by re-running
+  the semantic cross-check.
 """
 
 from __future__ import annotations
@@ -163,9 +163,9 @@ class PlanRunRecord(InternalModel):
     #: then (ADR 0034/0106); consumers must read it rather than assume "infra".
     status: PlanPipelineStatus | None = None
     shipped: bool
-    #: Emitted Layer-2 (semantic cross-check) result: a ship cleared the gate; the cross-check-halt
-    #: status is the only Layer-2 failure. Read off ``status``, never by re-running the validator (F1).
-    layer2_passed: bool
+    #: Emitted semantic cross-check result: a ship cleared the gate; the cross-check-halt status is
+    #: the only semantic-cross-check failure. Read off ``status``, never by re-running the validator (F1).
+    semantic_cross_check_passed: bool
     #: The Planner routed AttackSpec incoherence back to the Extractor (an exit-criterion signal —
     #: the Planner must route back, not repair; ``implementation-plan.md §5.5``).
     route_back: bool
@@ -199,9 +199,9 @@ def record_from_plan_run(
     """Build a :class:`PlanRunRecord` from a finished plan run's parts (ADR 0102).
 
     Computes the manifest structural metrics from the *emitted* manifest (``None`` on a non-ship →
-    zero coverage, empty distribution, no lab-level) and derives the ship / Layer-2 / route-back
-    facts from the emitted ``status`` (F1). Shared by the provider-backed runner and the test fakes
-    so the metric mapping is tested once (mirrors :func:`eval.runner.runner.record_from_run`).
+    zero coverage, empty distribution, no lab-level) and derives the ship / semantic-cross-check /
+    route-back facts from the emitted ``status`` (F1). Shared by the provider-backed runner and the
+    test fakes so the metric mapping is tested once (mirrors :func:`eval.runner.runner.record_from_run`).
     """
     shipped = status in (
         PlanPipelineStatus.PLANNED,
@@ -212,8 +212,8 @@ def record_from_plan_run(
         run_index=run_index,
         status=status,
         shipped=shipped,
-        # A ship cleared the cross-check gate; the only Layer-2 failure is the cross-check halt.
-        layer2_passed=shipped,
+        # A ship cleared the cross-check gate; the only semantic-cross-check failure is the cross-check halt.
+        semantic_cross_check_passed=shipped,
         route_back=status is PlanPipelineStatus.ROUTE_BACK_TO_EXTRACTOR,
         cost_usd=cost_usd,
         manifest_field_coverage=manifest_field_coverage(manifest) if manifest is not None else 0.0,
@@ -235,9 +235,9 @@ class PlanBlogAggregate(ArtifactModel):
     """Per-blog aggregate over the N plan runs (``eval.md §7.4`` / §7.6).
 
     Reports the plan-stage spine with mean/median + a high-variance flag (the CV of manifest field
-    coverage exceeds :data:`eval.runner.metrics.HIGH_VARIANCE_CV`). ``layer2_pass_rate`` is the share
-    of runs whose manifest cleared the semantic cross-check; ``route_back_count`` surfaces the
-    route-back-not-repair exit criterion; ``lab_level_distribution`` counts which lab-level
+    coverage exceeds :data:`eval.runner.metrics.HIGH_VARIANCE_CV`). ``semantic_cross_check_pass_rate``
+    is the share of runs whose manifest cleared the semantic cross-check; ``route_back_count`` surfaces
+    the route-back-not-repair exit criterion; ``lab_level_distribution`` counts which lab-level
     classification each shipped run produced.
     """
 
@@ -246,7 +246,7 @@ class PlanBlogAggregate(ArtifactModel):
     blog_id: str
     runs: int = Field(ge=0)
     shipped_count: int = Field(ge=0)
-    layer2_pass_rate: float = Field(ge=0.0, le=1.0)
+    semantic_cross_check_pass_rate: float = Field(ge=0.0, le=1.0)
     route_back_count: int = Field(ge=0)
     low_confidence_count: int = Field(ge=0)
     mean_manifest_field_coverage: float = Field(ge=0.0, le=1.0)
@@ -275,7 +275,11 @@ class PlanBlogAggregate(ArtifactModel):
             blog_id=blog_id,
             runs=n,
             shipped_count=sum(1 for r in runs if r.shipped),
-            layer2_pass_rate=(sum(1 for r in runs if r.layer2_passed) / n) if n else 0.0,
+            semantic_cross_check_pass_rate=(
+                sum(1 for r in runs if r.semantic_cross_check_passed) / n
+            )
+            if n
+            else 0.0,
             route_back_count=sum(1 for r in runs if r.route_back),
             low_confidence_count=sum(1 for r in runs if r.low_jury_confidence),
             mean_manifest_field_coverage=mean_of(coverage),

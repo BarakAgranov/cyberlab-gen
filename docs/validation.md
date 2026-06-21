@@ -1,52 +1,54 @@
-# cyberlab-gen — Validation Layers
+# cyberlab-gen — Validation Passes
 
 **Companion to:** `architecture.md` (hub).
-**Document scope:** The Validator's mechanical layers — what each layer checks, what it can and cannot catch, how its failures route into the refinement loop, what the report shape looks like, and what the validator deliberately does not do.
+**Document scope:** The Validator's mechanical passes — what each pass checks, what it can and cannot catch, how its failures route into the refinement loop, what the report shape looks like, and what the validator deliberately does not do.
 
-In v1, the Validator runs four layers (1, 2, 3, 5). Layer 4 (real-platform apply) is **deferred to v2** with rationale in `architecture.md §8.1`. The Layer 4 section is preserved here for design continuity; it is not active code in v1.
+In v1, the Validator runs four passes: static-schema validation, the semantic cross-check, the containerized dry-run, and the safety scans. The real-platform apply pass is **deferred to v2** with rationale in `architecture.md §8.1`. The real-platform-apply section is preserved here for design continuity; it is not active code in v1.
 
 The Critic is a peer LLM-based assessment running alongside (not as a layer within) the Validator. The Critic's contract lives in `agents.md §5.14`; this document references it.
 
 ---
 
-## 6. Validation Layers
+## 6. Validation Passes
 
 ### 6.1 What this section covers
 
-`architecture.md §1.6` locked the decision that the validator runs mechanical layers, with the Critic as a peer LLM-based assessment running alongside (not as a layer within it). This section specifies what each Validator layer does, what it inputs and outputs, what it can and cannot catch, when it runs, and how its failures route into the refinement loop.
+`architecture.md §1.6` locked the decision that the validator runs mechanical passes, with the Critic as a peer LLM-based assessment running alongside (not as a layer within it). This section specifies what each Validator pass does, what it inputs and outputs, what it can and cannot catch, when it runs, and how its failures route into the refinement loop.
+
+**Historical naming note (for readers of older docs/reports).** Earlier revisions of this corpus referred to these passes by ordinal "Layer N" labels. The descriptive names used throughout are: static-schema validation (was Layer 1), the semantic cross-check (was Layer 2), the containerized dry-run (was Layer 3), the real-platform apply (was Layer 4, v2-deferred), and the safety scans (was Layer 5). Report and metric keys use the descriptive tokens (`static_schema`, `semantic_cross_check`, `containerized_dry_run`, `real_platform_apply`, `safety_scan`). Section numbers (e.g. §6.4) and ADR numbers are stable ids, not pass ordinals.
 
 The Validator is **framework code, not an agent**. It runs deterministic checks. Some checks invoke external tools (terraform, tflint, container runtimes, per-cloud catalogs); none invoke LLMs. The Critic (`agents.md §5.14`) is the only LLM-based assessment of a complete lab; it runs *after* the Validator and consumes its report.
 
-### 6.2 Why multiple layers
+### 6.2 Why multiple passes
 
-The layers exist because no single check catches everything, and different checks have different costs. Cheap checks run first, expensive ones run only after cheap ones pass. This minimizes the cost of the refinement loop: most refinement iterations resolve at Layer 1 or 2 without needing the expensive layers to run.
+The passes exist because no single check catches everything, and different checks have different costs. Cheap checks run first, expensive ones run only after cheap ones pass — the passes run cheap-to-expensive (static-schema → semantic cross-check → containerized dry-run → [real-platform apply, v2] → safety scans). This minimizes the cost of the refinement loop: most refinement iterations resolve at the static-schema or semantic-cross-check pass without needing the expensive passes to run.
 
-The layers also have different failure-routing semantics. A Layer 1 schema error means "the manifest is malformed" — re-run Planner or earlier. A Layer 3 dry-run failure means "the code has a runtime issue" — re-run per-phase Generator. Conflating these routes makes the loop dumber than it needs to be.
+The passes also have different failure-routing semantics. A static-schema error means "the manifest is malformed" — re-run Planner or earlier. A containerized-dry-run failure means "the code has a runtime issue" — re-run per-phase Generator. Conflating these routes makes the loop dumber than it needs to be.
 
-### 6.3 The five mechanical layers
+### 6.3 The five mechanical passes
 
-The Validator schema defines five mechanical layers. In v1, four run; one is deferred:
+The Validator schema defines five mechanical passes, run cheap-to-expensive. In v1, four run; one is deferred:
 
-1. **Static schema validation** — manifest and AttackSpec conform to schemas; required fields present; types match registries; `spec_kind` discriminator matches the loading point.
+1. **Static-schema validation** (cheapest) — manifest and AttackSpec conform to schemas; required fields present; types match registries; `spec_kind` discriminator matches the loading point.
 2. **Semantic cross-check** — declarations across artifacts are mutually consistent (e.g., manifest claims phase 3 produces an admin_session; phase 3's code actually sets it).
 3. **Containerized dry-run** — IaC plans succeed; Python imports cleanly; static analyzers pass; payload files parse.
-4. **Real platform apply** — *v2-deferred*. IaC actually applies in user's lab account/subscription/project; attack scripts actually run. See §6.7 for the v2 design.
+4. **Real-platform apply** — *v2-deferred*. IaC actually applies in user's lab account/subscription/project; attack scripts actually run. See §6.7 for the v2 design.
 5. **Safety scans** — generated artifacts checked for accidental dangerous content (real credentials, malware signatures, host-system attack patterns), with whitelisting against the canonical lab-credentials catalog.
 
-**In v1, Layers 1, 2, 3, and 5 always run.** Layer 4 is deferred to v2; its slot in the validator report is `skipped: v2-deferred`. The Layer 4 numbering is preserved (not renumbered to 4) so the report structure stays stable across v1 and v2 — when v2 adds Layer 4, no other numbers shift.
+**In v1, the static-schema, semantic cross-check, containerized dry-run, and safety-scan passes always run.** The real-platform-apply pass is deferred to v2; its slot in the validator report is `skipped: v2-deferred`. The deferred slot stays reserved so v2 adds the real-platform-apply pass without renumbering — the report structure stays stable across v1 and v2, and no other slots shift.
 
-The Critic runs as a peer stage to the Validator, not as one of these layers. Its output and the Validator's report together feed the refinement coordinator.
+The Critic runs as a peer stage to the Validator, not as one of these passes. Its output and the Validator's report together feed the refinement coordinator.
 
 **Layered safety model.** The system's safety posture is layered, not single-mechanism (per `architecture.md §1.6` honest framing):
 
 - **Scope** (`architecture.md §0.2`) is the primary defense. The system is shaped for cloud-relevant educational labs; it is not a malware sandbox or phishing kit generator.
 - **Ingestion notices** (`pipeline.md §3.1.1`) inform the user when input warrants special care (recent CVE without public PoC). Not gates.
-- **Layer 5 (safety scans)** catches accidental dangerous content (real credentials accidentally embedded, host-attack patterns). Best-effort pattern matching with whitelist for canonical fakes.
+- **The safety scans** catch accidental dangerous content (real credentials accidentally embedded, host-attack patterns). Best-effort pattern matching with whitelist for canonical fakes.
 - **The Critic** catches blog-fidelity drift and over-engineering. Non-blocking; advisory.
 
 No single mechanism prevents a determined adversary from misusing the tool. The combined model catches accidents and provides defense in depth for the well-intentioned user.
 
-### 6.4 Layer 1: Static schema validation
+### 6.4 Static-schema validation — validation pass 1 (cheapest)
 
 **What.** Validates the manifest and AttackSpec YAML against their JSON Schemas. Validates that every reference into a controlled-vocabulary registry (value_types, facets, thesis_types) resolves to an existing entry. External-source ids (`advisory.source`, `cve.source_of_record`) are **not** resolved here — `external_data_sources` is a catalog of tool adapters queried at runtime/enrichment, not a vocabulary the spec resolves into (§4.14, ADR 0055/0058). Validates that registry-cross-references inside the manifest (e.g., `bind_inputs` types match phase output types) are consistent. Validates that `spec_kind` matches the expected type at the loading point: loading an AttackSpec where a Manifest is expected (or vice versa) fails loudly with structural error.
 
@@ -87,12 +89,12 @@ No single mechanism prevents a determined adversary from misusing the tool. The 
 
 **Notes.**
 
-- Layer 1 is the **single most important** validation layer because it's both cheap and high-coverage. Most generation errors surface here.
+- Static-schema validation is the **single most important** validation pass because it's both cheap and high-coverage. Most generation errors surface here.
 - The schema files are versioned with the codebase. A schema change is a release event.
 
-### 6.5 Layer 2: Semantic cross-check
+### 6.5 Semantic cross-check — validation pass 2
 
-**What.** Verifies that declarations in one artifact match implementations in another. The manifest declares the system's "intended structure"; the generated code is supposed to implement that structure. Layer 2 checks correspondence.
+**What.** Verifies that declarations in one artifact match implementations in another. The manifest declares the system's "intended structure"; the generated code is supposed to implement that structure. The semantic cross-check checks correspondence.
 
 **Inputs.** The manifest plus all generated code, IaC, payloads, scripts.
 
@@ -114,12 +116,12 @@ No single mechanism prevents a determined adversary from misusing the tool. The 
   - Per-phase IaC references a `references_lab_outputs` entry that doesn't exist in the lab-level IaC's outputs (the Lab-level Generator failed to produce a declared output).
   - Per-phase IaC references a `lab_resources` entry that the Planner didn't declare in the manifest (the per-phase Generator misread the manifest and referenced a non-existent resource).
   Both directions need to be cross-checked. The first catches Lab-level Generator failures; the second catches per-phase Generator failures.
-- **`produces_world_state` identifier_source resolution** (per `schema.md §4.5`): for every `produces_world_state` entry with `identifier_kind: runtime_generated`, Layer 2 verifies that the `identifier_source` path resolves to a declared phase output. A path like `phase_outputs.malicious_branch_name` must correspond to a key in the phase's declared `outputs` block. Without this check, cleanup code would compile but fail at runtime because the source it reads from doesn't exist.
-- Facet `implies` relationships are enforced: if the manifest declares `target:eks`, Layer 2 confirms that `target:aws` and `target:kubernetes` are also declared. **Missing implied facets are flagged as findings; the Validator does not mutate the manifest.** The refinement coordinator routes the finding to the Planner, which adds the missing facets in the next iteration. This preserves the framework-only-authorship discipline — the Validator stays read-only and never authors manifest content.
+- **`produces_world_state` identifier_source resolution** (per `schema.md §4.5`): for every `produces_world_state` entry with `identifier_kind: runtime_generated`, the semantic cross-check verifies that the `identifier_source` path resolves to a declared phase output. A path like `phase_outputs.malicious_branch_name` must correspond to a key in the phase's declared `outputs` block. Without this check, cleanup code would compile but fail at runtime because the source it reads from doesn't exist.
+- Facet `implies` relationships are enforced: if the manifest declares `target:eks`, the semantic cross-check confirms that `target:aws` and `target:kubernetes` are also declared. **Missing implied facets are flagged as findings; the Validator does not mutate the manifest.** The refinement coordinator routes the finding to the Planner, which adds the missing facets in the next iteration. This preserves the framework-only-authorship discipline — the Validator stays read-only and never authors manifest content.
 - Facet `incompatible_with` relationships are enforced: contradictory facet pairings are flagged.
-- **`affected_platforms`: no cross-check (moot by design).** Platforms are facet-derived (`schema.md §4.4`) and validated at Layer 1 via registry membership — they *are* the `target:*` facets, not a separate field. The core block carries no `affected_platforms` field that could drift, so there is no independent operand for Layer 2 to cross-check; the check is neither needed nor possible. (Earlier text here anticipated an `affected_platforms` field the v1 schema forbids — a `§6.5` ↔ `§4.4` drift reconciled per ADR 0094 D4 → ADR 0095: the single source of truth, the facets, wins.)
+- **`affected_platforms`: no cross-check (moot by design).** Platforms are facet-derived (`schema.md §4.4`) and validated by static-schema validation via registry membership — they *are* the `target:*` facets, not a separate field. The core block carries no `affected_platforms` field that could drift, so there is no independent operand for the semantic cross-check to verify; the check is neither needed nor possible. (Earlier text here anticipated an `affected_platforms` field the v1 schema forbids — a `§6.5` ↔ `§4.4` drift reconciled per ADR 0094 D4 → ADR 0095: the single source of truth, the facets, wins.)
 
-**Non-first-class runtime warning.** When the manifest declares a non-first-class runtime (per `schema.md §4.13`), Layer 2 emits a warning (not a failure) noting reduced coverage for that runtime. The warning appears in the report alongside the lab's per-phase confidence flags.
+**Non-first-class runtime warning.** When the manifest declares a non-first-class runtime (per `schema.md §4.13`), the semantic cross-check emits a warning (not a failure) noting reduced coverage for that runtime. The warning appears in the report alongside the lab's per-phase confidence flags.
 
 **What it cannot catch.**
 
@@ -140,10 +142,10 @@ When a mismatch is consistent across multiple artifacts (e.g., the manifest decl
 
 **Notes.**
 
-- Layer 2 is where the manifest's role as "single source of truth" is enforced. Without Layer 2, the manifest could become aspirational metadata that doesn't match reality.
+- The semantic cross-check is where the manifest's role as "single source of truth" is enforced. Without it, the manifest could become aspirational metadata that doesn't match reality.
 - Specific cross-check rules are encoded in the validator implementation; new cross-checks are added by extending the validator code as the system matures.
 
-### 6.6 Layer 3: Containerized dry-run
+### 6.6 Containerized dry-run — validation pass 3 (most expensive always-on in v1)
 
 **What.** Runs the lab's setup, attack, and cleanup logic in a container without applying IaC to any real cloud or platform. Catches issues that only surface when code actually executes — import errors, syntax errors, IaC plan failures, static analysis violations.
 
@@ -165,11 +167,11 @@ When a mismatch is consistent across multiple artifacts (e.g., the manifest decl
 **Intentional misconfiguration (the dominant case).** For a lab generator, intentionally insecure resources are the dominant case, not an edge case. A lab teaching "exploit a public S3 bucket" requires generating a public S3 bucket; tfsec will fire on it on every run. The Validator handles this through two mechanisms:
 
 - **Split strictness by dimension.** Code-quality rules run at conventional strictness (linting, type-checking, syntax must pass). Security-finding rules run at *minimal* strictness — informational rather than failing — when the resource is declared with `attack_target` in its `lab_role` per `schema.md §4.4`.
-- **Intent declared in the manifest.** Layer 3 reads each `lab_resources` entry's `lab_role` list. When `attack_target` appears in the list, security-finding analyzers run against that resource but their findings are recorded as informational (`severity: informational_intentional_misconfig`) rather than failing the layer. Findings on resources *without* `attack_target` in their roles are real signals — they fail Layer 3 at the configured severity floor.
+- **Intent declared in the manifest.** The containerized dry-run reads each `lab_resources` entry's `lab_role` list. When `attack_target` appears in the list, security-finding analyzers run against that resource but their findings are recorded as informational (`severity: informational_intentional_misconfig`) rather than failing the pass. Findings on resources *without* `attack_target` in their roles are real signals — they fail the containerized dry-run at the configured severity floor.
 
-The mechanism preserves the architectural property that intent lives in the schema, not in validator heuristics. Layer 3 doesn't guess; it reads the manifest's declaration.
+The mechanism preserves the architectural property that intent lives in the schema, not in validator heuristics. The containerized dry-run doesn't guess; it reads the manifest's declaration.
 
-**Cost.** Tens of seconds to a few minutes per lab. **Most expensive always-on layer in v1** (Layer 4 is deferred to v2). The refinement loop tries to resolve issues at Layers 1 and 2 first to avoid Layer 3 round-trips.
+**Cost.** Tens of seconds to a few minutes per lab. **Most expensive always-on pass in v1** (the real-platform-apply pass is deferred to v2). The refinement loop tries to resolve issues at the static-schema and semantic-cross-check passes first to avoid containerized-dry-run round-trips.
 
 **What it catches.**
 
@@ -178,15 +180,15 @@ The mechanism preserves the architectural property that intent lives in the sche
 - Type errors flagged by mypy at lab-conventional strictness.
 - IaC configuration errors (`terraform init` and `terraform plan` failures, or equivalent for other mechanisms).
 - IaC security findings from tfsec/checkov/cfn-lint above a configured severity floor (intent-aware per the split above).
-- Cloud-API hallucinations cross-checked against the `static_catalogs` registry (per `schema.md §4.11`, §4.14) — e.g., a Terraform resource referencing an AWS IAM action that doesn't exist; an Azure RBAC role that doesn't exist; a GCP IAM permission that doesn't exist. Layer 3 consults static_catalogs on demand for each catalog-relevant identifier in the generated code; mismatches fail the layer with a specific "action X is not in the AWS IAM catalog" finding.
+- Cloud-API hallucinations cross-checked against the `static_catalogs` registry (per `schema.md §4.11`, §4.14) — e.g., a Terraform resource referencing an AWS IAM action that doesn't exist; an Azure RBAC role that doesn't exist; a GCP IAM permission that doesn't exist. The containerized dry-run consults static_catalogs on demand for each catalog-relevant identifier in the generated code; mismatches fail the pass with a specific "action X is not in the AWS IAM catalog" finding.
 - Shell script syntax errors and shellcheck warnings above a severity floor.
 - Missing Python packages (declared but not installable).
 - Setup script failing on its read-only checks (e.g., references an IaC output that doesn't exist).
 
-**Per-step reproducibility handling.** Layer 3 respects per-step reproducibility (per `schema.md §4.20`):
+**Per-step reproducibility handling.** The containerized dry-run respects per-step reproducibility (per `schema.md §4.20`):
 
 - `full` and `partial_simulation` steps undergo dry-run (terraform plan + python imports + script syntax).
-- `demonstration_only` steps get **syntax validation only** — the demonstration script is intentionally non-functional; Layer 3 verifies it parses but doesn't try to "run" the demonstration.
+- `demonstration_only` steps get **syntax validation only** — the demonstration script is intentionally non-functional; the containerized dry-run verifies it parses but doesn't try to "run" the demonstration.
 - `not_reproducible` steps have no code to check; skipped.
 
 **What it cannot catch.**
@@ -207,11 +209,11 @@ The mechanism preserves the architectural property that intent lives in the sche
 - The container image is pinned and versioned alongside cyberlab-gen. Image updates are release events.
 - The intent-aware strictness split (code-quality vs. security-finding rules) is the architectural commitment; the exact rule sets and severity floors are encoded in the validator implementation and documented in the planned `validator-rules.md` companion.
 
-### 6.7 Layer 4: Real platform apply (v2-deferred)
+### 6.7 Real-platform apply (v2-deferred) — validation pass 4 (reserved slot)
 
-**Status: v2-deferred from v1.** Layer 4 is not active in v1. The rationale: automated real-platform apply during generation has asymmetric risk — when cleanup is broken (for hallucinated resources, missing permissions, race conditions, etc.), Layer 4 leaves orphaned cloud resources the user pays for. The system should not modify the user's real cloud without the user actively in the loop. The `cyberlab-gen fix` mode (`pipeline.md §3.4`) is the v1 mechanism for handling runtime issues with the user reviewing each patch. Layer 4 may return in v2 with stricter safety boundaries — mandatory pre-apply user confirmation, mandatory post-apply verification before any cleanup, refusal to apply when cleanup is structurally incomplete. The specification below describes the v2 design; **it is not active code in v1**.
+**Status: v2-deferred from v1.** The real-platform-apply pass is not active in v1. The rationale: automated real-platform apply during generation has asymmetric risk — when cleanup is broken (for hallucinated resources, missing permissions, race conditions, etc.), the real-platform-apply pass leaves orphaned cloud resources the user pays for. The system should not modify the user's real cloud without the user actively in the loop. The `cyberlab-gen fix` mode (`pipeline.md §3.4`) is the v1 mechanism for handling runtime issues with the user reviewing each patch. The real-platform-apply pass may return in v2 with stricter safety boundaries — mandatory pre-apply user confirmation, mandatory post-apply verification before any cleanup, refusal to apply when cleanup is structurally incomplete. The specification below describes the v2 design; **it is not active code in v1**. The slot is the most-expensive end of the cheap-to-expensive ordering, and it stays reserved so v2 adds the pass without renumbering the others.
 
-**In v1, every shipped lab carries the `validated_static_only` flag** in the validation report since Layer 4 is deferred. Users who want real-platform validation rely on running the lab themselves (with `fix` mode assistance if needed).
+**In v1, every shipped lab carries the `validated_static_only` flag** in the validation report since the real-platform-apply pass is deferred. Users who want real-platform validation rely on running the lab themselves (with `fix` mode assistance if needed).
 
 ---
 
@@ -225,7 +227,7 @@ This generalizes from "real cloud apply" to "real platform apply" because some l
 
 **Output.** Pass/fail with logs from setup, attack execution, and cleanup. Plus optional artifacts: the final state of declared world-state items (verified to exist before cleanup, verified gone after).
 
-**Tools.** Whatever the lab's `provisioning_mechanism` declares — Terraform, CloudFormation, ARM, GCP Deployment Manager, gh CLI, etc. — plus the lab's own scripts. `verify.sh` runs as part of Layer 4 validation, executing the manifest-derived check list.
+**Tools.** Whatever the lab's `provisioning_mechanism` declares — Terraform, CloudFormation, ARM, GCP Deployment Manager, gh CLI, etc. — plus the lab's own scripts. `verify.sh` runs as part of the real-platform-apply validation, executing the manifest-derived check list.
 
 **Cost.** Minutes to hours per lab. Real cloud/platform costs (typically <$5 per run for simple cloud labs; multi-cloud labs higher; GitHub-centric labs effectively free on free tier).
 
@@ -243,33 +245,33 @@ This generalizes from "real cloud apply" to "real platform apply" because some l
 - Issues specific to other accounts (this account's organization SCPs may differ from a target user's).
 - Time-bound or rate-limited issues that don't surface in the test run.
 
-**Failure routing.** Real-platform failures are heavyweight signals. They typically indicate the agent missed something the static layers couldn't catch.
+**Failure routing.** Real-platform failures are heavyweight signals. They typically indicate the agent missed something the static passes couldn't catch.
 
 - IAM/RBAC permission failures → per-phase or Lab-level Generator (likely IaC issue).
 - Attack script runtime errors → per-phase Generator.
 - Verify script mismatches → either Lab-level Generator (verify logic wrong) or per-phase Generator (state actually not produced).
 
-**Per-step gating (per `architecture.md §0.7` emergent class principle).** Steps marked `full` get applied; steps marked `partial_simulation` get applied with mocks; steps marked `demonstration_only` get skipped at Layer 4 (they don't execute against real platforms). The Layer 4 verdict becomes "all `full` and `partial_simulation` steps applied successfully; `demonstration_only` steps documented but not executed."
+**Per-step gating (per `architecture.md §0.7` emergent class principle).** Steps marked `full` get applied; steps marked `partial_simulation` get applied with mocks; steps marked `demonstration_only` get skipped at the real-platform-apply pass (they don't execute against real platforms). The real-platform-apply verdict becomes "all `full` and `partial_simulation` steps applied successfully; `demonstration_only` steps documented but not executed."
 
-**Per-platform confirmation (friction, not enforcement).** Layer 4 is gated by `--apply`. The user must additionally pass `--i-confirm-this-is-a-lab-environment-for-<platform>` for each platform the lab targets (e.g., `--i-confirm-this-is-a-lab-environment-for-aws`). Optional friction-layer heuristics — non-production-account-pattern checks, expensive-resource scans — may be applied per platform, but the heuristic is friction, not enforcement. The flag is the operator's signed acknowledgment of responsibility. The heuristics catch accidents (running `--apply` against a wrong AWS profile); they do not prevent deliberate misuse.
+**Per-platform confirmation (friction, not enforcement).** The real-platform-apply pass is gated by `--apply`. The user must additionally pass `--i-confirm-this-is-a-lab-environment-for-<platform>` for each platform the lab targets (e.g., `--i-confirm-this-is-a-lab-environment-for-aws`). Optional friction-layer heuristics — non-production-account-pattern checks, expensive-resource scans — may be applied per platform, but the heuristic is friction, not enforcement. The flag is the operator's signed acknowledgment of responsibility. The heuristics catch accidents (running `--apply` against a wrong AWS profile); they do not prevent deliberate misuse.
 
 **V2 additional safety boundaries (rationale for v1 deferral):**
 
 - **Mandatory pre-apply user confirmation,** showing the user exactly what will be created.
-- **Mandatory post-apply verification** before any cleanup runs — Layer 4 confirms the resources it expected to create were actually created before destroying them.
-- **Refusal to apply when cleanup is structurally incomplete** — Layer 2 verifies cleanup coverage of all `produces_world_state` items; if Layer 2 flagged any uncovered world-state items, Layer 4 refuses to apply.
+- **Mandatory post-apply verification** before any cleanup runs — the real-platform-apply pass confirms the resources it expected to create were actually created before destroying them.
+- **Refusal to apply when cleanup is structurally incomplete** — the semantic cross-check verifies cleanup coverage of all `produces_world_state` items; if the semantic cross-check flagged any uncovered world-state items, the real-platform-apply pass refuses to apply.
 
 These boundaries address the v1 deferral concern (orphaned cloud resources from broken cleanup).
 
-**Timing (in v2 when active).** Layer 4 runs **once after the static layers (1, 2, 3, 5) converge** — not on every refinement iteration. If Layer 4 fails, a small bounded number of additional refinement iterations may be triggered (each consuming real cloud spend; the user opted into Layer 4 and accepts the cost).
+**Timing (in v2 when active).** The real-platform-apply pass runs **once after the static-schema, semantic cross-check, containerized dry-run, and safety-scan passes converge** — not on every refinement iteration. If the real-platform-apply pass fails, a small bounded number of additional refinement iterations may be triggered (each consuming real cloud spend; the user opted into the real-platform-apply pass and accepts the cost).
 
 **Notes.**
 
-- Layer 4 is opt-in via `--apply` (in v2). Default is off. The user makes an explicit, deliberate choice to spend cloud/platform money on validation.
-- Eval harness can run Layer 4 in batch mode against dedicated cyberlab-gen-eval accounts per platform; this is part of the eval infrastructure, not user-facing (`eval.md §7.11`).
-- The cloud-resource budget (Layer 4-related) is independent of the LLM-token budget. Both have configurable caps and are surfaced separately to the user. In v1, cloud-resource budget doesn't apply since Layer 4 doesn't run.
+- The real-platform-apply pass is opt-in via `--apply` (in v2). Default is off. The user makes an explicit, deliberate choice to spend cloud/platform money on validation.
+- Eval harness can run the real-platform-apply pass in batch mode against dedicated cyberlab-gen-eval accounts per platform; this is part of the eval infrastructure, not user-facing (`eval.md §7.11`).
+- The cloud-resource budget (real-platform-apply-related) is independent of the LLM-token budget. Both have configurable caps and are surfaced separately to the user. In v1, cloud-resource budget doesn't apply since the real-platform-apply pass doesn't run.
 
-### 6.8 Layer 5: Safety scans
+### 6.8 Safety scans — validation pass 5 (runs last)
 
 **What.** Scans generated artifacts for accidental dangerous content. The system shouldn't accidentally include real credentials, malware signatures, or content that would harm a user's host machine.
 
@@ -281,7 +283,7 @@ Labs need to plant credentials that look real enough to trip detection tools (so
 - Is publicly documented as fakes (AWS uses `AKIAIOSFODNN7EXAMPLE` / `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`; GitHub uses `ghp_test_*` prefixes; Azure uses well-known test GUID patterns; npm uses `npm_test_*` prefixes).
 - Is deterministic (the Generator always uses the same canonical patterns; the lab's detection steps know what to look for).
 
-**Layer 5's actual job:** run credential scanners against generated lab content; whitelist matches against the canonical catalog; flag everything else.
+**The safety scans' actual job:** run credential scanners against generated lab content; whitelist matches against the canonical catalog; flag everything else.
 
 **Inputs.** All generated files. The canonical lab-credentials catalog. The configurable forbidden-pattern list.
 
@@ -298,17 +300,17 @@ Labs need to plant credentials that look real enough to trip detection tools (so
   - Real-world API key formats for AWS / Azure / GCP / GitHub / npm.
 - A check that all "credentials" in seeded files match the canonical lab-credentials catalog patterns.
 - A check that no generated code reads from `~/.aws/credentials`, `~/.azure/`, `~/.config/gcloud/`, `~/.ssh/`, or other host paths *outside* of what the lab's own setup explicitly authorized.
-- **File-system scope check (pattern-based, not behavioral).** Layer 5 statically inspects shell scripts and Python code for path patterns matching host directories outside the working directory plus `produces_world_state` declared paths. This is pattern-based, not behavioral, and can be evaded by dynamic path construction (`rm -rf "$HOME/$VAR/$RAND"` is hard to analyze statically). Consistent with §6.3's "we catch accidents, not adversaries" posture — Layer 5 surfaces the obvious cases, not all possible exploitations.
+- **File-system scope check (pattern-based, not behavioral).** The safety scans statically inspect shell scripts and Python code for path patterns matching host directories outside the working directory plus `produces_world_state` declared paths. This is pattern-based, not behavioral, and can be evaded by dynamic path construction (`rm -rf "$HOME/$VAR/$RAND"` is hard to analyze statically). Consistent with §6.3's "we catch accidents, not adversaries" posture — the safety scans surface the obvious cases, not all possible exploitations.
 
 **Cost.** Seconds. Cheap.
 
-**When Layer 5 runs against `fix_history.json`.** The fix-pipeline workflow involves user-pasted content that may contain credential fragments. Layer 5 against `fix_history.json` runs in three distinct cases:
+**When the safety scans run against `fix_history.json`.** The fix-pipeline workflow involves user-pasted content that may contain credential fragments. The safety scans against `fix_history.json` run in three distinct cases:
 
-- **During generation:** `fix_history.json` doesn't exist yet; Layer 5 doesn't scan it.
-- **During fix patch validation:** Layer 5 scans the proposed patch *and* the new `fix_history.json` entry being written (since it'll be persisted).
-- **During explicit `cyberlab-gen validate <lab-dir>`:** Layer 5 scans the entire lab including `fix_history.json` if it exists.
+- **During generation:** `fix_history.json` doesn't exist yet; the safety scans don't scan it.
+- **During fix patch validation:** the safety scans scan the proposed patch *and* the new `fix_history.json` entry being written (since it'll be persisted).
+- **During explicit `cyberlab-gen validate <lab-dir>`:** the safety scans scan the entire lab including `fix_history.json` if it exists.
 
-**Complementary to the Repair Agent's during-session detector.** The Repair Agent has a heuristic credential-paste detector (`agents.md §5.16`) that warns the user *during* a paste. Layer 5 catches *after* if the warning fired-and-was-ignored or didn't fire. The two mechanisms work together: live warning during paste, post-hoc scan during validation.
+**Complementary to the Repair Agent's during-session detector.** The Repair Agent has a heuristic credential-paste detector (`agents.md §5.16`) that warns the user *during* a paste. The safety scans catch *after* if the warning fired-and-was-ignored or didn't fire. The two mechanisms work together: live warning during paste, post-hoc scan during validation.
 
 **What it catches.**
 
@@ -324,7 +326,7 @@ Labs need to plant credentials that look real enough to trip detection tools (so
 
 - Sufficiently novel malware. (This is a defense-in-depth layer, not a malware scanner.)
 - Sophisticated host-system attacks that don't trip pattern matchers.
-- The fundamental "is this educational vs. operational tooling" question — that's what scope (`architecture.md §0.2`) and the Critic-as-peer-stage are for. Layer 5 catches *accidents*, not intent.
+- The fundamental "is this educational vs. operational tooling" question — that's what scope (`architecture.md §0.2`) and the Critic-as-peer-stage are for. The safety scans catch *accidents*, not intent.
 
 **Severity routing.**
 
@@ -332,34 +334,34 @@ Labs need to plant credentials that look real enough to trip detection tools (so
 - **Medium severity** (suspicious pattern; user-paste in `fix_history.json` that looks like a credential fragment from an error message): pipeline ships the lab with the finding flagged and a recommendation to review.
 - **Low severity** (false-positive likely): logged, no flag.
 
-**Layer 5 high-severity is the only v1 case where a generated lab does not ship.** All other failures (mechanical-layer failures after exhausted refinement, Critic rejection after exhausted refinement) ship the lab with prominent flags and rely on the user to decide. Layer 5 high-severity is different because the failure indicates a security boundary breach (real credentials in lab output, or host-attack patterns) — the system halts deliberately. See `architecture.md §0.5 criterion 2` for the always-ship-with-flags model and its single exception.
+**A safety-scan high-severity finding is the only v1 case where a generated lab does not ship.** All other failures (mechanical-pass failures after exhausted refinement, Critic rejection after exhausted refinement) ship the lab with prominent flags and rely on the user to decide. A safety-scan high-severity finding is different because the failure indicates a security boundary breach (real credentials in lab output, or host-attack patterns) — the system halts deliberately. See `architecture.md §0.5 criterion 2` for the always-ship-with-flags model and its single exception.
 
-**The refinement loop does not run on Layer 5 high-severity failures; the system halts.** This is a security boundary, not a quality issue. Refinement is for quality; safety is a halt-point.
+**The refinement loop does not run on safety-scan high-severity failures; the system halts.** This is a security boundary, not a quality issue. Refinement is for quality; safety is a halt-point.
 
 **Notes.**
 
 - The credential-scanner tool list and severity floors are encoded in the validator implementation; updates are release events.
 - The forbidden-pattern list is local to the user's installation but ships with sensible defaults covering all three clouds plus GitHub.
-- Layer 5 is the last layer to run because it's checking for *accidents*, not deliberate output. If Layers 1–3 produced a lab that contains real credentials, that's a serious failure and the system should surface it loudly.
+- The safety scans are the last pass to run because they're checking for *accidents*, not deliberate output. If the static-schema, semantic cross-check, and containerized dry-run passes produced a lab that contains real credentials, that's a serious failure and the system should surface it loudly.
 
 ### 6.9 Validator report shape
 
-After all layers run, the Validator emits a structured report:
+After all passes run, the Validator emits a structured report:
 
 ```yaml
 report_version: 1
 lab_id: <lab-id>
 generated_at: <timestamp>
 overall_verdict: passed | passed_with_warnings | failed
-layers:
-  - layer: 1
-    name: static_schema_validation
+passes:                                              # listed in cheap->expensive order
+  - pass: static_schema
+    order: 1
     attempted: true
     verdict: passed
     duration_seconds: 0.4
     findings: []
-  - layer: 2
-    name: semantic_cross_check
+  - pass: semantic_cross_check
+    order: 2
     attempted: true
     verdict: passed_with_warnings
     duration_seconds: 1.2
@@ -369,18 +371,18 @@ layers:
         location: phase_3.produces_world_state[2]
         message: "Phase 3 declares it produces aws_iam_access_key but neither its per-phase cleanup.sh nor the lab-level cleanup.sh has a command for it."
         recommended_action: "Re-run phase 3's per-phase Generator (which owns its per-phase cleanup.sh)."
-  - layer: 3
-    name: containerized_dry_run
+  - pass: containerized_dry_run
+    order: 3
     attempted: true
     verdict: passed
     duration_seconds: 87.4
     findings: []
-  - layer: 4
-    name: real_platform_apply
+  - pass: real_platform_apply
+    order: 4                                          # reserved slot, v2-deferred
     attempted: false
-    reason: "Layer 4 (real-platform apply) is deferred to v2; see architecture.md §8.1"
-  - layer: 5
-    name: safety_scans
+    reason: "The real-platform-apply pass is deferred to v2; see architecture.md §8.1"
+  - pass: safety_scan
+    order: 5
     attempted: true
     verdict: passed
     high_severity_findings: 0
@@ -389,7 +391,7 @@ critic_summary:                                    # populated separately by Cri
   dimensions:
     fidelity_to_blog: 0.91
     completeness: 0.78
-    implementation_correctness: 0.88               # against attack semantics, not Layer 2 territory
+    implementation_correctness: 0.88               # against attack semantics, not semantic-cross-check territory
     code_quality: 0.85
     doc_quality: 0.82
     cleanup_quality: 0.80
@@ -409,8 +411,8 @@ iteration_history_ref: ".cyberlab-gen/refinement_history.json"
 
 **Field semantics.**
 
-- **`attempted`** is universal across layers — `true` when the layer ran, `false` when it was skipped or deferred. Always present on every layer entry. This makes the report shape stable across v1 (where Layer 4 is always `attempted: false`) and v2 (where Layer 4 may run).
-- **`validated_static_only`** is a derived field computed from "Layer 4 was not attempted." Tools consuming the report use this convenience flag rather than re-computing from layer details. Do not author it manually; the Validator computes it.
+- **`attempted`** is universal across passes — `true` when the pass ran, `false` when it was skipped or deferred. Always present on every pass entry. This makes the report shape stable across v1 (where the real-platform-apply pass is always `attempted: false`) and v2 (where it may run).
+- **`validated_static_only`** is a derived field computed from "the real-platform-apply pass was not attempted." Tools consuming the report use this convenience flag rather than re-computing from pass details. Do not author it manually; the Validator computes it.
 - **`iteration_history_ref`** points to `.cyberlab-gen/refinement_history.json` which contains the per-iteration causality log from the refinement coordinator (per `pipeline.md §3.2.12`). The validator report does not duplicate iteration data; readers needing iteration context follow this reference.
 
 **Persistence locations.**
@@ -424,19 +426,19 @@ The Critic's per-phase confidence appears in both. The README's "How to use this
 
 The refinement loop coordinator (`agents.md §5.15`, specified in `pipeline.md §3.2.12`) consumes the Validator's report plus the Critic's verdict. Its routing decisions:
 
-- **Any Layer 1 failure** → re-run upstream agent (Extractor or Planner depending on which schema) via the stage's *retry* mechanism, **not refinement**. Layer 1 failures are structural — the agent emitted malformed output — and retry is the appropriate mechanism (stage-local, default 3 attempts per `architecture.md §1.7`). Refinement is for quality/judgment failures, not structural ones. If the agent can't produce schema-valid output within its retry budget, the pipeline halts with a structured error rather than escalating to refinement.
-- **Any Layer 2 failure** → re-run the implementation agent (per-phase Generator, Lab-level Generator, Cleanup Generator, or Docs Generator depending on the mismatch).
-- **Layer 3 failure** → re-run the agent that produced the failing file. If multiple files fail, prefer to re-run them in order (per-phase first, then Lab-level, then Cleanup, then Docs).
-- **Layer 4 failure** → not applicable in v1 (Layer 4 deferred to v2 per §6.7).
-- **Layer 5 high-severity** → **halt. No refinement.** This is a security boundary, not a quality issue.
-- **Layer 5 medium-severity** → ship the lab with the finding flagged in the report; no refinement triggered.
+- **Any static-schema failure** → re-run upstream agent (Extractor or Planner depending on which schema) via the stage's *retry* mechanism, **not refinement**. Static-schema failures are structural — the agent emitted malformed output — and retry is the appropriate mechanism (stage-local, default 3 attempts per `architecture.md §1.7`). Refinement is for quality/judgment failures, not structural ones. If the agent can't produce schema-valid output within its retry budget, the pipeline halts with a structured error rather than escalating to refinement.
+- **Any semantic-cross-check failure** → re-run the implementation agent (per-phase Generator, Lab-level Generator, Cleanup Generator, or Docs Generator depending on the mismatch).
+- **Containerized-dry-run failure** → re-run the agent that produced the failing file. If multiple files fail, prefer to re-run them in order (per-phase first, then Lab-level, then Cleanup, then Docs).
+- **Real-platform-apply failure** → not applicable in v1 (the real-platform-apply pass is deferred to v2 per §6.7).
+- **Safety-scan high-severity** → **halt. No refinement.** This is a security boundary, not a quality issue.
+- **Safety-scan medium-severity** → ship the lab with the finding flagged in the report; no refinement triggered.
 - **Critic `refine` verdict** → re-run agents per the Critic's recommendations. Bounded by both the per-agent cap (5 iterations per agent) and the total cap (20 iterations), per `architecture.md §1.7`. The total cap typically binds first; the per-agent cap is a fairness mechanism.
 - **Critic `reject` verdict** → treated as `refine` for refinement-loop purposes (try to address the concerns within budget); on budget exhaustion with reject persisting, lab ships with prominent rejection notice in `validation-report.md` (per `agents.md §5.14`). The user decides whether to use the lab (with `fix` mode for runtime issues) or regenerate.
 
-**Same-root-cause finding deduplication.** When Layer 2 and the Critic both flag findings on the same artifact (e.g., Layer 2 flags "cleanup script missing IAM access key handling" mechanically while the Critic flags "cleanup is incomplete for credential-related world state" semantically), the coordinator deduplicates and routes once. Two cases:
+**Same-root-cause finding deduplication.** When the semantic cross-check and the Critic both flag findings on the same artifact (e.g., the semantic cross-check flags "cleanup script missing IAM access key handling" mechanically while the Critic flags "cleanup is incomplete for credential-related world state" semantically), the coordinator deduplicates and routes once. Two cases:
 
 - *Same target agent* — both findings would re-run the same agent. Route once with both findings as combined feedback.
-- *Different target agents* — Layer 2 targets the per-phase Generator (mechanical mismatch); the Critic targets a different agent (e.g., Cleanup Generator for orchestration concerns). The coordinator routes to the upstream agent first per the cascade-handling principle in `pipeline.md §3.2.12` — fixing root-cause upstream is cheaper than letting downstream agents iterate around an upstream problem.
+- *Different target agents* — the semantic cross-check targets the per-phase Generator (mechanical mismatch); the Critic targets a different agent (e.g., Cleanup Generator for orchestration concerns). The coordinator routes to the upstream agent first per the cascade-handling principle in `pipeline.md §3.2.12` — fixing root-cause upstream is cheaper than letting downstream agents iterate around an upstream problem.
 
 The deduplication is recorded in the iteration-causality log so the user can see in the run report which findings were merged and why.
 
@@ -451,15 +453,15 @@ The system has **four** distinct "redo" mechanisms. They were previously assembl
 | 1 | **Transient retry** | Network/provider unreachable, timeout, transient 5xx, 429 rate-limit | Provider layer (`provider-interface.md §6.1`, `pipeline.md §3.7`) | retry |
 | 2 | **Malformed-output retry** | Response doesn't parse against the declared `output_schema` (unparseable / wrong shape) | Two layers: provider-internal re-prompt then the agent call surface's stage budget (`provider-interface.md §6.2`, ADR 0018) | retry |
 | 3 | **Grounding / search-before-claim check** | Valid, schema-correct JSON but *ungrounded facts*: a hallucinated MITRE/CVE id, or an `external_api` field with no matching tool-call evidence | The orchestrator's mechanical-validator stack (`§6.10.2`) — routes the finding to the producing agent, which re-emits; the orchestrator owns the budget (`architecture.md §1.5`), not the agent | retry |
-| 4 | **Refinement** | A *quality* verdict from a jury or the Critic (e.g. the Extractor-Jury `revise` verdict, a validator Layer 2/3 finding, a Critic `refine`) | Refinement loop coordinator (`pipeline.md §3.2.12`, ADR 0023) | refinement |
+| 4 | **Refinement** | A *quality* verdict from a jury or the Critic (e.g. the Extractor-Jury `revise` verdict, a validator semantic-cross-check or containerized-dry-run finding, a Critic `refine`) | Refinement loop coordinator (`pipeline.md §3.2.12`, ADR 0023) | refinement |
 
-**The hard rule (`architecture.md §1.7`):** mechanisms 1–3 are **retry** — structural-flakiness recovery, stage-local budget, same-or-re-prompted input, raising the agent-failure path on exhaustion. Mechanism 4 is **refinement** — quality-driven, pipeline-wide budget, *original input plus structured feedback*. They never cross: a structural failure (1–3) never consumes refinement budget, and a quality verdict (4) is never re-run as a bare retry. In particular, a **Layer 1 failure is structural and routes to retry (mechanism 2 or 3), never refinement** (`§6.10`, first bullet); only Layer 2/3 and jury/Critic verdicts feed mechanism 4.
+**The hard rule (`architecture.md §1.7`):** mechanisms 1–3 are **retry** — structural-flakiness recovery, stage-local budget, same-or-re-prompted input, raising the agent-failure path on exhaustion. Mechanism 4 is **refinement** — quality-driven, pipeline-wide budget, *original input plus structured feedback*. They never cross: a structural failure (1–3) never consumes refinement budget, and a quality verdict (4) is never re-run as a bare retry. In particular, a **static-schema failure is structural and routes to retry (mechanism 2 or 3), never refinement** (`§6.10`, first bullet); only the semantic-cross-check / containerized-dry-run findings and jury/Critic verdicts feed mechanism 4.
 
 #### 6.10.2 One orchestrator-owned mechanical-validator stack
 
-The mechanical checks on **extraction output** are one stack, **owned and routed by the orchestrator** — not checks scattered inside the producing agent. The sibling layers:
+The mechanical checks on **extraction output** are one stack, **owned and routed by the orchestrator** — not checks scattered inside the producing agent. The sibling checks:
 
-- **Static schema** (Layer 1, `§6.4`) — shape, types, registry references.
+- **Static-schema validation** (`§6.4`) — shape, types, registry references.
 - **Provenance structure** — every content field carries a well-formed provenance block, and every *agent-claimed* `external_api` field carries matching tool-call evidence in the trace (`schema.md §4.9`). Framework-enriched fields (`framework_enriched: true`, written by enrichment `pipeline.md §3.2.4`) are exempt — the framework made the call, so the API-response citation is the evidence, not an agent trace entry.
 - **Grounding / search-before-claim** — identifiers with an authoritative source (CVE, MITRE, GitHub, npm) were looked up, not recalled (`schema.md §4.15`).
 
@@ -477,13 +479,13 @@ A few things deliberately outside the Validator's scope:
 - **It does not check the source blog's correctness.** If the blog itself contains technical errors, the lab will faithfully reproduce them. The system aims for fidelity to source, not source-correction.
 - **It does not enforce code style preferences.** It enforces that code parses, runs, type-checks, and matches declared interfaces. Beyond that, generated code is what it is.
 - **It does not assess whether fallback decisions per `schema.md §4.20` were reasonable.** That's the Critic's job. The Validator confirms that the resulting code is correct against the manifest's declarations, regardless of which fallback was taken.
-- **It does not run the lab against real platforms in v1.** Layer 4 (real-platform apply) is v2-deferred per `architecture.md §8.1`. In v1, real-platform validation is the user's responsibility, with `cyberlab-gen fix` mode (`pipeline.md §3.4`) for runtime issues.
+- **It does not run the lab against real platforms in v1.** The real-platform-apply pass is v2-deferred per `architecture.md §8.1`. In v1, real-platform validation is the user's responsibility, with `cyberlab-gen fix` mode (`pipeline.md §3.4`) for runtime issues.
 
 ### 6.12 Section summary
 
-The Validator runs four mechanical layers in v1 (1, 2, 3, 5); Layer 4 (real-platform apply) is deferred to v2. The Critic runs as a peer stage (not a layer within the Validator) and feeds the refinement coordinator. Cheap layers run first; expensive layers only run when cheap layers pass. Each layer has a defined failure-routing target so the refinement loop knows which agent to re-run.
+The Validator runs four mechanical passes in v1 — static-schema validation, the semantic cross-check, the containerized dry-run, and the safety scans; the real-platform-apply pass is deferred to v2. The Critic runs as a peer stage (not a pass within the Validator) and feeds the refinement coordinator. The passes run cheap-to-expensive: cheap passes run first, expensive passes only run when cheap passes pass. Each pass has a defined failure-routing target so the refinement loop knows which agent to re-run.
 
-Layer 1 (static schema) catches most generation errors at near-zero cost and enforces the `spec_kind` discriminator. Layer 2 (semantic cross-check) enforces the manifest as single source of truth and verifies the `references_lab_outputs` contract from the Planner. Layer 3 (containerized dry-run) catches runtime errors without spending platform money, with per-cloud tflint plugins for cross-cloud validator coverage, respecting per-step reproducibility. Layer 4 (real platform apply) is deferred to v2 per §6.7; in v1 real-platform validation is the user's responsibility, with `cyberlab-gen fix` mode for runtime issues. Layer 5 (safety scans) is the security boundary; it scans for credential-shaped content and whitelists matches against the canonical lab-credentials catalog (§6.8), halting the pipeline only on credential patterns that don't match canonical fakes — the one case in v1 where a generated lab does not ship.
+Static-schema validation catches most generation errors at near-zero cost and enforces the `spec_kind` discriminator. The semantic cross-check enforces the manifest as single source of truth and verifies the `references_lab_outputs` contract from the Planner. The containerized dry-run catches runtime errors without spending platform money, with per-cloud tflint plugins for cross-cloud validator coverage, respecting per-step reproducibility. The real-platform-apply pass is deferred to v2 per §6.7; in v1 real-platform validation is the user's responsibility, with `cyberlab-gen fix` mode for runtime issues. The safety scans are the security boundary; they scan for credential-shaped content and whitelist matches against the canonical lab-credentials catalog (§6.8), halting the pipeline only on credential patterns that don't match canonical fakes — the one case in v1 where a generated lab does not ship.
 
 The Validator is framework code. Its strictness, rule sets, and forbidden-pattern lists are versioned with the codebase and updated as release events. The Validator's report is auditable and persisted alongside the lab (`.cyberlab-gen/validation_report.json` machine-readable; `validation-report.md` at lab root human-readable; both include per-phase confidence from the Critic).
 

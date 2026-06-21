@@ -24,7 +24,7 @@ Design guarantees:
 - **Real vs. eval separation by location.** The store is constructed with a ``root``:
   real ``extract`` runs pass ``LocalState.runs_dir`` (``~/.cyberlab-gen/runs/``); eval
   runs pass the in-repo ``eval/reports/runs/`` directory. Same code, different pile.
-- **Room for provenance/lineage (Layer 4).** :class:`RunLineage` carries the fields a
+- **Room for provenance/lineage.** :class:`RunLineage` carries the fields a
   future lineage system needs (model, prompt/extractor version, input hash, code
   version); they are populated best-effort now and left ``None`` where not yet known.
 
@@ -110,7 +110,7 @@ class RunStatus(StrEnum):
 
 
 class RunLineage(ArtifactModel):
-    """Provenance fields tracing a run to how it was made (ADR 0039, Layer 4).
+    """Provenance fields tracing a run to how it was made (ADR 0039).
 
     Designed-for, not fully built: future phases flesh out lineage capture. Fields are
     optional and populated best-effort as they become known (the resolved model and

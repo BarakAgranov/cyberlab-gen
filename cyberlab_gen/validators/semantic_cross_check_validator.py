@@ -26,8 +26,8 @@ token. It runs deterministic checks — **no LLM, no network**.
 exist yet): the ``references_lab_outputs`` bidirectional cross-check is built as
 :func:`references_lab_outputs_findings` (returns nothing this phase; Phase 3 supplies the generated
 reference set and wires it). **There is no ``affected_platforms`` consistency check — it is moot by
-design** (not deferred): platforms are facet-derived (``schema.md §4.4``) and validated at Layer 1
-via registry membership; they *are* the ``target:*`` facets, not a separate field. ``CoreBlock``
+design** (not deferred): platforms are facet-derived (``schema.md §4.4``) and validated at the
+static-schema validation pass via registry membership; they *are* the ``target:*`` facets, not a separate field. ``CoreBlock``
 carries no ``affected_platforms`` field (and is ``extra="forbid"``), so there is no independent
 operand to cross-check and no reserved code (ADR 0094 D4 → ADR 0095; ``validation.md §6.5``
 reconciled).
@@ -197,7 +197,7 @@ class SemanticCrossCheckValidator:
         for i, facet in enumerate(manifest.facets):
             entry = self._registries.facet(facet)
             if entry is None:
-                # An unknown facet is a Layer-1 (static-schema) concern, not this layer's.
+                # An unknown facet is a static-schema concern, not this pass's.
                 continue
             for implied in entry.implies:
                 if implied not in declared:

@@ -9,8 +9,8 @@ These four catalogs (``detection_components``, ``severity_levels``,
 (``catalogs.py`` docstring): they never participate in the
 proposal lifecycle and are deliberately not part of ``MergedRegistries``. They
 are read on demand by specific consumers — the static schema validator reads them for
-reference resolution / catalog-drift detection (``validation.md §6.4``), Layer 3
-reads ``ordinal``, the Generator reads ``validator_support``.
+reference resolution / catalog-drift detection (``validation.md §6.4``), the
+containerized dry-run pass reads ``ordinal``, the Generator reads ``validator_support``.
 
 Each loader reads ``registry/<stem>.yaml`` and validates it through its
 ``catalogs.py`` container model. Like the other bundled loaders, a missing file

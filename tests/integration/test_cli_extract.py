@@ -1213,7 +1213,7 @@ def test_proposed_by_model_is_billed_ledger_model_not_spec_self_report(tmp_path:
     assert ctx.proposed_by_model == "claude-opus-4-8"  # billed, not "m"
 
 
-# --- L4/G1: persistence recovers the partial spec from the checkpoint on abort ----
+# --- checkpoint persistence / G1: persistence recovers the partial spec from the checkpoint on abort ----
 #
 # The fakes above carry an explicit ``last_state`` and so mask the real gap; these
 # drive the *real* ``PipelineExtractRunner`` (ingestion stubbed, no provider) whose
@@ -1259,7 +1259,7 @@ def test_pipeline_runner_last_state_reads_checkpoint_on_abort(
         runner.run("https://example.com/x", ledger=_ledger(None))
 
     # No clean graph return happened, so the in-memory final was never set — last_state
-    # is reconstructed from checkpoint.sqlite (the L4 fix).
+    # is reconstructed from checkpoint.sqlite (the checkpoint-persistence fix).
     state = runner.last_state
     assert state is not None
     assert state.spec is not None

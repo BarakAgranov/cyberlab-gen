@@ -25,7 +25,7 @@ The system produces two structured YAML artifacts during the pipeline. They are 
 
 The Planner is the bridge: it consumes an AttackSpec and produces a draft manifest. Some chain steps in the AttackSpec become phases. Some become steps within phases. Some become lab resources (pre-existing world state, not produced by phases). Some become manual prerequisites (`pre_lab` or `mid_lab` timing). Some become demonstration-only or get dropped because they're not lab-reproducible.
 
-**Both artifacts are versioned independently.** The schema for each evolves over time. The system records `spec_version` (integer, monotonic) and `spec_kind` (discriminator) on every artifact. The discriminator is enforced at validator Layer 1: loading an AttackSpec where a Manifest is expected (or vice versa) fails loudly with structural error.
+**Both artifacts are versioned independently.** The schema for each evolves over time. The system records `spec_version` (integer, monotonic) and `spec_kind` (discriminator) on every artifact. The discriminator is enforced at static-schema validation: loading an AttackSpec where a Manifest is expected (or vice versa) fails loudly with structural error.
 
 In practice the two schemas evolve together as a coordinated release; the independent version fields are a defensive measure to catch artifact-type mismatches loudly, not a promise to maintain divergent version histories.
 
@@ -138,14 +138,14 @@ prereqs:
 
 **`lab_role`** is a *list* of role values declaring what the resource is doing in the lab. Values:
 
-- `attack_target` — the resource is intentionally configured for the attack to exploit (e.g., a deliberately public S3 bucket, a deliberately over-permissioned IAM role). Security scanners will fire on these; Layer 3 reads `lab_role` and relaxes security-finding strictness for resources with `attack_target` in their list.
+- `attack_target` — the resource is intentionally configured for the attack to exploit (e.g., a deliberately public S3 bucket, a deliberately over-permissioned IAM role). Security scanners will fire on these; the containerized dry-run reads `lab_role` and relaxes security-finding strictness for resources with `attack_target` in their list.
 - `attacker_infrastructure` — the resource serves the attacker side of the lab (the attacker's VM, the attacker's C2 endpoint).
 - `defender_infrastructure` — the resource serves the defender side (a logging bucket where CloudTrail writes, a Sentinel workspace, a CloudWatch log group used for detection).
 - `neutral` — the resource exists in the lab but has no attack/defense role (containing VPC, networking plumbing, supporting IAM roles).
 
 A single resource can have multiple roles. A logging bucket that the attack deletes from to cover tracks is `[defender_infrastructure, attack_target]`. A CI runner the attacker uses and then escalates from is `[attacker_infrastructure, attack_target]`. An optional `role_notes` field maps each role to per-role context (e.g., `role_notes.attack_target: "Phase 4 deletes objects to cover tracks"`).
 
-Layer 3 treats security findings on a resource as informational rather than failing when the resource's `lab_role` list contains `attack_target`. Findings on resources without `attack_target` in their roles are real signals (see `validation.md §6.6`).
+The containerized dry-run treats security findings on a resource as informational rather than failing when the resource's `lab_role` list contains `attack_target`. Findings on resources without `attack_target` in their roles are real signals (see `validation.md §6.6`).
 
 Optional `discovery` block, when present, captures two discovery commands: `shortcut_command` (a fast lookup the lab uses internally, e.g., reading from Terraform output) and `attacker_command` (the realistic discovery technique an attacker would use, surfaced in docs for educational value). These are not redundant — they serve different audiences.
 
@@ -215,7 +215,7 @@ A phase block within the manifest contains:
   - For `identifier_kind: runtime_generated`: an `identifier_source` field pointing into the phase's `run_phase()` return dict (or another known output location) where the actual value will be written at runtime. The Cleanup Generator reads this at cleanup time to get the real identifier.
   - `description` — what state this is and how it was created.
 
-  Without the `identifier_kind` distinction, cleanup code would hardcode placeholder identifiers from the manifest and silently fail at runtime — orphaning resources the user pays for. Layer 2 cross-checks (`validation.md §6.5`) verify that `identifier_source` references resolve to declared phase outputs.
+  Without the `identifier_kind` distinction, cleanup code would hardcode placeholder identifiers from the manifest and silently fail at runtime — orphaning resources the user pays for. The semantic cross-check (`validation.md §6.5`) verifies that `identifier_source` references resolve to declared phase outputs.
 
 - **`implementation.language`** — `python` in v1; the field is forward-looking. Alternate languages (Go, JavaScript, Rust) are deferred to v1.5+.
 
@@ -284,7 +284,7 @@ A step block within a phase contains:
 
 **Detection enums (component, severity, format) are closed in v1.** Extended only by maintainer PR, not by agent proposal at runtime. This is intentional: these enums reflect industry-stable categories, and runtime additions would create more noise than value. Agent proposals are reserved for the open-set registries (value_types, facets, execution_contexts, thesis_types — the last added by ADR 0045). Note `external_data_sources` is **not** runtime-proposable (maintainer PR only; see §4.16 — adding a source needs adapter code), despite older wording elsewhere.
 
-**`cli_equivalent`** is an optional list of CLI commands that perform the same action as the step's programmatic implementation. Useful in docs ("to see what this step does manually, run...") and as a sanity check that the step's intent matches a known CLI invocation. **`cli_equivalent` is illustrative, not authoritative** — the docs can present it as "approximately equivalent" rather than "exactly equivalent." Layer 2 does not verify that the CLI command produces the same effect as the programmatic implementation; the field is for human readers, not validation.
+**`cli_equivalent`** is an optional list of CLI commands that perform the same action as the step's programmatic implementation. Useful in docs ("to see what this step does manually, run...") and as a sanity check that the step's intent matches a known CLI invocation. **`cli_equivalent` is illustrative, not authoritative** — the docs can present it as "approximately equivalent" rather than "exactly equivalent." The semantic cross-check does not verify that the CLI command produces the same effect as the programmatic implementation; the field is for human readers, not validation.
 
 **`tradecraft_notes`** — fine-grained "how" details about the attacker's choices within a step. Each note has an optional `name` (kebab-case, for cross-blog matching), a description, and optional `evades_what`. Tradecraft is not a registry — names are author-chosen and may collide. **Soft naming convention:** prefix names with the phase's primary `target:*` facet category, so `aws:anonymous-listing` and `github:anonymous-listing` aggregate cleanly without spurious collisions. The convention is soft (not enforced structurally) but the Extractor's prompt and the Docs Generator's prompt both apply it. Telemetry, when users submit, aggregates by prefixed name across runs to inform future schema decisions.
 
@@ -492,7 +492,7 @@ The `requires_user_confirmation` flag is set by the **framework** (never by agen
 
 Fields with `requires_user_confirmation: true` surface in the post-Extractor and post-Planner interrupts (`pipeline.md §3.2.5` and `§3.2.8`) as a per-field review surface, alongside the artifact-level review, the per-proposal review, and the material-discrepancy review. In `--auto` mode, fields with the flag set are listed in the run report but do not interrupt; auto-mode users have already accepted the trade-off between attention cost and review completeness.
 
-The default is `false`. Agents do not set this field on their own outputs; the framework sets it after agent output passes Layer 1 validation, by inspecting source/confidence and the framework's decision-shaping heuristics. Layer 2 cross-checks may also set the flag based on cross-block consistency findings (e.g., a phase that uses a value type only declared at low confidence).
+The default is `false`. Agents do not set this field on their own outputs; the framework sets it after agent output passes static-schema validation, by inspecting source/confidence and the framework's decision-shaping heuristics. The semantic cross-check may also set the flag based on cross-block consistency findings (e.g., a phase that uses a value type only declared at low confidence).
 
 #### Discriminator: structural vs. content fields
 
@@ -533,7 +533,7 @@ The provenance pattern means the system's output is **auditable end-to-end**. Ev
 
 #### Refinement addressing: field paths and patches
 
-Refinement (`architecture.md §1.7`) edits the AttackSpec by **field path**, never by re-emitting the whole artifact. Every field is addressable by a dotted/indexed path (e.g. `chain[2].technique`, `cleanup.summary`). The structured findings that drive refinement carry that address: jury field-level feedback as `{field_path, problem, suggested_fix}`, and a mechanical Layer 1 finding as `{code, location, detail}` whose `location` is the same kind of path.
+Refinement (`architecture.md §1.7`) edits the AttackSpec by **field path**, never by re-emitting the whole artifact. Every field is addressable by a dotted/indexed path (e.g. `chain[2].technique`, `cleanup.summary`). The structured findings that drive refinement carry that address: jury field-level feedback as `{field_path, problem, suggested_fix}`, and a mechanical static-schema finding as `{code, location, detail}` whose `location` is the same kind of path.
 
 On a `revise`, the responsible agent returns a **patch** — new `{value, source, citations, …}` provenance subtrees for *only* the named field paths. The framework deep-sets the patch onto a copy of the prior AttackSpec and re-validates the result under the normal strictness rules (§4.17). Because only flagged paths are written, every unflagged field — value and provenance alike — is byte-identical to the prior spec; this is why refinement is **convergent by construction** (a patch cannot regress a field nobody flagged). Inline provenance survives a patch unchanged: a patched field carries the agent's new provenance, an untouched field keeps its original `source` and citations.
 
@@ -578,7 +578,7 @@ These are the registries the Extractor and Planner can propose into at runtime (
 - **Detection components, severity levels, detection formats** (see §4.7).
 - **Provisioning mechanisms** (see §4.5).
 - **Execution contexts** — open-set in spirit (Planner can propose), but new entries are rare; mostly maintainer-curated.
-- **`registry/lab_credentials.yaml`** — canonical fake-credential patterns per platform (e.g., AWS `AKIAIOSFODNN7EXAMPLE`, GitHub `ghp_test_*` prefix). Read by the Generator (for planting fakes in lab content) and by Validator Layer 5 (for whitelisting). Maintainer-curated; agents do not propose into it. See `validation.md §6.8`.
+- **`registry/lab_credentials.yaml`** — canonical fake-credential patterns per platform (e.g., AWS `AKIAIOSFODNN7EXAMPLE`, GitHub `ghp_test_*` prefix). Read by the Generator (for planting fakes in lab content) and by the Validator's safety scans (for whitelisting). Maintainer-curated; agents do not propose into it. See `validation.md §6.8`.
 
 v1.5+ may promote some of these to first-class registries if usage patterns warrant.
 
@@ -638,12 +638,12 @@ Facets are organized into three **categories**: `target`, `runtime`, `lab_class_
 
 **`runtime:*`** — what the lab provisions and runs against. **Open-set with `first_class` flag**:
 
-- **First-class runtimes in v1**: `runtime:aws`, `runtime:azure`, `runtime:gcp`, `runtime:github`. Code paths exist for per-platform validator coverage (when Layer 4 returns in v2), credential check conventions, and cleanup specifics. Each first-class runtime entry has `first_class: true`.
+- **First-class runtimes in v1**: `runtime:aws`, `runtime:azure`, `runtime:gcp`, `runtime:github`. Code paths exist for per-platform validator coverage (when the real-platform apply pass returns in v2), credential check conventions, and cleanup specifics. Each first-class runtime entry has `first_class: true`.
 - **Best-effort runtimes**: Planner can propose new runtime entries at runtime via standard proposal flow (e.g., `runtime:cloudflare`, `runtime:vercel`, `runtime:local`). Proposed entries are `first_class: false` by default; labs ship best-effort with honest coverage flags.
 
 Labs targeting multiple platforms simply declare multiple `runtime:*` facets (e.g., `runtime:aws` + `runtime:github`); there is no separate "multi" facet. The fact that a lab is multi-platform is derived from the count.
 
-Promotion from best-effort to first-class is a maintainer-PR activity (requires code: Layer 4 verification logic when available in v2, per-platform credential check conventions, etc.); see `architecture.md §8.2`. **Planner proposes** (lab-derived).
+Promotion from best-effort to first-class is a maintainer-PR activity (requires code: real-platform apply verification logic when available in v2, per-platform credential check conventions, etc.); see `architecture.md §8.2`. **Planner proposes** (lab-derived).
 
 **Note — `platform:*` is not a facet.** `platform:*` (e.g. `platform:kubernetes`, `platform:github`) is an *eval-coverage* label used only in the blog-set manifest and walk §14 for breadth counting (`eval.md §7.3`); it is not a facet, has no registry entry, and is proposed by no agent. For the attack surface under test, use `target:*`.
 
@@ -673,9 +673,9 @@ Promotion from best-effort to first-class is a maintainer-PR activity (requires 
     Use this when the attack targets Entra ID specifically (not just Azure subscription resources).
 ```
 
-**`implies` is consumed by the Validator's Layer 2 cross-checks** (`validation.md §6.5`): if the manifest declares `target:eks`, the Validator confirms that `target:aws` and `target:kubernetes` are also declared. Missing implied facets are *flagged as findings* — the Validator does not mutate the manifest. The refinement coordinator routes the finding to the Planner, which adds the missing facets in the next iteration (preserving the framework-only-authorship discipline; the Validator stays read-only).
+**`implies` is consumed by the Validator's semantic cross-check** (`validation.md §6.5`): if the manifest declares `target:eks`, the Validator confirms that `target:aws` and `target:kubernetes` are also declared. Missing implied facets are *flagged as findings* — the Validator does not mutate the manifest. The refinement coordinator routes the finding to the Planner, which adds the missing facets in the next iteration (preserving the framework-only-authorship discipline; the Validator stays read-only).
 
-**`incompatible_with`** declares facet pairings that contradict each other (e.g., `runtime:aws` is incompatible with hypothetical `target:on_prem_only`). Layer 2 enforces.
+**`incompatible_with`** declares facet pairings that contradict each other (e.g., `runtime:aws` is incompatible with hypothetical `target:on_prem_only`). The semantic cross-check enforces.
 
 Facets do not encode behavior directly. They are declarations consumed by downstream agents and validators. The `lab_class_signal:manual_prereq` facet, for example, tells the Validator to expect a `prereqs` block; tells the Docs Generator to generate a "Prerequisites" section; tells the Lab-level Generator to emit prereq-checking logic in `setup.sh`. Facets are how the schema stays composable.
 
@@ -870,7 +870,7 @@ Once a lab is generated:
 - The lab directory contains only the manifest, code, IaC, scripts, and docs.
 - The lab does not invoke cyberlab-gen at runtime. It does not load the registry at runtime. It does not depend on any overlay entry being present.
 - The user can later remove an auto-accepted entry from `~/.cyberlab-gen/registry-overlay/` without affecting any lab that was generated using it. The lab still runs fine.
-- The only consequence of removing an overlay entry is that **re-running `cyberlab-gen validate <lab-dir>`** (a rare operation, primarily for CI) against that lab will fail at Layer 1 because the manifest references a registry name no longer present. This is the same path as schema-version mismatch (`architecture.md §0.6`); the user gets a clear "regenerate from blog URL" or "restore the registry entry" message.
+- The only consequence of removing an overlay entry is that **re-running `cyberlab-gen validate <lab-dir>`** (a rare operation, primarily for CI) against that lab will fail at static-schema validation because the manifest references a registry name no longer present. This is the same path as schema-version mismatch (`architecture.md §0.6`); the user gets a clear "regenerate from blog URL" or "restore the registry entry" message.
 
 This decoupling is what makes auto-acceptance safe. The system is not committing the user to anything they can't undo — they can audit and prune the overlay at leisure without breaking labs they've already generated.
 

@@ -83,22 +83,24 @@ The rotation cadence is roughly per-minor-release. Major releases may rotate mor
 
 The harness records the following metrics per eval run, per blog. These are **objective and reproducible up to model non-determinism** (see §7.6). They form the spine of the harness's reporting.
 
-**The harness reads these from the pipeline's own emitted run record — it does not recompute them.** The pipeline already runs the mechanical layers and emits its verdicts (e.g. the static-schema Layer-1 verdict, computed *with* the run's provisional-proposals context); the harness *measures pipeline output*. Re-running a validator outside the pipeline would risk a different result — e.g. a Layer-1 false failure from not re-applying the run's provisional proposals (`schema.md §4.16`) — so measurement reads pipeline truth, it never re-derives it. (This matches the `architecture.md §1.8` framing: the harness is a *peer that measures* the pipeline, not a second implementation of its checks.)
+**The harness reads these from the pipeline's own emitted run record — it does not recompute them.** The pipeline already runs the mechanical layers and emits its verdicts (e.g. the static-schema verdict, computed *with* the run's provisional-proposals context); the harness *measures pipeline output*. Re-running a validator outside the pipeline would risk a different result — e.g. a static-schema false failure from not re-applying the run's provisional proposals (`schema.md §4.16`) — so measurement reads pipeline truth, it never re-derives it. (This matches the `architecture.md §1.8` framing: the harness is a *peer that measures* the pipeline, not a second implementation of its checks.)
 
-#### Validator pass rates (per layer)
+#### Validator pass rates (per pass)
 
-- Layer 1 (schema): pass / fail.
-- Layer 2 (semantic): pass / pass-with-warnings / fail.
-- Layer 3 (dry-run): pass / fail, with per-tool breakdown (ruff, mypy, terraform plan, tflint, tfsec, shellcheck).
-- Layer 4 (real platform apply): **always `skipped: v2-deferred` in v1** (per `validation.md §6.7`). The metric is preserved in the report structure for v2 compatibility.
-- Layer 5 (safety scans): pass / fail, severity counts.
+Listed in the order the passes run (cheap→expensive). Report keys are descriptive (e.g. `static_schema`, `semantic_cross_check`), never `layer_N`.
+
+- Static-schema validation: pass / fail.
+- Semantic cross-check: pass / pass-with-warnings / fail.
+- Containerized dry-run: pass / fail, with per-tool breakdown (ruff, mypy, terraform plan, tflint, tfsec, shellcheck).
+- Real-platform apply: **always `skipped: v2-deferred` in v1** (per `validation.md §6.7`). The metric is preserved in the report structure so v2 adds the pass without renumbering.
+- Safety scans: pass / fail, severity counts.
 
 #### Cost per lab
 
 - LLM tokens per agent (Extractor, Planner, per-phase Generator, Lab-level, Cleanup, Docs, Critic, Juries).
 - LLM dollars per agent (per-model, per `pipeline.md §3.5` cost tracking).
 - Total LLM dollars.
-- Cloud platform dollars: always zero in v1 (Layer 4 v2-deferred). Metric preserved in the report structure for v2 compatibility.
+- Cloud platform dollars: always zero in v1 (real-platform apply is v2-deferred). Metric preserved in the report structure for v2 compatibility.
 - Wall-clock time.
 
 #### Structural completeness
@@ -175,7 +177,7 @@ Per `architecture.md §1.7`, the refinement loop's stopping strategy is pluggabl
 
 1. **Fixed-N iterations.** Stop after a configured number of refinement iterations regardless of state. Baseline.
 2. **Score plateau.** Stop when the combined validator+critic score's improvement is below threshold for K consecutive iterations. Adaptive.
-3. **Validator+Critic verdict.** Stop *positively* when the Validator passes (no Layer 1/2/3/5 findings above threshold) and the Critic's verdict is `approve`. Goal-oriented.
+3. **Validator+Critic verdict.** Stop *positively* when the Validator passes (no static-schema, semantic cross-check, containerized dry-run, or safety-scan findings above threshold) and the Critic's verdict is `approve`. Goal-oriented.
 
 **Positive-stop vs. negative-end-conditions.** These strategies define *when to stop happily*. Negative end-conditions (refinement budget exhausted, abandonment) are handled by the coordinator regardless of strategy choice (`pipeline.md §3.2.12`): on budget exhaustion, the best snapshot ships with flags; true abandonment (no coherent artifact produced) does not ship.
 
@@ -183,7 +185,7 @@ The harness compares strategies by running the same blogs through the same pipel
 
 - Quality (mechanical pass rates + Critic scores) per strategy.
 - Cost (LLM dollars, iterations) per strategy.
-- Cost-per-quality ratio: how much each strategy spends per unit of quality achieved. **Quality is computed as a composite** of Validator pass rates (weighted by layer importance — Layer 1 and 2 weighted highest as foundational; Layer 3 weighted middle; Layer 5 weighted highest for the security-boundary failures, low for medium-severity findings) and the Critic's overall score. The harness reports both the raw components and the composite; strategy comparison uses the composite as the denominator. The exact weights are a v1 placeholder pending eval-harness data; they're declared in the harness configuration alongside the strategy choices.
+- Cost-per-quality ratio: how much each strategy spends per unit of quality achieved. **Quality is computed as a composite** of Validator pass rates (weighted by pass importance — static-schema and semantic cross-check weighted highest as foundational; containerized dry-run weighted middle; safety scans weighted highest for the security-boundary failures, low for medium-severity findings) and the Critic's overall score. The harness reports both the raw components and the composite; strategy comparison uses the composite as the denominator. The exact weights are a v1 placeholder pending eval-harness data; they're declared in the harness configuration alongside the strategy choices.
 
 The eval harness's findings inform default-strategy selection, but the user can override via config. Different stopping strategies may suit different user contexts (CI quick-check vs. one-shot careful generation).
 
@@ -206,7 +208,7 @@ This is the structural protection against parameter overfitting: held-out is the
 Per `pipeline.md §3.6`, users may opt into telemetry submission. Aggregated telemetry surfaces patterns the curated set may not represent:
 
 - Blogs that consistently produce low-completeness AttackSpecs **relative to the configured completeness floor** (per `agents.md §5.4`). "Low" means below floor, not below an absolute number — what counts as low depends on the floor calibrated for that release.
-- Phases that consistently fail Layer 2 cross-checks (suggests manifest schema needs refinement).
+- Phases that consistently fail the semantic cross-check (suggests manifest schema needs refinement).
 - `unknown_from_blog.reason` values that recur across many users (suggests a missing registry entry or a Researcher-stage seam — see `pipeline.md §3.2.2` and `architecture.md §8.2`).
 - Cost outliers (blogs that spend 5x average; suggests refinement-loop oscillation patterns the coordinator missed).
 
@@ -267,7 +269,7 @@ The harness integrates with CI as follows:
 
 - Run a deeper N=5 evaluation on a **subset** of curated-set blogs — the most representative blogs per coverage dimension. Periodic runs cover **narrower coverage more deeply** (N=5 on a subset, for stronger signal on the most representative blogs). This complements release-candidate runs: release candidates test breadth; periodic runs test depth.
 - Track long-term trends.
-- Layer 4 (real platform apply) is v2-deferred per `validation.md §6.7`; in v2, periodic CI will run Layer 4 against dedicated cyberlab-gen-eval accounts per platform. **v1 periodic runs are static-layers-only.**
+- Real-platform apply is v2-deferred per `validation.md §6.7`; in v2, periodic CI will run the real-platform-apply pass against dedicated cyberlab-gen-eval accounts per platform. **v1 periodic runs are static-passes-only.**
 
 The CI thresholds are configurable per repo policy. The defaults above are starting points; they tune based on the noise floor observed in the first months of operation.
 
@@ -276,10 +278,10 @@ The CI thresholds are configurable per repo policy. The defaults above are start
 A few things deliberately outside scope:
 
 - **It does not assess the value of generated labs to actual learners.** Pedagogical effectiveness requires human user studies, which are out of scope for a single-user OSS tool. The harness measures fidelity, completeness, and mechanical correctness as proxies, with honest framing about the limitation.
-- **It does not run continuous Layer 4.** Layer 4 (real-platform apply) is v2-deferred per `validation.md §6.7` and `architecture.md §8.1`. In v1, the harness validates statically; the user runs labs against real platforms themselves.
+- **It does not run continuous real-platform apply.** The real-platform-apply pass is v2-deferred per `validation.md §6.7` and `architecture.md §8.1`. In v1, the harness validates statically; the user runs labs against real platforms themselves.
 - **It does not provide a leaderboard or ranking against other tools.** cyberlab-gen has no peer tools at v1; comparison frameworks across tools are speculative and out of scope.
 - **It does not protect against deliberate adversarial contamination.** A maintainer could cherry-pick the held-out set, hand-tune to it, and ship. The architecture's defenses against this are: rotation visibility in commit history, public blog list (so contamination is auditable), and the social practice of contributor review. None of these are cryptographic guarantees.
-- **It does not certify safety.** Layer 5 of the Validator catches accidents (against the canonical lab-credentials catalog per `validation.md §6.8`); the Critic catches drift; scope (`architecture.md §0.2`) is the primary defense. The harness measures these mechanisms' effectiveness over time but does not certify the lab is safe to run. The harness *does* track Layer 5 finding rates over time to detect drift in the system's accident-prevention behavior — drift in finding rate indicates that the system is producing different-shape output than before, which may warrant investigation. The user takes responsibility when running the lab against their own systems; `cyberlab-gen fix` mode (`pipeline.md §3.4`) provides assistance with runtime issues.
+- **It does not certify safety.** The Validator's safety scans catch accidents (against the canonical lab-credentials catalog per `validation.md §6.8`); the Critic catches drift; scope (`architecture.md §0.2`) is the primary defense. The harness measures these mechanisms' effectiveness over time but does not certify the lab is safe to run. The harness *does* track safety-scan finding rates over time to detect drift in the system's accident-prevention behavior — drift in finding rate indicates that the system is producing different-shape output than before, which may warrant investigation. The user takes responsibility when running the lab against their own systems; `cyberlab-gen fix` mode (`pipeline.md §3.4`) provides assistance with runtime issues.
 
 ### 7.13 The harness's own evolution
 

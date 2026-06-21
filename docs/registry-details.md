@@ -249,7 +249,7 @@ The v1 seed covers value types that recur across the four first-class platforms 
   notes_for_generator: |
     Used both as input (the policy being attached) and as output (the policy
     being inspected during reconnaissance). Avoid Resource:"*" Action:"*" outside
-    of attack_target resources — Layer 3 will flag them as security findings
+    of attack_target resources — the containerized dry-run will flag them as security findings
     even though they may be intentional for the lab.
   platforms: [aws]
 
@@ -1147,7 +1147,7 @@ The `category` field discriminates which agent proposes the facet:
   implies: []
   notes_for_planner: |
     Lab-derived. The Planner declares this when generating provisioning that targets AWS.
-    Declares first-class Layer 4 verification coverage when v2 ships.
+    Declares first-class real-platform-apply verification coverage when v2 ships.
 
 - name: runtime:azure
   category: runtime
@@ -1329,7 +1329,7 @@ Reintroducing the relevant facet category alongside its consuming code (defender
 
 ### 4.1 Entry shape
 
-Per `schema.md §4.14`. Every field below is non-optional unless marked; the meta-schema is enforced at Layer 1.
+Per `schema.md §4.14`. Every field below is non-optional unless marked; the meta-schema is enforced by static-schema validation.
 
 ```yaml
 - id: nvd
@@ -1665,7 +1665,7 @@ Adding any of these is a maintainer PR plus code changes (new auth handling, res
 
 ### 5.1 Entry shape
 
-Entries use the `StaticCatalogEntry` Pydantic shape (`schema-details.md §6.3`), which shares its common fields with `ExternalDataSourceEntry` via a private base but: omits `enrichment_triggers` and `discrepancy_materiality_rules` (consulted on-demand, not enrichment-triggered); replaces `notes_for_extractor` with `notes_for_generator` (the Generator is the consumer for static catalogs, not the Extractor). The two classes are mechanically distinct under `extra="forbid"` — a static_catalogs entry with `enrichment_triggers` fails Layer 1; an external_data_sources entry with `notes_for_generator` likewise.
+Entries use the `StaticCatalogEntry` Pydantic shape (`schema-details.md §6.3`), which shares its common fields with `ExternalDataSourceEntry` via a private base but: omits `enrichment_triggers` and `discrepancy_materiality_rules` (consulted on-demand, not enrichment-triggered); replaces `notes_for_extractor` with `notes_for_generator` (the Generator is the consumer for static catalogs, not the Extractor). The two classes are mechanically distinct under `extra="forbid"` — a static_catalogs entry with `enrichment_triggers` fails static-schema validation; an external_data_sources entry with `notes_for_generator` likewise.
 
 ### 5.2 v1 entries
 
@@ -1897,7 +1897,7 @@ These are not really "registries" in the proposal-flow sense; they're enumerated
   ordinal: 1
 ```
 
-The `ordinal` field exists for cross-severity comparison (e.g., the validator's "severity floor" rules in Layer 3).
+The `ordinal` field exists for cross-severity comparison (e.g., the validator's "severity floor" rules in the containerized dry-run).
 
 ### 7.3 `detection_formats`
 
@@ -1973,7 +1973,7 @@ The `ordinal` field exists for cross-severity comparison (e.g., the validator's 
 **Path:** `registry/lab_credentials.yaml`
 **Closed enum, maintainer-curated.** Per `schema.md §4.11`, `validation.md §6.8`.
 
-The canonical fake-credential patterns the Generator may plant in lab content and the Validator (Layer 5) whitelists.
+The canonical fake-credential patterns the Generator may plant in lab content and the Validator's safety scans whitelist.
 
 ```yaml
 - id: aws_test_access_key
@@ -2026,7 +2026,7 @@ The canonical fake-credential patterns the Generator may plant in lab content an
   whitelist_rationale: "All-zeros UUID is a widely-used documented placeholder; production UUIDs are never all-zeros."
 ```
 
-Layer 5's behavior: a string in generated lab content matching a real-credential pattern (e.g., a real `AKIA...` value, a real `ghp_...` token without the `_test_` segment) is a finding. The same string matching one of the whitelist patterns above is benign — the Generator deliberately planted a canonical fake.
+The safety scans' behavior: a string in generated lab content matching a real-credential pattern (e.g., a real `AKIA...` value, a real `ghp_...` token without the `_test_` segment) is a finding. The same string matching one of the whitelist patterns above is benign — the Generator deliberately planted a canonical fake.
 
 ### 7.6 `thesis_types`
 
@@ -2075,7 +2075,7 @@ Deliberately out of scope, deferred to other places:
 
 - **The full universe of value_types.** This is open-set on purpose. The seed represents what ships, not what the system will accumulate.
 - **The exact JSON Schemas of API response shapes** (e.g., `nvd_cve_response_v2`). These belong with the adapter implementation in `cyberlab_gen/external_data_sources/` and are not appropriate for a registry document.
-- **Layer 5 pattern rules beyond `lab_credentials`.** Real-credential pattern matching (the `AKIA...` regex applied to outputs, etc.) lives in `validator-rules.md` (planned).
+- **Safety-scan pattern rules beyond `lab_credentials`.** Real-credential pattern matching (the `AKIA...` regex applied to outputs, etc.) lives in `validator-rules.md` (planned).
 - **The MITRE ATT&CK technique catalog itself.** The bundled MITRE seed at `registry/mitre_attack_techniques.yaml` is downloaded/reference data, not authored content.
 
 ---

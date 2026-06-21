@@ -48,15 +48,15 @@ class PlanEvalReport(ArtifactModel):
     records: list[PlanRunRecord] = Field(default_factory=list[PlanRunRecord])
     skipped: list[SkippedBlog] = Field(default_factory=list[SkippedBlog])
 
-    def overall_layer2_pass_rate(self) -> float:
-        """Semantic-cross-check (Layer-2) pass rate across every run (``implementation-plan.md §5.5``).
+    def overall_semantic_cross_check_pass_rate(self) -> float:
+        """Semantic cross-check pass rate across every run (``implementation-plan.md §5.5``).
 
-        The exit criterion is ">=90% of curated runs pass Layer 1 + Layer 2"; a run counts when its
-        emitted manifest cleared the cross-check gate.
+        The exit criterion is ">=90% of curated runs pass the static-schema and semantic-cross-check
+        passes"; a run counts when its emitted manifest cleared the cross-check gate.
         """
         if not self.records:
             return 0.0
-        return sum(1 for r in self.records if r.layer2_passed) / len(self.records)
+        return sum(1 for r in self.records if r.semantic_cross_check_passed) / len(self.records)
 
     def blogs_planned(self) -> int:
         """Count of blogs that shipped a manifest in *every* run.

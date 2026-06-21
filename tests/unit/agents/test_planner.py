@@ -155,8 +155,8 @@ async def test_plan_returns_structurally_valid_manifest() -> None:
     assert result.outcome is PlanOutcome.PLANNED
     manifest = result.manifest
     assert manifest is not None  # PLANNED carries a manifest (the PlanAttempt validator guarantees)
-    # The available "Layer-1" for a manifest this phase is structural validity + round-trip
-    # (full manifest Layer-1/Layer-2 lands in Task 5/6). It must survive a re-validate and a
+    # The available "static-schema" check for a manifest this phase is structural validity + round-trip
+    # (full manifest static-schema / semantic cross-check lands in Task 5/6). It must survive a re-validate and a
     # YAML round-trip to an equal instance.
     assert LabManifest.model_validate(manifest.model_dump(mode="json", by_alias=True)) == manifest
     assert LabManifest.from_yaml(manifest.to_yaml()) == manifest

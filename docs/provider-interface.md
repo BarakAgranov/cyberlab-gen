@@ -140,7 +140,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 T_Output = TypeVar("T_Output", bound=BaseModel)
 # Note: T_Output must be a Pydantic BaseModel. Agents that need to produce
 # a primitive (str, int) or list output wrap it in a Pydantic envelope class
-# (e.g., class ItemList(BaseModel): items: list[str]). This keeps Layer 1
+# (e.g., class ItemList(BaseModel): items: list[str]). This keeps static-schema
 # validation uniform and lets pyright track shapes end-to-end.
 
 

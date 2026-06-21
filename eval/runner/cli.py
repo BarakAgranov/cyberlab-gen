@@ -399,7 +399,7 @@ def _main_plan(manifest: BlogSetManifest, *, blog: str | None, blog_ids: list[st
     print(  # noqa: T201 # pragma: no cover
         f"eval(plan): ran {report.runs_per_blog} run(s) x {len(report.blog_ids)} blog(s)"
         f"{f' ({len(report.skipped)} skipped)' if report.skipped else ''}; "
-        f"layer-2 pass rate {report.overall_layer2_pass_rate():.0%}; "
+        f"semantic cross-check pass rate {report.overall_semantic_cross_check_pass_rate():.0%}; "
         f"planned blogs {report.blogs_planned()}/{len(report.blog_ids)}; "
         f"route-backs {report.total_route_backs()}; archived to {path}"
     )

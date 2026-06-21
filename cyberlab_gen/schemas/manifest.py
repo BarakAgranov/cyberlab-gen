@@ -148,7 +148,7 @@ class InputBlock(ArtifactModel):
     name: SnakeName
     type: ValueTypeName
     source: InputSource
-    # Open-shape: validated structurally against the value-type's JSON Schema at Layer 1.
+    # Open-shape: validated structurally against the value-type's JSON Schema at static-schema validation.
     # ANN401 fires only on function signatures, not Pydantic field annotations.
     default: Any | None = None
     description: NonEmptyString | None = None
@@ -178,7 +178,7 @@ class LabResourceBlock(ArtifactModel):
     """Pre-existing world state the lab provisions. schema.md §4.4; schema-details.md §5.4.
 
     ``lab_role`` is a non-empty list; a resource can play several roles at once
-    (e.g. ``[defender_infrastructure, attack_target]``). Layer 3 relaxes
+    (e.g. ``[defender_infrastructure, attack_target]``). The containerized dry-run relaxes
     security-finding strictness on resources whose roles include ``attack_target``.
     """
 
@@ -217,8 +217,8 @@ class ProducesWorldState(ArtifactModel):
 
     The ``identifier_kind`` discrimination is critical for cleanup correctness:
     a ``static`` name carries ``identifier``; a ``runtime_generated`` name carries
-    ``identifier_source`` pointing into the phase's declared outputs (Layer 2
-    resolves it). The XOR prevents cleanup code from orphaning resources.
+    ``identifier_source`` pointing into the phase's declared outputs (the semantic
+    cross-check resolves it). The XOR prevents cleanup code from orphaning resources.
     """
 
     type: ValueTypeName
@@ -246,14 +246,14 @@ class PhaseImplementation(ArtifactModel):
     """Where the phase's code lives. schema.md §4.5; schema-details.md §5.5; ADR 0079.
 
     ``path`` is **optional** because the manifest is one incrementally-built model
-    (``architecture.md §1.1`` rejects a draft/final split) and Layer 1 runs after
+    (``architecture.md §1.1`` rejects a draft/final split) and static-schema validation runs after
     every stage: the Planner emits a skeleton phase with **no code and no path**
     (``agents.md §5.7``), so a required ``path`` would fail the Planner's own
-    Layer-1 validation. The honest invariant is ``path`` ⟺ file: a skeleton has
+    static-schema validation. The honest invariant is ``path`` ⟺ file: a skeleton has
     neither; the Per-phase Generator (Phase 3) materializes the file and the path
     together via the ``id`` → path derivation (``agents.md §9.4``).
 
-    TODO(phase-3): Layer 2 (post-generation) is the enforcement seam — it checks
+    TODO(phase-3): the semantic cross-check (post-generation) is the enforcement seam — it checks
     ``path == derive(id)`` and that the file exists. Do not enforce here.
     """
 
@@ -276,7 +276,7 @@ class StepBlock(ArtifactModel):
 
     Manifest-side step (the Generator's unit of implementation), distinct from
     the AttackSpec's narrative ``ChainStep``. ``cli_equivalent`` is illustrative;
-    Layer 2 does not verify equivalence.
+    the semantic cross-check does not verify equivalence.
 
     ``reproducibility`` is the per-step tier the Planner carries forward
     *unchanged* from the ``ChainStep`` this step implements (``architecture.md

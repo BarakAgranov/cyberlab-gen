@@ -128,7 +128,7 @@ class StderrPlanEvalProgress:
         cost_so_far: Decimal,
         cost_cap_usd: Decimal | None = None,
     ) -> None:
-        layer2 = "pass" if record.layer2_passed else "FAIL"
+        cross_check = "pass" if record.semantic_cross_check_passed else "FAIL"
         if cost_cap_usd is not None:
             spend = (
                 f"${cost_so_far:.4f}/${cost_cap_usd} (headroom ${cost_cap_usd - cost_so_far:.4f})"
@@ -144,7 +144,7 @@ class StderrPlanEvalProgress:
         self._emit(
             f"      {record.blog_id} run {record.run_index + 1}/{n} done: "
             f"status={status_label}, "
-            f"layer2={layer2}, shipped={record.shipped}, "
+            f"cross_check={cross_check}, shipped={record.shipped}, "
             f"coverage={record.manifest_field_coverage:.0%}, cost so far {spend}"
         )
 

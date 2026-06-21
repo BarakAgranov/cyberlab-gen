@@ -96,8 +96,8 @@ def read_latest_pipeline_state(db_path: Path) -> PipelineState | None:
     checkpoint the LangGraph checkpointer already wrote, **not** from an in-memory
     field that is only set on a clean graph return. A mid-graph abort never produces a
     clean return, so reading the checkpoint is what stops the partial ``AttackSpec``
-    from being dropped (the L4 bug: a spec already in ``checkpoint.sqlite`` that
-    ``run.json`` never listed).
+    from being dropped (the lost-partial-spec-on-abort bug: a spec already in
+    ``checkpoint.sqlite`` that ``run.json`` never listed).
 
     Returns the latest state across every thread in the file (interactive feedback
     re-runs each get a fresh thread; the newest checkpoint is the run's latest reached

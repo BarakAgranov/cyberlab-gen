@@ -118,7 +118,7 @@ def test_record_from_shipped_run_reads_manifest_metrics() -> None:
         halt_reason="shipped with unresolved jury feedback",
     )
     assert rec.shipped is True
-    assert rec.layer2_passed is True
+    assert rec.semantic_cross_check_passed is True
     assert rec.route_back is False
     assert rec.lab_level is ReproducibilityLabLevel.MIXED
     assert rec.repro_distribution.full == 1
@@ -142,14 +142,14 @@ def test_record_from_route_back_has_no_manifest_metrics() -> None:
         halt_reason="AttackSpec incoherent",
     )
     assert rec.shipped is False
-    assert rec.layer2_passed is False  # never reached the cross-check gate
+    assert rec.semantic_cross_check_passed is False  # never reached the cross-check gate
     assert rec.route_back is True
     assert rec.lab_level is None
     assert rec.manifest_field_coverage == 0.0
     assert rec.repro_distribution.total == 0
 
 
-def test_record_cross_check_halt_is_layer2_fail() -> None:
+def test_record_cross_check_halt_is_cross_check_fail() -> None:
     rec = record_from_plan_run(
         blog_id="b",
         run_index=0,
@@ -159,7 +159,7 @@ def test_record_cross_check_halt_is_layer2_fail() -> None:
         facet_proposals=0,
     )
     assert rec.shipped is False
-    assert rec.layer2_passed is False
+    assert rec.semantic_cross_check_passed is False
 
 
 # --- aggregation (eval.md §7.6) --------------------------------------------
@@ -176,7 +176,7 @@ def test_aggregate_rates_and_means() -> None:
     agg = PlanBlogAggregate.from_runs("b", runs)
     assert agg.runs == 3
     assert agg.shipped_count == 2
-    assert abs(agg.layer2_pass_rate - 2 / 3) < 1e-9
+    assert abs(agg.semantic_cross_check_pass_rate - 2 / 3) < 1e-9
     assert agg.mean_cost_usd == Decimal("0.20")
     # two shipped runs classified the same lab-level (FULL by default).
     assert agg.lab_level_distribution == {ReproducibilityLabLevel.FULL: 2}

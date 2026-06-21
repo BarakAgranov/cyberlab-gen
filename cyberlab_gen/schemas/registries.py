@@ -264,7 +264,7 @@ class LabCredentialEntry(ArtifactModel):
     """Entry in the ``lab_credentials`` registry.
 
     Canonical fake-credential patterns the Generator may plant and
-    Validator Layer 5 whitelists. ``schema.md §4.11``,
+    the safety-scan pass whitelists. ``schema.md §4.11``,
     ``validation.md §6.8``.
     """
 

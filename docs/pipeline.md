@@ -213,12 +213,12 @@ The Generator stage is four agent types running in a specific order:
 
 **Per-phase Generator behavior on missing value types.** Per-phase Generators have read-only access to value types; they cannot propose new ones. If a Per-phase Generator finds itself needing a value type not in the manifest, it fails the stage with `missing_value_type` error; the refinement coordinator routes back to the Planner (or further upstream to the Extractor if the type wasn't in the AttackSpec).
 
-**Cross-phase coupling rules.** No phase's Terraform may reference another phase's Terraform directly. Cross-phase data flow goes through declared phase outputs in the manifest. Per-phase IaC references lab-level state via `data "terraform_remote_state"` (or equivalent for non-Terraform mechanisms). The Validator's Layer 2 verifies this contract (`validation.md §6.5`).
+**Cross-phase coupling rules.** No phase's Terraform may reference another phase's Terraform directly. Cross-phase data flow goes through declared phase outputs in the manifest. Per-phase IaC references lab-level state via `data "terraform_remote_state"` (or equivalent for non-Terraform mechanisms). The Validator's semantic cross-check verifies this contract (`validation.md §6.5`).
 
 **Failure modes.**
-- Per-phase Generator emits code that doesn't implement a declared step → Validator Layer 2 catches.
-- Per-phase Generator hallucinates a cloud API → Validator Layer 3 catches via the per-cloud catalog.
-- IaC references a missing lab-level output → Validator Layer 2 catches.
+- Per-phase Generator emits code that doesn't implement a declared step → the Validator's semantic cross-check catches.
+- Per-phase Generator hallucinates a cloud API → the Validator's containerized dry-run catches via the per-cloud catalog.
+- IaC references a missing lab-level output → the Validator's semantic cross-check catches.
 - Generator produces 200 lines for what should be 30 → Critic flags as over-engineering.
 
 #### 3.2.10 Validator (mechanical layers)
@@ -228,7 +228,7 @@ Detail in `validation.md`. Brief here:
 **Input.** Working directory containing the generated lab.
 **Output.** A structured `ValidationReport` per layer + overall verdict.
 
-Layers 1, 2, 3, 5 always run in v1; Layer 4 (real-platform apply) is v2-deferred per `architecture.md §8.1`. Cheap layers run on every refinement iteration; expensive layers run once before final output.
+The static-schema, semantic cross-check, containerized dry-run, and safety-scan passes always run in v1; the real-platform apply pass is v2-deferred per `architecture.md §8.1` — its slot stays reserved (between the containerized dry-run and the safety scans) so v2 adds it without renumbering. The passes run cheap-to-expensive; cheap passes run on every refinement iteration, expensive ones once before final output.
 
 The Critic is a peer stage to the Validator (not a layer within it) — see §3.2.11.
 
@@ -426,11 +426,11 @@ $ cyberlab-gen fix ./labs/my-lab
 #### 3.4.4 Validation on proposed patches
 
 Minimal validation only:
-- **Layer 1** (schema): runs if the manifest is touched.
-- **Layer 2** (cross-checks): runs on any change touching declared types or `references_lab_outputs`.
-- **Layer 5** (safety scans): runs on every patch — patches shouldn't introduce credential exposure or host-attack patterns.
-- **Layer 3** (containerized dry-run): **auto-runs when the patch touches IaC files** (`.tf`, `.yaml` for CloudFormation/ARM, etc.). IaC patches can fail in ways static checks don't catch — terraform plan can surface issues that ruff/mypy/shellcheck cannot. For non-IaC patches (script-only, doc-only changes), Layer 3 is skipped by default and available via `--validate-patches-thoroughly` for users who want belt-and-suspenders.
-- **Layer 4**: not applicable (v2-deferred even in generation; the user's own re-run of the patched lab is the real test).
+- **Static-schema validation**: runs if the manifest is touched.
+- **Semantic cross-check**: runs on any change touching declared types or `references_lab_outputs`.
+- **Safety scans**: run on every patch — patches shouldn't introduce credential exposure or host-attack patterns.
+- **Containerized dry-run**: **auto-runs when the patch touches IaC files** (`.tf`, `.yaml` for CloudFormation/ARM, etc.). IaC patches can fail in ways static checks don't catch — terraform plan can surface issues that ruff/mypy/shellcheck cannot. For non-IaC patches (script-only, doc-only changes), the containerized dry-run is skipped by default and available via `--validate-patches-thoroughly` for users who want belt-and-suspenders.
+- **Real-platform apply**: not applicable (v2-deferred even in generation; the user's own re-run of the patched lab is the real test).
 
 If validation flags something, the finding is surfaced back to the Repair Agent as feedback. The agent revises the patch. The user sees both the revised patch and the validation finding that drove the revision.
 
@@ -501,7 +501,7 @@ Three distinct types of credentials, used by different actors at different times
 |---|---|---|---|
 | LLM provider API key (Anthropic / OpenAI / etc.) | Generation time | Yes, at least one | `~/.cyberlab-gen/config.yaml` or env vars |
 | External data source API keys (NVD, GitHub PAT, etc.) | Generation time (rate-limit relief) | No — optional optimization | `~/.cyberlab-gen/config.yaml` or env vars |
-| Cloud credentials (AWS / Azure / GCP / GitHub for lab targeting) | Lab `setup.sh` run time (not used by the tool during generation in v1; Layer 4 is v2-deferred) | No for generation; yes for running the lab | Standard tooling conventions (`~/.aws/credentials`, `az login`, `gcloud auth`, `gh auth login`); the tool never touches them |
+| Cloud credentials (AWS / Azure / GCP / GitHub for lab targeting) | Lab `setup.sh` run time (not used by the tool during generation in v1; the real-platform apply pass is v2-deferred) | No for generation; yes for running the lab | Standard tooling conventions (`~/.aws/credentials`, `az login`, `gcloud auth`, `gh auth login`); the tool never touches them |
 
 For generation, the user needs **one LLM provider key**. Everything else is optional or run-time. External API keys raise rate limits but generation works without them — the system runs on no-auth tiers by default. Cloud credentials are checked by the *generated lab's* `prereqs.pre_lab` at run time using standard cloud-CLI conventions; cyberlab-gen never reads them.
 
@@ -548,7 +548,7 @@ When the user submits, the sanitized report contains:
 
 - **API keys, provider tokens, cloud credentials, any auth material.**
 - **Cloud account identifiers** (AWS account IDs, Azure tenant/subscription IDs, GCP project IDs).
-- **User-specific resource identifiers from Layer 4 runs** (real ARNs, real resource names, real IPs from the user's cloud) — relevant in v2 when Layer 4 returns; in v1 these don't exist.
+- **User-specific resource identifiers from real-platform apply runs** (real ARNs, real resource names, real IPs from the user's cloud) — relevant in v2 when the real-platform apply pass returns; in v1 these don't exist.
 - **Absolute file paths from the user's machine** (home-directory components redacted; relative paths from the working directory retained).
 - **Anything in the working directory that wasn't generated by cyberlab-gen.**
 

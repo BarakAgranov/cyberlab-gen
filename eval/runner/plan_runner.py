@@ -290,7 +290,7 @@ class ProviderBackedPlanEvalRunner:
             run_index=run_index,
             status=None,
             shipped=False,
-            layer2_passed=False,
+            semantic_cross_check_passed=False,
             route_back=False,
             cost_usd=ledger.total_usd,
             manifest_field_coverage=0.0,

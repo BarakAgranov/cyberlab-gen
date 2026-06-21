@@ -3,8 +3,8 @@
 The run store is the single persistence authority: on every exit path it recovers
 whatever the pipeline produced — complete or partial — from the LangGraph checkpoint
 the checkpointer already wrote, never from an in-memory field that is only populated
-on a clean graph return. These tests pin the read mechanism that closes the L4
-drop-partial-on-abort bug: a mid-graph abort (Ctrl-C / budget halt / crash) leaves the
+on a clean graph return. These tests pin the read mechanism that closes the
+checkpoint/lossless-persistence drop-partial-on-abort bug: a mid-graph abort (Ctrl-C / budget halt / crash) leaves the
 last completed node's state in ``checkpoint.sqlite``, and :func:`read_latest_pipeline_state`
 recovers it.
 """
@@ -41,7 +41,7 @@ def test_read_latest_recovers_partial_spec_after_midgraph_abort(tmp_path: Path) 
     # A mid-graph abort (the jury raises after extract + validate completed) leaves a
     # partial AttackSpec in the checkpoint, but NO clean graph return — so the in-memory
     # "last state" the run store used to read was never set, and the spec was dropped
-    # (the L4 bug). read_latest_pipeline_state must recover it straight from the checkpoint.
+    # (the checkpoint/lossless-persistence bug). read_latest_pipeline_state must recover it straight from the checkpoint.
     db = tmp_path / "checkpoint.sqlite"
     ext = FakeExtractor([make_spec(facets=["target:aws"])])
     jury = CrashOnceJury([make_verdict(Verdict.APPROVE)])
@@ -276,7 +276,7 @@ def test_cve_severity_spec_round_trips_through_checkpoint(
 
 
 def test_read_latest_recovers_cve_severity_spec_after_midgraph_abort(tmp_path: Path) -> None:
-    # L4/G1 (ADR 0053) exercised with the previously-crashing content: a mid-graph abort (the
+    # checkpoint/lossless persistence / G1 (ADR 0053) exercised with the previously-crashing content: a mid-graph abort (the
     # jury raises after extract + validate completed) on a CVE-severity spec must still recover
     # the partial AttackSpec — with its Provenance[Severity] intact — straight from the checkpoint.
     from cyberlab_gen.schemas.enums import Severity

@@ -163,7 +163,7 @@ def test_plan_auto_writes_valid_lab_yaml(tmp_path: Path, monkeypatch: pytest.Mon
     assert result.exit_code == 0, result.output
     written = tmp_path / LAB_MANIFEST_FILENAME
     assert written.exists()
-    # the written lab.yaml round-trips as a schema-valid LabManifest (Layer-1-valid by construction)
+    # the written lab.yaml round-trips as a schema-valid LabManifest (static-schema-valid by construction)
     manifest = LabManifest.from_yaml(written.read_text(encoding="utf-8"))
     assert manifest.spec_kind.value == "LabManifest"
 

@@ -564,7 +564,7 @@ async def test_unresolved_feedback_preserves_suggested_fix() -> None:
     assert any("add a citation" in item for item in state.unresolved_feedback)
 
 
-# --- L2: refinement and structural retry have INDEPENDENT budgets ----------
+# --- refinement vs structural-retry budgets are INDEPENDENT ----------
 #
 # architecture.md's retry/refinement table specifies separate budgets. The orchestrator
 # must not charge a jury-revise refinement re-run against the structural-retry counter
@@ -623,7 +623,7 @@ async def test_structural_budget_intact_after_refinement() -> None:
     assert state.structural_attempts == 2
 
 
-# --- L3: global iteration cap + LangGraph recursion_limit backstop ----------
+# --- global iteration cap + LangGraph recursion_limit backstop ----------
 #
 # Nothing must bound total pipeline iterations end-to-end except the documented global cap
 # (architecture.md §6 "Total iteration cap (default 20)"), with the LangGraph recursion_limit
@@ -800,7 +800,7 @@ async def test_grounding_failure_routes_orchestrator_owned_retry_then_recovers()
 
 
 async def test_grounding_retry_does_not_consume_structural_budget() -> None:
-    # The grounding retry must be bounded by its OWN counter, never the structural one (L2).
+    # The grounding retry must be bounded by its OWN counter, never the structural one (the refinement budget).
     ext = _FakeExtractor([_ungrounded_cve_spec(), _spec(facets=["target:aws"])])
     jury = _FakeJury([_verdict(Verdict.APPROVE)])
     run = build_pipeline(extractor=ext, validator=_validator(), jury=jury)
