@@ -20,7 +20,7 @@ from eval.runner.manifest import BlogEntry, BlogSetManifest
 from eval.runner.plan_metrics import PlanRunRecord
 from eval.runner.plan_report import PlanEvalReport, load_plan_report
 from eval.runner.plan_runner import ProviderBackedPlanEvalRunner, run_plan_set
-from eval.runner.runner import FAILURE_GLOBAL_FATAL
+from eval.runner.runner import FAILURE_BLOG_FATAL, FAILURE_GLOBAL_FATAL
 from tests.eval.conftest import (
     FakePlanEvalRunner,
     FakePlanRunner,
@@ -188,8 +188,37 @@ def test_provider_runner_classifies_infra_failure() -> None:
     )
     rec = runner.plan_once("a", run_index=0)
     assert rec.shipped is False
-    assert rec.status is None  # an infra failure never produced a terminal status
+    assert rec.status is None  # a raised failure never produced a terminal status
     assert rec.failure_kind == FAILURE_GLOBAL_FATAL  # auth/no-model is systemic
+
+
+# --- console label honesty: failure_kind, not a fabricated "infra_failure" (ADR 0106) ---
+
+
+def test_plan_progress_shows_failure_kind_not_fabricated_infra_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # ADR 0106: a raised pipeline failure (status=None) must surface its honest scope on the console —
+    # the same label the report carries — never a fabricated "infra_failure" that mislabels a
+    # blog-fatal tool loop (the run-20260620 codebuild ToolLoopError) as infrastructure.
+    from eval.runner.progress import StderrPlanEvalProgress
+
+    record = PlanRunRecord(
+        blog_id="codebuild",
+        run_index=0,
+        status=None,
+        shipped=False,
+        layer2_passed=False,
+        route_back=False,
+        cost_usd=Decimal("0.01"),
+        manifest_field_coverage=0.0,
+        halt_reason="tool-use loop exceeded its request budget",
+        failure_kind=FAILURE_BLOG_FATAL,
+    )
+    StderrPlanEvalProgress().blog_run_finished(record, n=1, cost_so_far=Decimal("0.01"))
+    err = capsys.readouterr().err
+    assert "status=blog_fatal" in err  # honest scope, matches the report's failure_kind
+    assert "infra_failure" not in err
 
 
 # --- the eval-overlay-read-only guard (ADR 0100/0102) -----------------------

@@ -132,13 +132,15 @@ class ProviderBackedPlanEvalRunner:
                 # DIRECT drive of the runner seam — never the verb's run_plan (no promotion, ADR 0102).
                 result = runner.run(attack_spec, ledger=ledger)
             except CyberlabGenError as exc:
+                # A raised failure -> run-store FAILED; keep the reason on disk (the honest failure
+                # scope lives on the record's failure_kind, ADR 0034/0106).
                 self._persist(
                     handle,
                     manifest=None,
                     verdict=None,
                     ledger=ledger,
                     shipped=False,
-                    halt_reason=str(exc),  # an infra failure -> FAILED, but keep the reason on disk
+                    halt_reason=str(exc),
                 )
                 return self._failure_record(
                     blog_id,
@@ -262,7 +264,9 @@ class ProviderBackedPlanEvalRunner:
                 halt_reason,
             )
         else:
-            # an infra failure (raised CyberlabGenError) carried no terminal status.
+            # the pipeline raised (CyberlabGenError) instead of returning a terminal status. The
+            # run-store status is FAILED (its own axis); the honest failure *scope* — blog_fatal /
+            # global_fatal — lives on the record's failure_kind, not here (ADR 0034/0106).
             run_status, reason = RunStatus.FAILED, halt_reason
         handle.finalize(run_status, halt_reason=reason)
 
@@ -275,7 +279,12 @@ class ProviderBackedPlanEvalRunner:
         *,
         failure_kind: str,
     ) -> PlanRunRecord:
-        """A record for an *infra* failure (a raised ``CyberlabGenError`` — no terminal status)."""
+        """A record for a *raised* failure (a ``CyberlabGenError`` — no terminal status).
+
+        Not necessarily infra: ``failure_kind`` (``classify_pipeline_failure``) carries the honest
+        scope — ``blog_fatal`` (this blog's content/size, e.g. a ``ToolLoopError``) vs ``global_fatal``
+        (systemic auth/quota) vs ``retryable`` (ADR 0034/0106).
+        """
         return PlanRunRecord(
             blog_id=blog_id,
             run_index=run_index,

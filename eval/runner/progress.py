@@ -135,9 +135,15 @@ class StderrPlanEvalProgress:
             )
         else:
             spend = f"${cost_so_far:.4f}"
+        # status is None only when the pipeline raised (no terminal status). Show the honest failure
+        # scope — blog_fatal / global_fatal / retryable, the same label the report carries — never a
+        # fabricated "infra_failure" that mislabels a blog-fatal tool loop as infrastructure (ADR 0106).
+        status_label = (
+            record.status.value if record.status is not None else (record.failure_kind or "failed")
+        )
         self._emit(
             f"      {record.blog_id} run {record.run_index + 1}/{n} done: "
-            f"status={record.status.value if record.status is not None else 'infra_failure'}, "
+            f"status={status_label}, "
             f"layer2={layer2}, shipped={record.shipped}, "
             f"coverage={record.manifest_field_coverage:.0%}, cost so far {spend}"
         )

@@ -157,8 +157,10 @@ class PlanRunRecord(InternalModel):
     blog_id: str
     run_index: int = Field(ge=0)
     #: The pipeline's emitted terminal status (the single source of the ship/route-back/halt facts).
-    #: ``None`` only for an *infra* failure (a raised ``CyberlabGenError`` — provider auth/quota/
-    #: transient) that never produced a terminal status; ``failure_kind`` carries the scope then.
+    #: ``None`` only when the pipeline *raised* a ``CyberlabGenError`` instead of returning a terminal
+    #: status — which is **not** necessarily an infra failure (a ``ToolLoopError`` / ``EmitTruncated``
+    #: is ``blog_fatal``; auth/quota is ``global_fatal``). ``failure_kind`` carries the honest scope
+    #: then (ADR 0034/0106); consumers must read it rather than assume "infra".
     status: PlanPipelineStatus | None = None
     shipped: bool
     #: Emitted Layer-2 (semantic cross-check) result: a ship cleared the gate; the cross-check-halt
