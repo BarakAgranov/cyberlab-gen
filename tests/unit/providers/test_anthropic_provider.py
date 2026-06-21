@@ -487,10 +487,33 @@ def test_output_forcing_forces_output_tool_on_the_last_permitted_step() -> None:
     assert forced.get("max_tokens") == 4096  # base settings carried through
 
 
-async def test_tool_loop_forces_output_on_last_step_then_emits() -> None:
-    # End-to-end (ADR 0105): the provider wires the forcing callable, so on the last permitted request
-    # tool_choice forces the output tool. A cooperative FunctionModel honours it (the real Anthropic
-    # API enforces it) -> the loop emits instead of raising ToolLoopError.
+def test_output_forcing_reserves_emit_headroom_for_output_retries() -> None:
+    # ADR 0107: with emit_headroom=K the force fires K steps before the last permitted request, so a
+    # forced-but-invalid emit keeps its K output-validation retries within budget. request_limit=13,
+    # K=2 -> force from step 11 (= request_limit - emit_headroom), not before, through the last step.
+    from types import SimpleNamespace
+    from typing import cast
+
+    base = AnthropicModelSettings(max_tokens=4096)
+    resolver = cast(
+        "Callable[[RunContext[None]], AnthropicModelSettings]",
+        output_forcing_model_settings(base, 13, emit_headroom=2),
+    )
+
+    def at(step: int) -> AnthropicModelSettings:
+        return resolver(cast("RunContext[None]", SimpleNamespace(run_step=step)))
+
+    assert at(10).get("tool_choice") is None  # still free below the reserved window
+    assert at(11).get("tool_choice") == [OUTPUT_TOOL_NAME]  # request_limit - emit_headroom
+    assert at(13).get("tool_choice") == [OUTPUT_TOOL_NAME]  # forced through the last request
+
+
+async def test_tool_loop_forces_output_near_the_end_then_emits() -> None:
+    # End-to-end (ADR 0105 + 0107): the provider wires the forcing callable with emit_headroom =
+    # output_retries (2), so the force engages output_retries steps before the last permitted request.
+    # A cooperative FunctionModel honours it (the real Anthropic API enforces it) -> the loop emits
+    # instead of raising ToolLoopError. max_iterations=4 -> request_limit=5, headroom=2 -> force at
+    # step 3; steps 1-2 stay free.
     seen: list[object] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -507,10 +530,43 @@ async def test_tool_loop_forces_output_on_last_step_then_emits() -> None:
             usage=_USAGE,
         )
 
-    resp = await _complete_with_tools(_provider(fn), _EchoExecutor(), max_iterations=2)
+    resp = await _complete_with_tools(_provider(fn), _EchoExecutor(), max_iterations=4)
     assert isinstance(resp.output, Greeting)  # emitted; did NOT raise ToolLoopError
-    assert seen[-1] == [OUTPUT_TOOL_NAME]  # forced on the last permitted step
-    assert seen[0] is None  # not forced on the first step
+    assert seen[-1] == [OUTPUT_TOOL_NAME]  # forced once the headroom threshold is reached
+    assert seen[0] is None  # not forced on the first step (headroom leaves free tool turns)
+
+
+async def test_reserved_headroom_lets_a_forced_invalid_emit_retry_into_validity() -> None:
+    # ADR 0107 (the run-20260621 Planner fix): a forced emit that FAILS validation is re-prompted
+    # within the reserved headroom and ships, instead of overflowing the budget with zero output (the
+    # exact run-2 mechanism: a forced manifest that omitted required fields, no retry room). The model
+    # loops on the tool until forced, emits INVALID args on the first forced step, then VALID on the
+    # retry. Without headroom the forced emit would land on the last request and the retry would
+    # overflow -> ToolLoopError.
+    state = {"forced": 0}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        choice = (info.model_settings or {}).get("tool_choice")
+        name = _output_tool(info)
+        if choice == [name]:
+            state["forced"] += 1
+            if state["forced"] == 1:  # first forced emit: invalid (missing required 'audience')
+                return ModelResponse(
+                    parts=[ToolCallPart(tool_name=name, args={"greeting": "hi"})], usage=_USAGE
+                )
+            return ModelResponse(  # output-retry within reserved headroom: valid -> ships
+                parts=[ToolCallPart(tool_name=name, args={"greeting": "hi", "audience": "world"})],
+                usage=_USAGE,
+            )
+        return ModelResponse(
+            parts=[ToolCallPart(tool_name="lookup", args={"q": "x"}, tool_call_id="c")],
+            usage=_USAGE,
+        )
+
+    resp = await _complete_with_tools(_provider(fn), _EchoExecutor(), max_iterations=4)
+    assert isinstance(resp.output, Greeting)  # shipped despite the first forced emit being invalid
+    assert resp.output.audience == "world"
+    assert state["forced"] == 2  # one invalid forced emit, then one valid retry within headroom
 
 
 # --- thinking-OFF standing precondition (ADR 0105 part 3) -------------------

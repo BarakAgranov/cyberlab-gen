@@ -102,8 +102,9 @@ _PROVIDER_NAME = "anthropic"
 DEFAULT_MAX_TOKENS = 4096
 
 #: pydantic-ai's default structured-output tool name (``pydantic_ai._output.DEFAULT_OUTPUT_TOOL_NAME``).
-#: Forced on the last permitted tool-loop request so the loop can never exhaust the request budget
-#: with zero structured output (ADR 0105 — the run-20260620 Planner-Jury ``ToolLoopError``). Forcing
+#: Forced near the end of the tool loop — with output-retry headroom reserved (ADR 0107) — so the loop
+#: can never exhaust the request budget with zero structured output (ADR 0105 — the run-20260620
+#: Planner-Jury ``ToolLoopError``; the run-20260621 Planner forced-but-invalid emit). Forcing
 #: requires Anthropic *thinking* to be OFF (``_model_settings`` configures none); under thinking
 #: pydantic-ai degrades a forced tool_choice to 'auto' and the guarantee silently dies. So the tool
 #: path now *enforces* thinking-OFF as a standing precondition: :func:`output_forcing_model_settings`
@@ -142,21 +143,29 @@ def _thinking_is_enabled(settings: AnthropicModelSettings) -> bool:
 
 
 def output_forcing_model_settings(
-    base: AnthropicModelSettings, request_limit: int | None
+    base: AnthropicModelSettings, request_limit: int | None, *, emit_headroom: int = 0
 ) -> AnthropicModelSettings | Callable[[RunContext[None]], AnthropicModelSettings]:
-    """Model settings that force the output tool on the last permitted tool-loop request (ADR 0105).
+    """Model settings that force the output tool near the end of the tool loop, with retry headroom.
 
     pydantic-ai checks the request limit *before* each model call and raises ``UsageLimitExceeded``
     with no output once it is hit — so a tool-use loop that never emits dies empty (the run-20260620
     Planner-Jury ``ToolLoopError``). When ``request_limit`` is set (the tool path), this returns a
-    *per-step* settings callable that forces ``tool_choice=[final_result]`` on the final allowed
-    request (``run_step >= request_limit``), so the loop emits its structured output instead of
+    *per-step* settings callable that forces ``tool_choice=[final_result]`` once
+    ``run_step >= request_limit - emit_headroom``, so the loop emits its structured output instead of
     overflowing. A **callable** ``model_settings`` is what pydantic-ai 1.103 supports for per-step
     ``tool_choice`` (a static forced ``tool_choice`` raises ``UserError``); it is resolved once per
     request. Off the tool path (``request_limit is None``) the plain settings suffice — with no tools
     the model emits on the first request. On the tool path this *enforces* thinking-OFF: it raises
     :class:`ForcedEmitThinkingConflictError` if thinking is enabled (see :data:`OUTPUT_TOOL_NAME`), rather
     than silently degrade the force to 'auto' and re-open zero-output death (ADR 0105 part 3).
+
+    ``emit_headroom`` reserves that many requests for the forced emit's *output-validation retries*
+    (ADR 0107): forcing the emit guarantees the loop EMITS, not that the emit VALIDATES, and a
+    validation failure needs a re-prompt that the request budget would otherwise forbid (the
+    run-20260621 Planner spiral — a large ``LabManifest`` forced on the last turn failed validation
+    with no retry room). Pass ``emit_headroom = output_retries`` so a forced-but-invalid emit lands
+    with its re-prompts still inside the budget. ``emit_headroom=0`` reproduces the ADR-0105
+    last-step-only force (used by callers with no output-retry budget to protect).
     """
     if request_limit is None:
         return base
@@ -169,10 +178,12 @@ def output_forcing_model_settings(
             "ToolLoopError. Disable thinking for tool-using agents, or first switch the final-step "
             "guard to dropping function tools (the ADR-0105 part-3 caveat)."
         )
-    limit = request_limit  # narrowed to int for the closure
+    # Fire the force emit_headroom requests before the last permitted one so a forced-but-invalid emit
+    # keeps its output-validation retries within budget (ADR 0107); never before step 1.
+    threshold = max(1, request_limit - emit_headroom)
 
     def _resolve(ctx: RunContext[None]) -> AnthropicModelSettings:
-        if ctx.run_step >= limit:
+        if ctx.run_step >= threshold:
             forced: AnthropicModelSettings = {**base, "tool_choice": [OUTPUT_TOOL_NAME]}
             return forced
         return base
@@ -286,7 +297,7 @@ class AnthropicProvider(Provider):
             tools=pyd_tools,
             retries={"output": self._output_retries},
             model_settings=output_forcing_model_settings(
-                self._model_settings(max_tokens), request_limit
+                self._model_settings(max_tokens), request_limit, emit_headroom=self._output_retries
             ),
         )
         usage_limits = UsageLimits(request_limit=request_limit) if request_limit else None
