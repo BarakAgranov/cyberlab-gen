@@ -498,6 +498,20 @@ def test_planner_base_prompt_teaches_phase_outputs_identifier_source_form() -> N
     assert "runtime_generated" in prompt
 
 
+def test_planner_base_prompt_requires_confidence_on_llm_inference() -> None:
+    # ADR 0109: the Planner omitted `confidence` on llm_inference provenance (12 fields in one run),
+    # failing validation (provenance.py requires it when source is llm_inference). The base prompt
+    # must teach the requirement — the Extractor prompt already does — so pin it (confidence_source is
+    # the token unique to this guidance; it disappears if the instruction is dropped).
+    from cyberlab_gen.agents import load_prompt
+    from cyberlab_gen.agents.planner.planner import PLANNER_AGENT_DIR
+
+    prompt = load_prompt(PLANNER_AGENT_DIR)
+    assert "llm_inference" in prompt
+    assert "confidence_source" in prompt
+    assert "confidence" in prompt
+
+
 def test_plan_result_carries_facet_proposals_captured_not_promoted() -> None:
     # Task 7: PlanResult gains a facet_proposals side-channel (captured, not promoted — Task 8).
     result = PlanResult(

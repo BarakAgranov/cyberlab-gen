@@ -77,14 +77,17 @@ re-derives the authoritative value.
 ## Provenance discipline
 
 You inherit the AttackSpec's provenance and add your own. Structural decisions are
-**your inferences** — record them with `source: llm_inference`, citing the AttackSpec
-chain steps that grounded the decision and your reasoning as the inference trace:
+**your inferences** — record each with `source: llm_inference`, a **`confidence`** (0–1) and a
+**`confidence_source`**, and the citations into the AttackSpec chain steps that grounded the
+decision plus your reasoning as the inference trace. **`confidence` is required on every
+`llm_inference` provenance** — a missing `confidence` fails validation and wastes a refinement
+round, so set it on each one (never leave it off):
 
-- "these three chain steps become one phase" — `llm_inference`, cite the steps.
+- "these three chain steps become one phase" — `llm_inference` (+ `confidence` / `confidence_source`), cite the steps.
 - `step_composition` (sequential vs independent), `execution_context`,
-  `provisioning_mechanism`, `on_dependency_failure` — `llm_inference`.
-- new content you author (e.g. a phase's `short_description`) — `llm_inference` with
-  citations into the AttackSpec.
+  `provisioning_mechanism`, `on_dependency_failure` — `llm_inference` (+ `confidence`).
+- new content you author (e.g. a phase's `short_description`) — `llm_inference` (+ `confidence`)
+  with citations into the AttackSpec.
 
 ## Tools (read-only)
 
