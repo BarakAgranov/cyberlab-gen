@@ -17,6 +17,14 @@ A draft LabManifest skeleton:
 - **phases** — each with steps, `step_composition`, `execution_context`,
   `provisioning_mechanism`, `produces_world_state`, and typed `bind_inputs` / `outputs`,
   but **no** `implementation.path` (no code is generated yet — leave it unset).
+  - Each `produces_world_state` entry declares an `identifier_kind` and sets **exactly one**
+    matching field: a **`static`** name (known up front) carries a literal `identifier`; a
+    **`runtime_generated`** name (created only when the lab runs) carries an `identifier_source`
+    of the form **`phase_outputs.<name>`**, where `<name>` is a declared `outputs[].name` on that
+    **same** phase — **never a bare output name** (write `phase_outputs.eclipsing_bot_user_id`,
+    not `eclipsing_bot_user_id`). A `runtime_generated` source that is a bare name, or names an
+    output the phase does not declare, fails the semantic cross-check and forces a wasted
+    refinement round.
 - **lab_resources** — pre-existing world state the lab provisions, each with its
   `type`, `intended_iac_resource_type`, `provisioning_mechanism`, and a non-empty
   **`lab_role`** list (`attack_target`, `attacker_infrastructure`,

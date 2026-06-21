@@ -481,6 +481,23 @@ async def test_planner_executor_query_value_types_returns_registry_shapes() -> N
         assert known.name in named.content
 
 
+# --- base prompt teaches the identifier_source form (follow-up to ADR 0105) -
+
+
+def test_planner_base_prompt_teaches_phase_outputs_identifier_source_form() -> None:
+    # The semantic cross-check requires a runtime_generated identifier_source of the form
+    # `phase_outputs.<name>` resolving to a declared phase output; without prompt guidance the Planner
+    # emits a bare output name and burns a refinement round every run. Pin that the base prompt
+    # teaches the form so the guidance cannot be silently dropped.
+    from cyberlab_gen.agents import load_prompt
+    from cyberlab_gen.agents.planner.planner import PLANNER_AGENT_DIR
+
+    prompt = load_prompt(PLANNER_AGENT_DIR)
+    assert "phase_outputs.<name>" in prompt
+    assert "identifier_kind" in prompt
+    assert "runtime_generated" in prompt
+
+
 def test_plan_result_carries_facet_proposals_captured_not_promoted() -> None:
     # Task 7: PlanResult gains a facet_proposals side-channel (captured, not promoted — Task 8).
     result = PlanResult(
